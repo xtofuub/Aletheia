@@ -1,5 +1,18 @@
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256Hex([string]$Path) {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $hashBytes = $sha256.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $stream.Dispose()
+        $sha256.Dispose()
+    }
+}
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $packageJson = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
 $version = $packageJson.version
@@ -44,8 +57,8 @@ try {
 
     $checksumFiles = @($setupName, $standaloneName, $msiName)
     $checksums = foreach ($fileName in $checksumFiles) {
-        $hash = Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseRoot $fileName)
-        "$($hash.Hash.ToLowerInvariant())  $fileName"
+        $hash = Get-Sha256Hex (Join-Path $releaseRoot $fileName)
+        "$hash  $fileName"
     }
     Set-Content -LiteralPath (Join-Path $releaseRoot "SHA256SUMS.txt") -Value $checksums -Encoding ascii
 
