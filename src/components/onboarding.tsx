@@ -7,6 +7,7 @@ import {
   type Settings,
 } from "../lib/desktop";
 import { Button } from "./ui/button";
+import appIcon from "../assets/app-icon.svg";
 import { Field, Input } from "./ui/field";
 
 interface OnboardingProps {
@@ -61,7 +62,7 @@ export function Onboarding({
         <div>
           <div className="brand-lockup">
             <div className="brand-mark brand-mark--large" aria-hidden="true">
-              A
+              <img src={appIcon} alt="" />
             </div>
             <span>Aletheia</span>
           </div>

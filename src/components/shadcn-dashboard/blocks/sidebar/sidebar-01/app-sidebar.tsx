@@ -25,6 +25,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import appIcon from "@/assets/app-icon.svg";
 
 const navSections: NavSection[] = [
   {
@@ -68,14 +69,14 @@ export function AppSidebar() {
               render={<Link to="/" />}
               className="h-10 rounded-md px-0 hover:bg-transparent data-active:bg-transparent group-data-[collapsible=icon]:justify-center"
             >
-              <span className="grid size-8 shrink-0 place-items-center rounded-[7px] bg-foreground text-[13px] font-bold tracking-[-0.04em] text-background">
-                A
+              <span className="sidebar-app-icon">
+                <img src={appIcon} alt="" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1 text-left text-[15px] font-semibold tracking-[-0.025em]">
                 Aletheia
               </span>
               <span className="rounded-full border border-border bg-background px-1.5 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
-                v0.1.2
+                v0.1.3
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>

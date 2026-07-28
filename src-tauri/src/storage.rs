@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -14,6 +15,7 @@ use tauri::{AppHandle, Manager};
 
 const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_V2: &str = include_str!("../migrations/0002_search_history.sql");
+const MIGRATION_V3: &str = include_str!("../migrations/0003_import_performance.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -134,6 +136,8 @@ pub fn open_database(storage_root: &Path) -> Result<Connection, StorageError> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
+    connection.pragma_update(None, "temp_store", "MEMORY")?;
+    connection.busy_timeout(Duration::from_secs(10))?;
     apply_migrations(&mut connection)?;
     seed_defaults(&connection)?;
     Ok(connection)
@@ -168,6 +172,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         transaction.execute_batch(MIGRATION_V2)?;
         transaction.execute(
             "INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
+    if current.unwrap_or(0) < 3 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V3)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)",
             [],
         )?;
         transaction.commit()?;

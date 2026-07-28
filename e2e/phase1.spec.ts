@@ -47,6 +47,7 @@ test("command palette exposes app navigation", async ({ page }) => {
     );
   });
   await page.reload();
+  await expect(page.getByRole("button", { name: /Commands/i })).toBeVisible();
   await page.keyboard.press("Control+K");
   await expect(
     page.getByRole("dialog", { name: "Command palette" }),

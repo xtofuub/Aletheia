@@ -16,10 +16,7 @@ const WRITER_MEMORY_BYTES: usize = 30_000_000;
 pub struct IndexFields {
     pub record_id: Field,
     pub dataset_id: Field,
-    pub source_file_id: Field,
-    pub source_location: Field,
     pub exact_values: Field,
-    pub search_text: Field,
 }
 
 pub struct SearchIndex {
@@ -154,31 +151,25 @@ pub fn make_document(
     fields: IndexFields,
     record_id: &str,
     dataset_id: &str,
-    source_file_id: &str,
-    source_location: &str,
     exact_values: &[String],
-    search_text: &str,
 ) -> TantivyDocument {
     let mut document = TantivyDocument::default();
     document.add_text(fields.record_id, record_id);
     document.add_text(fields.dataset_id, dataset_id);
-    document.add_text(fields.source_file_id, source_file_id);
-    document.add_text(fields.source_location, source_location);
     for value in exact_values {
         document.add_text(fields.exact_values, value);
     }
-    document.add_text(fields.search_text, search_text);
     document
 }
 
 fn schema() -> Schema {
     let mut builder = Schema::builder();
     builder.add_text_field("record_id", STRING | STORED);
-    builder.add_text_field("dataset_id", STRING | STORED);
-    builder.add_text_field("source_file_id", STRING | STORED);
+    builder.add_text_field("dataset_id", STRING);
+    builder.add_text_field("source_file_id", STRING);
     builder.add_text_field("source_location", STORED);
-    builder.add_text_field("exact_values", STRING | STORED);
-    builder.add_text_field("search_text", TEXT | STORED);
+    builder.add_text_field("exact_values", STRING);
+    builder.add_text_field("search_text", TEXT);
     builder.build()
 }
 
@@ -186,10 +177,7 @@ fn fields(schema: &Schema) -> Result<IndexFields, String> {
     Ok(IndexFields {
         record_id: schema.get_field("record_id").map_err(sanitized)?,
         dataset_id: schema.get_field("dataset_id").map_err(sanitized)?,
-        source_file_id: schema.get_field("source_file_id").map_err(sanitized)?,
-        source_location: schema.get_field("source_location").map_err(sanitized)?,
         exact_values: schema.get_field("exact_values").map_err(sanitized)?,
-        search_text: schema.get_field("search_text").map_err(sanitized)?,
     })
 }
 
@@ -260,13 +248,10 @@ mod tests {
                 search.fields,
                 "record-1",
                 "dataset-1",
-                "file-1",
-                "line 2",
                 &[
                     "email:person@example.com".to_string(),
                     "person@example.com".to_string(),
                 ],
-                "person example",
             ))
             .expect("document");
         writer.commit().expect("commit");

@@ -1,0 +1,2 @@
+-- Heavy index removal is deferred to the background import worker so an
+-- existing large workspace never stalls the application during startup.

@@ -45,13 +45,10 @@ fn indexing_and_search(criterion: &mut Criterion) {
                             index.fields,
                             &format!("record-{number}"),
                             "dataset-benchmark",
-                            "file-benchmark",
-                            &format!("line {}", number + 1),
                             &[
                                 format!("email:person{number}@example.com"),
                                 format!("person{number}@example.com"),
                             ],
-                            &format!("person{number} example"),
                         ))
                         .expect("document");
                 }
@@ -70,13 +67,10 @@ fn indexing_and_search(criterion: &mut Criterion) {
                 index.fields,
                 &format!("record-{number}"),
                 "dataset-benchmark",
-                "file-benchmark",
-                &format!("line {}", number + 1),
                 &[
                     format!("email:person{number}@example.com"),
                     format!("person{number}@example.com"),
                 ],
-                &format!("person{number} example"),
             ))
             .expect("document");
     }

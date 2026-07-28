@@ -104,30 +104,33 @@ pub fn store_domain(
     normalized_url: Option<&NormalizedUrl>,
 ) -> Result<(), rusqlite::Error> {
     let domain_id = stable_id("domain", &domain.hostname);
-    connection.execute(
-        "INSERT INTO domains(
+    connection
+        .prepare_cached(
+            "INSERT INTO domains(
             id, hostname, registrable_domain, public_suffix, is_subdomain,
             record_count, first_observed, last_observed
          ) VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT(hostname) DO UPDATE SET
             record_count = record_count + 1,
             last_observed = CURRENT_TIMESTAMP",
-        params![
+        )?
+        .execute(params![
             domain_id,
             domain.hostname,
             domain.registrable_domain,
             domain.public_suffix,
             domain.is_subdomain
-        ],
-    )?;
+        ])?;
 
     if let Some(url) = normalized_url {
-        connection.execute(
-            "INSERT OR IGNORE INTO urls(
+        connection
+            .prepare_cached(
+                "INSERT OR IGNORE INTO urls(
                 id, record_id, normalized_url, scheme, hostname, port, path,
                 query_keys_json, has_fragment, registrable_domain
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![
+            )?
+            .execute(params![
                 stable_id("url", &format!("{record_id}:{}", url.normalized_url)),
                 record_id,
                 url.normalized_url,
@@ -138,8 +141,7 @@ pub fn store_domain(
                 serde_json::to_string(&url.query_keys).unwrap_or_else(|_| "[]".to_string()),
                 url.has_fragment,
                 url.domain.registrable_domain,
-            ],
-        )?;
+            ])?;
     }
     Ok(())
 }

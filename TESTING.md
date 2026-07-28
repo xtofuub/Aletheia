@@ -43,6 +43,15 @@ cargo test --manifest-path src-tauri/Cargo.toml generated_gibibyte_stream_stays_
 
 Raise `ALETHEIA_SOAK_GIB` up to `300` for a long local parser soak. Runtime scales with the requested byte count.
 
+The ignored full-pipeline soak generates invented CSV rows, then exercises SQLite and Tantivy together:
+
+```powershell
+$env:ALETHEIA_INDEX_SOAK_RECORDS = "100000"
+cargo test --manifest-path src-tauri/Cargo.toml generated_full_index_pipeline_soak --release -- --ignored --nocapture
+```
+
+Raise `ALETHEIA_INDEX_SOAK_RECORDS` up to `5000000`. The generated source and index live only in a temporary test directory.
+
 ## Benchmarks
 
 `cargo bench --bench core_benchmarks` measures:

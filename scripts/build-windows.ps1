@@ -45,6 +45,13 @@ try {
         }
     }
 
+    Add-Type -AssemblyName System.Drawing
+    $embeddedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($standaloneSource)
+    if ($null -eq $embeddedIcon -or $embeddedIcon.Width -lt 16 -or $embeddedIcon.Height -lt 16) {
+        throw "The standalone executable is missing its embedded application icon."
+    }
+    $embeddedIcon.Dispose()
+
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
     Get-ChildItem -LiteralPath $releaseRoot -File |
         Where-Object { $_.Name -like "aletheia_*" -or $_.Name -eq "SHA256SUMS.txt" } |

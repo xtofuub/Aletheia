@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 - 2026-07-28
+
+- Unified dark mode around a neutral graphite palette and eliminated the startup theme flash.
+- Moved long imports onto a dedicated SQLite WAL connection so dashboard reads remain responsive.
+- Added single-instance handling so reopening Aletheia focuses the existing window instead of competing for the active workspace.
+- Replaced expensive overview scans with compact database counts and stopped needless completed-job polling.
+- Split route code so the desktop shell starts with substantially less JavaScript.
+- Increased bounded import batches, reduced index checkpoints, reused prepared statements, and removed duplicate SQLite indexing.
+- Reduced new Tantivy index write amplification and added a generated 100,000-record full-pipeline soak test.
+- Regenerated the Windows icon set, used the real logo throughout the app, and made embedded EXE icon validation part of the release build.
+
 ## 0.1.2 - 2026-07-28
 
 - Rebuilt the overview on the supplied Shadcn Dashboard composition.

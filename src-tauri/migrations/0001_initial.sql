@@ -84,7 +84,6 @@ CREATE TABLE IF NOT EXISTS records (
 
 CREATE INDEX IF NOT EXISTS records_dataset_idx ON records(dataset_id);
 CREATE INDEX IF NOT EXISTS records_file_idx ON records(source_file_id);
-CREATE INDEX IF NOT EXISTS records_fingerprint_idx ON records(record_fingerprint);
 
 CREATE TABLE IF NOT EXISTS field_values (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,7 +98,6 @@ CREATE TABLE IF NOT EXISTS field_values (
 );
 
 CREATE INDEX IF NOT EXISTS field_values_record_idx ON field_values(record_id);
-CREATE INDEX IF NOT EXISTS field_values_normalized_idx ON field_values(field_type, normalized_value);
 
 CREATE TABLE IF NOT EXISTS domains (
   id TEXT PRIMARY KEY,
@@ -202,4 +200,3 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 
 CREATE INDEX IF NOT EXISTS audit_entity_idx ON audit_events(entity_type, entity_id, created_at);
-

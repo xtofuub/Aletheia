@@ -18,6 +18,13 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
+function initialTheme(): Theme {
+  const saved = window.localStorage.getItem("aletheia.theme");
+  return saved === "dark" || saved === "light" || saved === "system"
+    ? saved
+    : "light";
+}
+
 function resolveTheme(theme: Theme) {
   if (theme !== "system") return theme;
   return window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -26,7 +33,7 @@ function resolveTheme(theme: Theme) {
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
-  const [theme, setThemeState] = useState<Theme>("light");
+  const [theme, setThemeState] = useState<Theme>(initialTheme);
 
   const applyTheme = useCallback((next: Theme) => {
     const resolved = resolveTheme(next);
@@ -37,6 +44,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   const hydrateTheme = useCallback(
     (next: Theme) => {
+      window.localStorage.setItem("aletheia.theme", next);
       setThemeState(next);
       applyTheme(next);
     },

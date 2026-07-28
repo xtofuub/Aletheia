@@ -28,6 +28,10 @@ import {
 } from "../lib/desktop";
 import { formatBytes } from "../lib/utils";
 
+function isTerminalImport(status: ImportProgress["status"]) {
+  return ["completed", "cancelled", "failed"].includes(status);
+}
+
 export function DatasetsPage() {
   const queryClient = useQueryClient();
   const [showWizard, setShowWizard] = useState(false);
@@ -35,7 +39,8 @@ export function DatasetsPage() {
   const datasets = useQuery({
     queryKey: ["datasets"],
     queryFn: listDatasets,
-    refetchInterval: activeJob ? 1500 : false,
+    refetchInterval:
+      activeJob && !isTerminalImport(activeJob.status) ? 1500 : false,
   });
 
   useEffect(() => {
@@ -44,7 +49,7 @@ export function DatasetsPage() {
     void listenImportProgress((progress) => {
       if (disposed) return;
       setActiveJob(progress);
-      if (["completed", "cancelled", "failed"].includes(progress.status)) {
+      if (isTerminalImport(progress.status)) {
         void queryClient.invalidateQueries({ queryKey: ["datasets"] });
       }
     }).then((cleanup) => {
@@ -112,9 +117,7 @@ export function DatasetsPage() {
   const progress = activeJob?.totalBytes
     ? Math.min(100, (activeJob.bytesRead / activeJob.totalBytes) * 100)
     : 0;
-  const terminal =
-    activeJob &&
-    ["completed", "cancelled", "failed"].includes(activeJob.status);
+  const terminal = activeJob && isTerminalImport(activeJob.status);
 
   if (showWizard) {
     return (

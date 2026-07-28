@@ -2,19 +2,12 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   RouterProvider,
   type AnyRouter,
 } from "@tanstack/react-router";
 
 import { AppShell } from "./components/app-shell";
-import { DatasetsPage } from "./pages/datasets-page";
-import { DomainsPage } from "./pages/domains-page";
-import { ExportsPage } from "./pages/exports-page";
-import { IdentitiesPage } from "./pages/identities-page";
-import { OverviewPage } from "./pages/overview-page";
-import { SavedViewsPage } from "./pages/saved-views-page";
-import { SearchPage } from "./pages/search-page";
-import { SettingsPage } from "./pages/settings-page";
 
 const rootRoute = createRootRoute({
   component: AppShell,
@@ -23,42 +16,66 @@ const rootRoute = createRootRoute({
 const overviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: OverviewPage,
+  component: lazyRouteComponent(
+    () => import("./pages/overview-page"),
+    "OverviewPage",
+  ),
 });
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/search",
-  component: SearchPage,
+  component: lazyRouteComponent(
+    () => import("./pages/search-page"),
+    "SearchPage",
+  ),
 });
 const identitiesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/identities",
-  component: IdentitiesPage,
+  component: lazyRouteComponent(
+    () => import("./pages/identities-page"),
+    "IdentitiesPage",
+  ),
 });
 const domainsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/domains",
-  component: DomainsPage,
+  component: lazyRouteComponent(
+    () => import("./pages/domains-page"),
+    "DomainsPage",
+  ),
 });
 const datasetsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/datasets",
-  component: DatasetsPage,
+  component: lazyRouteComponent(
+    () => import("./pages/datasets-page"),
+    "DatasetsPage",
+  ),
 });
 const savedViewsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/saved-views",
-  component: SavedViewsPage,
+  component: lazyRouteComponent(
+    () => import("./pages/saved-views-page"),
+    "SavedViewsPage",
+  ),
 });
 const exportsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/exports",
-  component: ExportsPage,
+  component: lazyRouteComponent(
+    () => import("./pages/exports-page"),
+    "ExportsPage",
+  ),
 });
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
-  component: SettingsPage,
+  component: lazyRouteComponent(
+    () => import("./pages/settings-page"),
+    "SettingsPage",
+  ),
 });
 
 const routeTree = rootRoute.addChildren([

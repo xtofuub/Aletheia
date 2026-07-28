@@ -16,6 +16,7 @@ import { AppSidebar } from "./shadcn-dashboard/blocks/sidebar/sidebar-01/app-sid
 import { Button } from "./ui/button";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "./ui/sidebar";
 import { TooltipProvider } from "./ui/tooltip";
+import appIcon from "../assets/app-icon.svg";
 
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -129,7 +130,7 @@ export function AppShell() {
                 className="topbar-avatar"
                 aria-label="Local Aletheia profile"
               >
-                A
+                <img src={appIcon} alt="" aria-hidden="true" />
               </span>
             </div>
           </header>

@@ -190,6 +190,13 @@ pub struct DatasetSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OverviewStats {
+    pub identity_group_count: u64,
+    pub parent_domain_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchRequest {
     pub query: String,
     pub mode: SearchMode,

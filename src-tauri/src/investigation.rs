@@ -5,11 +5,40 @@ use uuid::Uuid;
 use crate::{
     models::{
         DomainSummary, FieldType, IdentityActionInput, IdentityMember, IdentitySummary,
-        SavedSearch, SavedSearchInput, SearchField, SearchHit, SearchRequest, SearchResponse,
+        OverviewStats, SavedSearch, SavedSearchInput, SearchField, SearchHit, SearchRequest,
+        SearchResponse,
     },
     search_index::SearchIndex,
     storage::AppState,
 };
+
+#[tauri::command]
+pub async fn get_overview_stats(state: State<'_, AppState>) -> Result<OverviewStats, String> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let identity_group_count = connection
+            .query_row("SELECT COUNT(*) FROM identity_groups", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(sanitized)?;
+        let parent_domain_count = connection
+            .query_row(
+                "SELECT COUNT(DISTINCT registrable_domain) FROM domains",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(sanitized)?;
+        Ok(OverviewStats {
+            identity_group_count: identity_group_count as u64,
+            parent_domain_count: parent_domain_count as u64,
+        })
+    })
+    .await
+    .map_err(|_| "overview statistics task failed".to_string())?
+}
 
 #[tauri::command]
 pub fn search_records(

@@ -150,6 +150,11 @@ export interface DatasetSummary {
   lastIndexedAt: string | null;
 }
 
+export interface OverviewStats {
+  identityGroupCount: number;
+  parentDomainCount: number;
+}
+
 export type SearchMode = "exact" | "contains" | "prefix";
 
 export interface SearchRequest {
@@ -316,6 +321,7 @@ export async function saveOnboarding(
 }
 
 export async function updateTheme(theme: Theme): Promise<void> {
+  window.localStorage.setItem("aletheia.theme", theme);
   if (isTauriRuntime()) {
     await invoke("update_theme", { theme });
     return;
@@ -337,7 +343,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     metadataBytes: 0,
     indexBytes: 0,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.2",
+    appVersion: "0.1.3",
   };
 }
 
@@ -442,6 +448,20 @@ export async function listDatasets(): Promise<DatasetSummary[]> {
   if (isTauriRuntime()) return invoke<DatasetSummary[]>("list_datasets");
   const stored = window.localStorage.getItem("aletheia.browser.datasets");
   return stored ? (JSON.parse(stored) as DatasetSummary[]) : [];
+}
+
+export async function getOverviewStats(): Promise<OverviewStats> {
+  if (isTauriRuntime()) return invoke<OverviewStats>("get_overview_stats");
+  const [domains, identities] = await Promise.all([
+    listDomains(),
+    listIdentities(),
+  ]);
+  return {
+    identityGroupCount: identities.length,
+    parentDomainCount: new Set(
+      domains.map((domain) => domain.registrableDomain),
+    ).size,
+  };
 }
 
 export async function searchRecords(

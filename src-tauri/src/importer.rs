@@ -24,7 +24,7 @@ use crate::{
         ImportStartResult, SourceFormat,
     },
     search_index::{SearchIndex, make_document},
-    storage::{AppState, JobControl},
+    storage::{AppState, JobControl, open_database},
 };
 
 const MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -33,10 +33,10 @@ const MAX_FIELDS: usize = 256;
 const MAX_JSON_DEPTH: usize = 32;
 const MAX_DECOMPRESSION_RATIO: u64 = 100;
 const MIN_DECOMPRESSION_LIMIT: u64 = 64 * 1024 * 1024;
-const BATCH_RECORDS: usize = 1_000;
+const BATCH_RECORDS: usize = 10_000;
 const MIN_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
-const INDEX_CHECKPOINT_RECORDS: u64 = 100_000;
+const INDEX_CHECKPOINT_RECORDS: u64 = 1_000_000;
 const PARSER_VERSION: &str = "aletheia-parser/1";
 
 #[derive(Clone)]
@@ -194,18 +194,24 @@ pub async fn start_import(
         dataset_id: dataset_id.clone(),
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let run_result = run_import(
-            Some(&app),
-            &database,
-            &storage_root,
-            &job_id,
-            &dataset_id,
-            total_bytes,
-            memory_limit_mb,
-            worker_files,
-            &plan,
-            &control,
-        );
+        let run_result = open_database(&storage_root)
+            .map_err(|_| "metadata database worker could not start".to_string())
+            .and_then(|worker_connection| {
+                prepare_import_database(&worker_connection)?;
+                let worker_database = Arc::new(Mutex::new(worker_connection));
+                run_import(
+                    Some(&app),
+                    &worker_database,
+                    &storage_root,
+                    &job_id,
+                    &dataset_id,
+                    total_bytes,
+                    memory_limit_mb,
+                    worker_files,
+                    &plan,
+                    &control,
+                )
+            });
         if let Err(error) = run_result {
             mark_failed(&database, &job_id, &dataset_id);
             let _ = app.emit(
@@ -230,6 +236,16 @@ pub async fn start_import(
         }
     });
     Ok(result)
+}
+
+fn prepare_import_database(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "DROP INDEX IF EXISTS field_values_normalized_idx;
+             DROP INDEX IF EXISTS records_fingerprint_idx;
+             DROP INDEX IF EXISTS records_dataset_fingerprint_idx;",
+        )
+        .map_err(sanitized)
 }
 
 #[tauri::command]
@@ -532,7 +548,7 @@ fn run_import(
                     persist_checkpoint(database, job_id, &file.id, counters)?;
                     last_index_checkpoint = counters.records_indexed;
                 }
-                if last_emit.elapsed() >= Duration::from_millis(150) {
+                if last_emit.elapsed() >= Duration::from_millis(250) {
                     emit_progress(
                         app,
                         job_id,
@@ -884,13 +900,15 @@ fn flush_batch(
     for record in batch.drain(..) {
         if plan.options.deduplicate {
             let exists = transaction
-                .query_row(
+                .prepare_cached(
                     "SELECT EXISTS(
                         SELECT 1 FROM records WHERE dataset_id = ?1 AND record_fingerprint = ?2
                      )",
-                    params![dataset_id, record.fingerprint],
-                    |row| row.get::<_, bool>(0),
                 )
+                .map_err(sanitized)?
+                .query_row(params![dataset_id, record.fingerprint], |row| {
+                    row.get::<_, bool>(0)
+                })
                 .map_err(sanitized)?;
             if exists {
                 counters.duplicate_records += 1;
@@ -898,41 +916,42 @@ fn flush_batch(
             }
         }
         transaction
-            .execute(
+            .prepare_cached(
                 "INSERT INTO records(
                     id, dataset_id, source_file_id, source_location, byte_offset,
                     record_fingerprint, parser
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    record.id,
-                    dataset_id,
-                    file.id,
-                    record.source_location,
-                    record.byte_offset.map(|value| value as i64),
-                    record.fingerprint,
-                    PARSER_VERSION,
-                ],
             )
+            .map_err(sanitized)?
+            .execute(params![
+                record.id,
+                dataset_id,
+                file.id,
+                record.source_location,
+                record.byte_offset.map(|value| value as i64),
+                record.fingerprint,
+                PARSER_VERSION,
+            ])
             .map_err(sanitized)?;
         let mut exact_values = Vec::new();
-        let mut search_text = Vec::new();
         for field in &record.fields {
             transaction
-                .execute(
+                .prepare_cached(
                     "INSERT INTO field_values(
                         record_id, field_name, field_type, original_value, normalized_value,
                         is_sensitive, confidence
                      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        record.id,
-                        field.name,
-                        field.field_type.as_str(),
-                        field.original,
-                        field.normalized,
-                        field.sensitive,
-                        field.confidence,
-                    ],
                 )
+                .map_err(sanitized)?
+                .execute(params![
+                    record.id,
+                    field.name,
+                    field.field_type.as_str(),
+                    field.original,
+                    field.normalized,
+                    field.sensitive,
+                    field.confidence,
+                ])
                 .map_err(sanitized)?;
             if plan.options.group_identities {
                 store_identity(
@@ -950,7 +969,6 @@ fn flush_batch(
                     field.field_type.as_str(),
                     field.normalized
                 ));
-                search_text.push(field.normalized.clone());
             }
         }
         if plan.options.extract_domains || plan.options.extract_urls {
@@ -963,10 +981,7 @@ fn flush_batch(
                 index_fields,
                 &record.id,
                 dataset_id,
-                &file.id,
-                &record.source_location,
                 &exact_values,
-                &search_text.join(" "),
             ))
             .map_err(sanitized)?;
         counters.records_indexed += 1;
@@ -1004,30 +1019,32 @@ fn store_identity(
         _ => unreachable!(),
     };
     connection
-        .execute(
+        .prepare_cached(
             "INSERT INTO identity_groups(id, display_label, confidence_level)
              VALUES (?1, ?2, 'high')
-             ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
-            params![group_id, display],
+             ON CONFLICT(id) DO NOTHING",
         )
+        .map_err(sanitized)?
+        .execute(params![group_id, display])
         .map_err(sanitized)?;
     let explanation = serde_json::json!({
         "rule": format!("exact_normalized_{field_type_name}"),
         "deterministic": true
     });
     connection
-        .execute(
+        .prepare_cached(
             "INSERT OR IGNORE INTO identity_memberships(
                 identity_group_id, record_id, link_type, confidence_score,
                 explanation_json, user_status
              ) VALUES (?1, ?2, ?3, 1.0, ?4, 'automatic')",
-            params![
-                group_id,
-                record_id,
-                format!("exact_{field_type_name}"),
-                explanation.to_string()
-            ],
         )
+        .map_err(sanitized)?
+        .execute(params![
+            group_id,
+            record_id,
+            format!("exact_{field_type_name}"),
+            explanation.to_string()
+        ])
         .map_err(sanitized)?;
     Ok(())
 }
@@ -1293,17 +1310,18 @@ fn sanitized(error: impl std::fmt::Display) -> String {
 mod tests {
     use std::{
         fs::File,
-        io::{self, BufReader, Cursor, Read},
+        io::{self, BufReader, BufWriter, Cursor, Read, Write},
         sync::{Arc, Mutex},
+        time::Instant,
     };
 
     use flate2::{Compression, write::GzEncoder};
     use tempfile::tempdir;
 
     use super::{
-        INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES, batch_byte_limit,
-        decompression_limit, mask_email, normalize_value, prepare_database_rows, process_record,
-        read_bounded_line, run_import,
+        BATCH_RECORDS, INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES, batch_byte_limit,
+        decompression_limit, mask_email, normalize_value, prepare_database_rows,
+        prepare_import_database, process_record, read_bounded_line, run_import,
     };
     use crate::{
         detection::inspect_paths,
@@ -1415,7 +1433,45 @@ mod tests {
         );
         assert_eq!(batch_byte_limit(256), 16 * 1024 * 1024);
         assert_eq!(batch_byte_limit(8_192), 32 * 1024 * 1024);
-        assert_eq!(INDEX_CHECKPOINT_RECORDS, 100_000);
+        assert_eq!(BATCH_RECORDS, 10_000);
+        assert_eq!(INDEX_CHECKPOINT_RECORDS, 1_000_000);
+    }
+
+    #[test]
+    fn background_import_preparation_removes_legacy_redundant_indexes() {
+        let workspace = tempdir().expect("temporary workspace");
+        let connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute(
+                "CREATE INDEX field_values_normalized_idx
+                 ON field_values(field_type, normalized_value)",
+                [],
+            )
+            .expect("legacy index");
+        connection
+            .execute(
+                "CREATE INDEX records_fingerprint_idx
+                 ON records(record_fingerprint)",
+                [],
+            )
+            .expect("legacy fingerprint index");
+
+        prepare_import_database(&connection).expect("background preparation");
+
+        let remaining: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index'
+                   AND name IN (
+                     'field_values_normalized_idx',
+                     'records_fingerprint_idx',
+                     'records_dataset_fingerprint_idx'
+                   )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("index state");
+        assert_eq!(remaining, 0);
     }
 
     #[test]
@@ -1445,6 +1501,78 @@ mod tests {
         assert_eq!(consumed, target_bytes);
         assert!(max_retained <= 4095);
         assert!(line.capacity() <= 8192);
+    }
+
+    #[test]
+    #[ignore = "manual generated full-index throughput soak test"]
+    fn generated_full_index_pipeline_soak() {
+        let record_count = std::env::var("ALETHEIA_INDEX_SOAK_RECORDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(100_000)
+            .clamp(10_000, 5_000_000);
+        let workspace = tempdir().expect("temporary workspace");
+        let source = workspace.path().join("generated-index-soak.csv");
+        let mut writer = BufWriter::new(File::create(&source).expect("generated synthetic source"));
+        writeln!(writer, "user_id,email,url").expect("header");
+        for record in 0..record_count {
+            writeln!(
+                writer,
+                "user-{record:010},person-{record:010}@example.com,https://node-{record:010}.example.net/item/{record}"
+            )
+            .expect("synthetic record");
+        }
+        writer.flush().expect("flush synthetic source");
+
+        let inspection = inspect_paths(std::slice::from_ref(&source)).expect("inspection");
+        let plan = ImportPlan {
+            dataset_label: "Generated index soak".to_string(),
+            authorization_note: "Invented generated records only".to_string(),
+            files: inspection.files,
+            options: ImportOptions {
+                skip_invalid_rows: true,
+                stop_on_severe_error: true,
+                extract_urls: false,
+                extract_domains: false,
+                group_identities: false,
+                deduplicate: true,
+                store_offsets: true,
+            },
+        };
+        let database = Arc::new(Mutex::new(
+            open_database(workspace.path()).expect("database"),
+        ));
+        let files =
+            prepare_database_rows(&database, "dataset-soak", "job-soak", &plan).expect("rows");
+        let started = Instant::now();
+        run_import(
+            None,
+            &database,
+            workspace.path(),
+            "job-soak",
+            "dataset-soak",
+            plan.files.iter().map(|file| file.file_size).sum(),
+            512,
+            files,
+            &plan,
+            &JobControl::default(),
+        )
+        .expect("full index import");
+
+        let indexed: i64 = database
+            .lock()
+            .expect("database")
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE dataset_id = 'dataset-soak'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("indexed count");
+        assert_eq!(indexed as u64, record_count);
+        eprintln!(
+            "indexed {record_count} generated records in {:.2?}",
+            started.elapsed()
+        );
     }
 
     #[test]

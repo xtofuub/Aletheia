@@ -30,10 +30,9 @@ import {
 
 import { Button } from "../components/ui/button";
 import {
+  getOverviewStats,
   getSystemStatus,
   listDatasets,
-  listDomains,
-  listIdentities,
   type DatasetSummary,
 } from "../lib/desktop";
 import { formatBytes } from "../lib/utils";
@@ -186,10 +185,9 @@ export function OverviewPage() {
   const navigate = useNavigate();
   const reducedMotion = useReducedMotion();
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
-  const domains = useQuery({ queryKey: ["domains"], queryFn: listDomains });
-  const identities = useQuery({
-    queryKey: ["identities"],
-    queryFn: listIdentities,
+  const overviewStats = useQuery({
+    queryKey: ["overview-stats"],
+    queryFn: getOverviewStats,
   });
   const status = useQuery({
     queryKey: ["system-status"],
@@ -209,9 +207,7 @@ export function OverviewPage() {
     (sum, dataset) => sum + dataset.fileCount,
     0,
   );
-  const parentDomainCount = new Set(
-    domains.data?.map((domain) => domain.registrableDomain) ?? [],
-  ).size;
+  const parentDomainCount = overviewStats.data?.parentDomainCount ?? 0;
   const hasDatasets = datasetRows.length > 0;
   const readyCount = datasetRows.filter(
     (dataset) => dataset.status === "ready",
@@ -220,8 +216,7 @@ export function OverviewPage() {
   const refresh = () =>
     Promise.all([
       datasets.refetch(),
-      domains.refetch(),
-      identities.refetch(),
+      overviewStats.refetch(),
       status.refetch(),
     ]);
 
@@ -432,7 +427,9 @@ export function OverviewPage() {
                   <IdCard aria-hidden="true" />
                 </span>
                 <strong>
-                  <AnimatedNumber value={identities.data?.length ?? 0} />
+                  <AnimatedNumber
+                    value={overviewStats.data?.identityGroupCount ?? 0}
+                  />
                 </strong>
                 <small>Identity groups</small>
               </div>
@@ -581,7 +578,7 @@ export function OverviewPage() {
       </section>
 
       <footer className="overview-footer">
-        <span>Aletheia v0.1.2</span>
+        <span>Aletheia v0.1.3</span>
         <span>Local-first investigation</span>
         <span>
           <Search aria-hidden="true" />
