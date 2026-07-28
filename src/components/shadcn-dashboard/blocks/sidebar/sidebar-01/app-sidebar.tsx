@@ -76,7 +76,7 @@ export function AppSidebar() {
                 Aletheia
               </span>
               <span className="rounded-full border border-border bg-background px-1.5 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
-                v0.1.5
+                v0.1.6
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>

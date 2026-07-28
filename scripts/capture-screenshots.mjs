@@ -1,9 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import { chromium } from "@playwright/test";
+import { createServer } from "vite";
 
 const output = new URL("../docs/screenshots/", import.meta.url);
 await mkdir(output, { recursive: true });
 
+const server = await createServer({
+  server: { host: "127.0.0.1", port: 1420 },
+});
+await server.listen();
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 await page.addInitScript(() => {
@@ -108,11 +113,32 @@ await page
   .getByRole("textbox", { name: "Search local index" })
   .fill("example.com");
 await page.keyboard.press("Enter");
-await page.getByText("a•••@example.com").click();
-await page.getByText("[REDACTED]").waitFor();
+await page.getByText("a•••@example.com").first().click();
+await page.getByText("[REDACTED]").first().waitFor();
 await page.screenshot({
   path: new URL("search.png", output).pathname.slice(1),
   fullPage: true,
 });
 
+await page.goto("http://127.0.0.1:1420/identities");
+await page.getByText("Build an identity").waitFor();
+await page.screenshot({
+  path: new URL("identities.png", output).pathname.slice(1),
+  fullPage: true,
+});
+
+await page.goto("http://127.0.0.1:1420/settings");
+await page.getByText("Indexing performance").waitFor();
+await page.screenshot({
+  path: new URL("settings.png", output).pathname.slice(1),
+  fullPage: true,
+});
+
+await page.getByRole("button", { name: /^Dark/ }).click();
+await page.screenshot({
+  path: new URL("settings-dark.png", output).pathname.slice(1),
+  fullPage: true,
+});
+
 await browser.close();
+await server.close();

@@ -14,8 +14,11 @@ The bundled Public Suffix List determines the registrable parent. Aletheia there
 
 The domain explorer has a local prefix search for parent domains and observed
 hostnames. Selecting a parent shows its hostnames, every linked breach dataset,
-and paginated source records. These links are materialized incrementally during
-import so opening a domain does not scan the full workspace. Older URL links
-are backfilled locally only when that domain is requested.
+and paginated source records with masked field contents. Hostname chips are
+clickable evidence filters, and the hostname search is applied in SQLite with a
+bounded result limit. These links are materialized incrementally during import
+so opening a domain does not scan the full workspace. Older URL links and
+missing per-dataset counts are repaired locally once when that domain is
+requested.
 
 No DNS request or remote enrichment occurs.

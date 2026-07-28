@@ -1,8 +1,6 @@
-import { type FormEvent, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { type FormEvent, useDeferredValue, useState } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
-  ChevronLeft,
-  ChevronRight,
   Database,
   FileSearch,
   Globe2,
@@ -14,46 +12,59 @@ import {
 import { PageHeader } from "../components/page-header";
 import { Button } from "../components/ui/button";
 import { EmptyState } from "../components/ui/empty-state";
+import { PaginationControls } from "../components/ui/pagination-controls";
 import {
   getDomainDetails,
   listDomains,
   type DomainGroupSummary,
 } from "../lib/desktop";
 
-const pageSize = 50;
-
 export function DomainsPage() {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [selected, setSelected] = useState<DomainGroupSummary | null>(null);
+  const [hostname, setHostname] = useState<string | null>(null);
+  const [hostnameDraft, setHostnameDraft] = useState("");
+  const deferredHostnameDraft = useDeferredValue(hostnameDraft);
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [recordOffset, setRecordOffset] = useState(0);
+  const [recordPageSize, setRecordPageSize] = useState(25);
   const domains = useQuery({
-    queryKey: ["domains", query, offset],
+    queryKey: ["domains", query, offset, pageSize],
     queryFn: () => listDomains(query, offset, pageSize),
+    placeholderData: keepPreviousData,
   });
   const details = useQuery({
     queryKey: [
       "domain-details",
       selected?.registrableDomain,
+      hostname,
+      deferredHostnameDraft,
       datasetId,
       recordOffset,
+      recordPageSize,
     ],
     queryFn: () =>
       getDomainDetails(
         selected?.registrableDomain ?? "",
+        hostname,
+        deferredHostnameDraft || null,
         datasetId,
         recordOffset,
-        pageSize,
+        recordPageSize,
       ),
     enabled: Boolean(selected),
+    staleTime: 30_000,
   });
 
   function submit(event: FormEvent) {
     event.preventDefault();
     setOffset(0);
     setSelected(null);
+    setHostname(null);
+    setHostnameDraft("");
     setDatasetId(null);
     setRecordOffset(0);
     setQuery(draft.trim());
@@ -61,6 +72,8 @@ export function DomainsPage() {
 
   function openDomain(group: DomainGroupSummary) {
     setSelected(group);
+    setHostname(null);
+    setHostnameDraft("");
     setDatasetId(null);
     setRecordOffset(0);
   }
@@ -70,12 +83,11 @@ export function DomainsPage() {
     setRecordOffset(0);
   }
 
-  const domainHasNext =
-    (domains.data?.offset ?? 0) + (domains.data?.groups.length ?? 0) <
-    (domains.data?.total ?? 0);
-  const recordsHaveNext =
-    (details.data?.recordOffset ?? 0) + (details.data?.records.length ?? 0) <
-    (details.data?.totalRecords ?? 0);
+  function filterHostname(nextHostname: string | null) {
+    setHostname(nextHostname);
+    setDatasetId(null);
+    setRecordOffset(0);
+  }
 
   return (
     <div className="page">
@@ -136,32 +148,20 @@ export function DomainsPage() {
                 </span>
               </button>
             ))}
-            <footer className="result-pagination">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - pageSize))}
-              >
-                <ChevronLeft size={14} />
-                Previous
-              </Button>
-              <span className="font-mono">
-                {offset + 1}–
-                {Math.min(
-                  offset + domains.data.groups.length,
-                  domains.data.total,
-                ).toLocaleString()}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!domainHasNext}
-                onClick={() => setOffset(offset + pageSize)}
-              >
-                Next
-                <ChevronRight size={14} />
-              </Button>
+            <footer>
+              <PaginationControls
+                label="domains"
+                offset={offset}
+                total={domains.data.total}
+                pageSize={pageSize}
+                busy={domains.isFetching}
+                onOffsetChange={setOffset}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setOffset(0);
+                }}
+                pageSizes={[25, 50, 100]}
+              />
             </footer>
           </section>
 
@@ -185,13 +185,39 @@ export function DomainsPage() {
                     <h3>
                       <Network size={14} />
                       Observed hostnames
+                      <small>
+                        {details.data.hostnames.length.toLocaleString()} of{" "}
+                        {selected.hostnameCount.toLocaleString()}
+                      </small>
                     </h3>
+                    <label className="domain-host-search">
+                      <Search size={13} />
+                      <input
+                        aria-label="Filter observed hostnames"
+                        placeholder="Filter hostnames"
+                        value={hostnameDraft}
+                        onChange={(event) =>
+                          setHostnameDraft(event.target.value.toLowerCase())
+                        }
+                      />
+                    </label>
                     <div className="domain-hostnames">
-                      {details.data.hostnames.map((hostname) => (
-                        <span key={hostname.id}>
-                          <code>{hostname.hostname}</code>
-                          <small>{hostname.recordCount.toLocaleString()}</small>
-                        </span>
+                      <button
+                        data-active={!hostname}
+                        onClick={() => filterHostname(null)}
+                      >
+                        <code>All hostnames</code>
+                        <small>{selected.recordCount.toLocaleString()}</small>
+                      </button>
+                      {details.data.hostnames.map((item) => (
+                        <button
+                          data-active={hostname === item.hostname}
+                          key={item.id}
+                          onClick={() => filterHostname(item.hostname)}
+                        >
+                          <code>{item.hostname}</code>
+                          <small>{item.recordCount.toLocaleString()}</small>
+                        </button>
                       ))}
                     </div>
                   </section>
@@ -200,6 +226,9 @@ export function DomainsPage() {
                     <h3>
                       <Database size={14} />
                       Linked breach datasets
+                      <small>
+                        {details.data.breaches.length.toLocaleString()} datasets
+                      </small>
                     </h3>
                     <div className="domain-breaches">
                       <button
@@ -208,7 +237,7 @@ export function DomainsPage() {
                       >
                         <span>All datasets</span>
                         <strong>
-                          {details.data.breaches.length.toLocaleString()}
+                          {details.data.totalRecords.toLocaleString()}
                         </strong>
                       </button>
                       {details.data.breaches.map((breach) => (
@@ -252,45 +281,27 @@ export function DomainsPage() {
                                 className="font-mono"
                                 data-sensitive={field.sensitive}
                               >
-                                {field.displayValue || "—"}
+                                {field.displayValue || "Not available"}
                               </dd>
                             </div>
                           ))}
                         </dl>
                       </article>
                     ))}
-                    <footer className="result-pagination">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={recordOffset === 0}
-                        onClick={() =>
-                          setRecordOffset(Math.max(0, recordOffset - pageSize))
-                        }
-                      >
-                        <ChevronLeft size={14} />
-                        Previous
-                      </Button>
-                      <span className="font-mono">
-                        {details.data.totalRecords
-                          ? details.data.recordOffset + 1
-                          : 0}
-                        –
-                        {Math.min(
-                          details.data.recordOffset +
-                            details.data.records.length,
-                          details.data.totalRecords,
-                        ).toLocaleString()}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        disabled={!recordsHaveNext}
-                        onClick={() => setRecordOffset(recordOffset + pageSize)}
-                      >
-                        Next
-                        <ChevronRight size={14} />
-                      </Button>
+                    <footer>
+                      <PaginationControls
+                        label="domain records"
+                        offset={recordOffset}
+                        total={details.data.totalRecords}
+                        pageSize={recordPageSize}
+                        busy={details.isFetching}
+                        onOffsetChange={setRecordOffset}
+                        onPageSizeChange={(size) => {
+                          setRecordPageSize(size);
+                          setRecordOffset(0);
+                        }}
+                        pageSizes={[10, 25, 50, 100]}
+                      />
                     </footer>
                   </section>
                 </>

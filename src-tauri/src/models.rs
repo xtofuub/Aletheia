@@ -297,6 +297,7 @@ pub struct DomainRecordSummary {
 #[serde(rename_all = "camelCase")]
 pub struct DomainDetailsResponse {
     pub registrable_domain: String,
+    pub selected_hostname: Option<String>,
     pub hostnames: Vec<DomainSummary>,
     pub breaches: Vec<DomainBreachSummary>,
     pub total_records: u64,
@@ -328,11 +329,26 @@ pub struct IdentityMember {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IdentityMembersResponse {
+    pub total: u64,
+    pub offset: usize,
+    pub members: Vec<IdentityMember>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityActionInput {
     pub action: String,
     pub group_id: String,
     pub record_ids: Vec<String>,
     pub target_group_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualIdentityInput {
+    pub name: String,
+    pub record_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

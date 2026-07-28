@@ -50,6 +50,10 @@ The dashboard uses the clean, compact structure of the referenced shadcn dashboa
 
 ![Masked local search using synthetic data](docs/screenshots/search.png)
 
+![Manual and automatic identity bundles](docs/screenshots/identities.png)
+
+![Local performance and privacy settings](docs/screenshots/settings.png)
+
 All screenshots and examples use invented fixtures with reserved example domains and documentation IP ranges.
 
 ## Supported inputs

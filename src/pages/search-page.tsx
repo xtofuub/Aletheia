@@ -1,10 +1,7 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   BookmarkPlus,
-  ChevronLeft,
-  ChevronRight,
   Download,
   FileSearch,
   LoaderCircle,
@@ -16,6 +13,7 @@ import {
 import { PageHeader } from "../components/page-header";
 import { Button } from "../components/ui/button";
 import { EmptyState } from "../components/ui/empty-state";
+import { PaginationControls } from "../components/ui/pagination-controls";
 import {
   exportRecords,
   listDatasets,
@@ -37,7 +35,7 @@ const modes: Array<{ value: SearchMode; label: string }> = [
 export function SearchPage() {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("exact");
+  const [mode, setMode] = useState<SearchMode>("contains");
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [fieldType, setFieldType] = useState<FieldType | null>(null);
   const [sort, setSort] = useState<"relevance" | "source" | "dataset">(
@@ -64,6 +62,7 @@ export function SearchPage() {
         limit: pageSize,
       }),
     enabled: query.length > 0,
+    placeholderData: keepPreviousData,
   });
   const displayedHits = useMemo(() => {
     const hits = [...(results.data?.hits ?? [])];
@@ -81,14 +80,6 @@ export function SearchPage() {
     return hits;
   }, [results.data?.hits, sort]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // TanStack Virtual intentionally returns imperative measurement functions.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtual = useVirtualizer({
-    count: displayedHits.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 54,
-    overscan: 8,
-  });
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -135,15 +126,6 @@ export function SearchPage() {
       `${exported.recordCount.toLocaleString()} redacted record${exported.recordCount === 1 ? "" : "s"} exported`,
     );
   }
-
-  const hasNext =
-    (results.data?.offset ?? 0) + (results.data?.hits.length ?? 0) <
-    (results.data?.total ?? 0);
-  const totalPages = Math.max(
-    1,
-    Math.ceil((results.data?.total ?? 0) / pageSize),
-  );
-  const currentPage = Math.min(totalPages, Math.floor(offset / pageSize) + 1);
 
   function movePage(nextOffset: number) {
     setOffset(Math.max(0, nextOffset));
@@ -196,7 +178,7 @@ export function SearchPage() {
         <Search size={19} strokeWidth={1.6} aria-hidden="true" />
         <input
           aria-label="Search local index"
-          placeholder='Try email:"analyst@example.com" or domain:example.com'
+          placeholder="Search email, domain, username, phone, IP, or URL"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           maxLength={512}
@@ -204,76 +186,91 @@ export function SearchPage() {
         <kbd>Enter</kbd>
       </form>
 
-      <div className="search-controls">
-        <div className="segmented-control segmented-control--compact">
-          {modes.map((item) => (
-            <button
-              type="button"
-              key={item.value}
-              data-active={mode === item.value}
-              onClick={() => {
-                setMode(item.value);
+      <details className="search-advanced">
+        <summary>
+          Search options
+          <span>
+            {modes.find((item) => item.value === mode)?.label} ·{" "}
+            {datasetId ? "1 dataset" : "All datasets"} ·{" "}
+            {fieldType ?? "Any field"}
+          </span>
+        </summary>
+        <div className="search-controls">
+          <div className="segmented-control segmented-control--compact">
+            {modes.map((item) => (
+              <button
+                type="button"
+                key={item.value}
+                data-active={mode === item.value}
+                onClick={() => {
+                  setMode(item.value);
+                  setOffset(0);
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <label>
+            <span>Dataset</span>
+            <select
+              aria-label="Dataset"
+              value={datasetId ?? ""}
+              onChange={(event) => {
+                setDatasetId(event.target.value || null);
                 setOffset(0);
               }}
             >
-              {item.label}
-            </button>
-          ))}
+              <option value="">All local datasets</option>
+              {datasets.data?.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Field</span>
+            <select
+              aria-label="Field"
+              value={fieldType ?? ""}
+              onChange={(event) => {
+                setFieldType((event.target.value || null) as FieldType | null);
+                setOffset(0);
+              }}
+            >
+              <option value="">Any field</option>
+              <option value="email">Email</option>
+              <option value="phone">Phone</option>
+              <option value="domain">Domain</option>
+              <option value="url">URL</option>
+              <option value="ip_address">IP address</option>
+              <option value="username">Username</option>
+              <option value="user_id">Service user ID</option>
+            </select>
+          </label>
+          <label>
+            <span>Sort</span>
+            <select
+              aria-label="Sort"
+              value={sort}
+              onChange={(event) =>
+                setSort(
+                  event.target.value as "relevance" | "source" | "dataset",
+                )
+              }
+            >
+              <option value="relevance">Relevance</option>
+              <option value="source">Source location</option>
+              <option value="dataset">Dataset</option>
+            </select>
+          </label>
+          <span className="privacy-inline">
+            <LockKeyhole size={13} />
+            Secrets excluded
+          </span>
         </div>
-        <label>
-          <span>Dataset</span>
-          <select
-            value={datasetId ?? ""}
-            onChange={(event) => {
-              setDatasetId(event.target.value || null);
-              setOffset(0);
-            }}
-          >
-            <option value="">All local datasets</option>
-            {datasets.data?.map((dataset) => (
-              <option key={dataset.id} value={dataset.id}>
-                {dataset.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>Field</span>
-          <select
-            value={fieldType ?? ""}
-            onChange={(event) => {
-              setFieldType((event.target.value || null) as FieldType | null);
-              setOffset(0);
-            }}
-          >
-            <option value="">Any safe field</option>
-            <option value="email">Email</option>
-            <option value="phone">Phone</option>
-            <option value="domain">Domain</option>
-            <option value="url">URL</option>
-            <option value="ip_address">IP address</option>
-            <option value="username">Username</option>
-            <option value="user_id">Service user ID</option>
-          </select>
-        </label>
-        <label>
-          <span>Sort</span>
-          <select
-            value={sort}
-            onChange={(event) =>
-              setSort(event.target.value as "relevance" | "source" | "dataset")
-            }
-          >
-            <option value="relevance">Relevance</option>
-            <option value="source">Source location</option>
-            <option value="dataset">Dataset</option>
-          </select>
-        </label>
-        <span className="privacy-inline">
-          <LockKeyhole size={13} />
-          Secrets excluded
-        </span>
-      </div>
+      </details>
 
       {showSave ? (
         <div className="inline-save">
@@ -301,7 +298,7 @@ export function SearchPage() {
         <EmptyState
           icon={Search}
           title="Search the local evidence index"
-          description="Use an exact identifier, a bounded contains or prefix match, or a structured field query. Results remain masked until deliberately exported."
+          description="Type any email, domain, username, phone, IP address, or URL. Results stay masked until deliberately exported."
           detail="Secret fields are never added to the general Tantivy index."
         />
       ) : results.isLoading ? (
@@ -326,38 +323,13 @@ export function SearchPage() {
           <section className="result-list">
             <header className="result-list__head">
               <span>{results.data.total.toLocaleString()} matches</span>
-              <div className="result-list__tools">
-                <label>
-                  <span>Rows per page</span>
-                  <select
-                    aria-label="Results per page"
-                    value={pageSize}
-                    onChange={(event) => {
-                      setPageSize(Number(event.target.value));
-                      movePage(0);
-                    }}
-                  >
-                    {[25, 50, 100, 200].map((value) => (
-                      <option value={value} key={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <span className="font-mono">
-                  Page {currentPage.toLocaleString()} of{" "}
-                  {totalPages.toLocaleString()}
-                </span>
-              </div>
+              <span>
+                {results.isFetching ? "Updating page" : "Masked locally"}
+              </span>
             </header>
             <div className="result-scroll" ref={scrollRef}>
-              <div
-                className="result-virtual"
-                style={{ height: virtual.getTotalSize() }}
-              >
-                {virtual.getVirtualItems().map((virtualRow) => {
-                  const hit = displayedHits[virtualRow.index];
-                  if (!hit) return null;
+              <div className="result-table">
+                {displayedHits.map((hit) => {
                   const primary = hit.fields.find(
                     (field) => field.fieldType !== "password",
                   );
@@ -366,7 +338,6 @@ export function SearchPage() {
                       className="result-row"
                       data-active={detail?.recordId === hit.recordId}
                       key={hit.recordId}
-                      style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
                       <input
                         type="checkbox"
@@ -392,33 +363,19 @@ export function SearchPage() {
                 })}
               </div>
             </div>
-            <footer className="result-pagination">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={offset === 0}
-                onClick={() => movePage(offset - pageSize)}
-              >
-                <ChevronLeft size={14} />
-                Previous
-              </Button>
-              <span className="font-mono">
-                {offset + 1}–
-                {Math.min(
-                  offset + results.data.hits.length,
-                  results.data.total,
-                ).toLocaleString()}{" "}
-                of {results.data.total.toLocaleString()}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={!hasNext}
-                onClick={() => movePage(offset + pageSize)}
-              >
-                Next
-                <ChevronRight size={14} />
-              </Button>
+            <footer>
+              <PaginationControls
+                label="search results"
+                offset={offset}
+                total={results.data.total}
+                pageSize={pageSize}
+                busy={results.isFetching}
+                onOffsetChange={movePage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  movePage(0);
+                }}
+              />
             </footer>
           </section>
           {detail ? (

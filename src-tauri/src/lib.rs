@@ -49,6 +49,7 @@ pub fn run() {
             investigation::list_identities,
             investigation::list_identity_members,
             investigation::apply_identity_action,
+            investigation::create_manual_identity,
             investigation::save_search,
             investigation::list_saved_searches,
             export_cleanup::export_records,

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.6 - 2026-07-28
+
+- Rebuilt Search, Domains, Identities, Datasets, and Settings on one consistent Shadcn component system with a deeper neutral dark theme and compact source-location typography.
+- Replaced the search viewport illusion with real result rows, explicit first/previous/page/next/last controls, and configurable 25–200 row pages.
+- Made plain Contains search the default, simplified the search prompt, and moved advanced mode, dataset, field, and sort controls into a compact optional section.
+- Batch-loaded search hits and domain record fields to remove per-result SQLite queries.
+- Added paginated parent domains, paginated source-line evidence, clickable hostname filters, server-side hostname prefix lookup, and lazy repair of missing legacy breach-dataset counts.
+- Added a manual identity builder that searches local records, keeps selections across pages, names reviewed bundles, and displays manual and automatic identities in a compact bento collection.
+- Changed automatic identities to materialize only after an exact email, phone, or service-scoped ID repeats, avoiding millions of useless singleton groups on large imports.
+- Fixed automatic identity rebuilding while preserving reviewed links, and paginated identity members instead of loading entire groups at once.
+- Separated dataset status and Resume actions, and added smoothed records-per-second and bytes-per-second indexing telemetry.
+- Reworked Settings with clear appearance, performance presets, privacy controls, local storage status, network boundary, cleanup confirmation, and a persistent save bar.
+- Added a composite domain lookup index, identity candidates, domain repair markers, and regression coverage for paging, manual identities, automatic rebuilds, settings persistence, and linked evidence.
+
 ## 0.1.5 - 2026-07-28
 
 - Made resource-protection settings save atomically and refresh immediately, added a disabled inactivity-lock option, and expanded the real per-import memory budget to 4 GiB.

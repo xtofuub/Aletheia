@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -33,10 +33,26 @@ function isTerminalImport(status: ImportProgress["status"]) {
   return ["completed", "cancelled", "interrupted", "failed"].includes(status);
 }
 
+function formatRate(value: number) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return Math.round(value).toLocaleString();
+}
+
 export function DatasetsPage() {
   const queryClient = useQueryClient();
   const [showWizard, setShowWizard] = useState(false);
   const [activeJob, setActiveJob] = useState<ImportProgress | null>(null);
+  const [throughput, setThroughput] = useState({
+    recordsPerSecond: 0,
+    bytesPerSecond: 0,
+  });
+  const progressSample = useRef<{
+    jobId: string;
+    at: number;
+    bytes: number;
+    records: number;
+  } | null>(null);
   const datasets = useQuery({
     queryKey: ["datasets"],
     queryFn: listDatasets,
@@ -49,6 +65,39 @@ export function DatasetsPage() {
     let unlisten: () => void = () => undefined;
     void listenImportProgress((progress) => {
       if (disposed) return;
+      const now = performance.now();
+      const previous = progressSample.current;
+      if (
+        previous &&
+        previous.jobId === progress.jobId &&
+        now - previous.at >= 200
+      ) {
+        const seconds = (now - previous.at) / 1000;
+        const recordsPerSecond = Math.max(
+          0,
+          (progress.recordsIndexed - previous.records) / seconds,
+        );
+        const bytesPerSecond = Math.max(
+          0,
+          (progress.bytesRead - previous.bytes) / seconds,
+        );
+        setThroughput((current) => ({
+          recordsPerSecond:
+            current.recordsPerSecond === 0
+              ? recordsPerSecond
+              : current.recordsPerSecond * 0.55 + recordsPerSecond * 0.45,
+          bytesPerSecond:
+            current.bytesPerSecond === 0
+              ? bytesPerSecond
+              : current.bytesPerSecond * 0.55 + bytesPerSecond * 0.45,
+        }));
+      }
+      progressSample.current = {
+        jobId: progress.jobId,
+        at: now,
+        bytes: progress.bytesRead,
+        records: progress.recordsIndexed,
+      };
       setActiveJob(progress);
       if (isTerminalImport(progress.status)) {
         void queryClient.invalidateQueries({ queryKey: ["datasets"] });
@@ -64,6 +113,8 @@ export function DatasetsPage() {
   }, [queryClient]);
 
   async function beginImport(plan: ImportPlan) {
+    progressSample.current = null;
+    setThroughput({ recordsPerSecond: 0, bytesPerSecond: 0 });
     const result = await startImport(plan);
     setActiveJob({
       ...result,
@@ -119,6 +170,8 @@ export function DatasetsPage() {
     dataset: Awaited<ReturnType<typeof listDatasets>>[number],
   ) {
     try {
+      progressSample.current = null;
+      setThroughput({ recordsPerSecond: 0, bytesPerSecond: 0 });
       const result = await resumeDatasetImport(dataset.id);
       setActiveJob({
         ...result,
@@ -197,6 +250,12 @@ export function DatasetsPage() {
                 {activeJob.recordsIndexed.toLocaleString()} indexed ·{" "}
                 {activeJob.invalidRecords.toLocaleString()} invalid
               </span>
+              {!terminal && activeJob.status !== "paused" ? (
+                <span className="job-panel__speed font-mono">
+                  {formatRate(throughput.recordsPerSecond)} records/s ·{" "}
+                  {formatBytes(throughput.bytesPerSecond)}/s
+                </span>
+              ) : null}
             </div>
           </div>
           <div
@@ -255,6 +314,7 @@ export function DatasetsPage() {
             <span>Records</span>
             <span>Sources</span>
             <span>Size</span>
+            <span>Action</span>
           </div>
           {datasets.data.map((dataset) => (
             <article className="data-list__row" key={dataset.id}>
@@ -265,18 +325,25 @@ export function DatasetsPage() {
                   <small className="font-mono">{dataset.id.slice(0, 8)}</small>
                 </span>
               </div>
-              <span className="dataset-status-cell">
-                <span className="status-label" data-status={dataset.status}>
-                  {dataset.status === "ready" ? (
-                    <ShieldCheck size={13} />
-                  ) : dataset.status === "indexing" ||
-                    dataset.status === "queued" ? (
-                    <LoaderCircle className="animate-spin" size={13} />
-                  ) : (
-                    <CircleStop size={13} />
-                  )}
-                  {dataset.status}
-                </span>
+              <span className="status-label" data-status={dataset.status}>
+                {dataset.status === "ready" ? (
+                  <ShieldCheck size={13} />
+                ) : dataset.status === "indexing" ||
+                  dataset.status === "queued" ? (
+                  <LoaderCircle className="animate-spin" size={13} />
+                ) : (
+                  <CircleStop size={13} />
+                )}
+                {dataset.status}
+              </span>
+              <span className="font-mono">
+                {dataset.recordCount.toLocaleString()}
+              </span>
+              <span className="font-mono">{dataset.fileCount}</span>
+              <span className="font-mono">
+                {formatBytes(dataset.totalBytes)}
+              </span>
+              <span className="dataset-actions">
                 {["cancelled", "interrupted", "failed"].includes(
                   dataset.status,
                 ) ? (
@@ -289,13 +356,6 @@ export function DatasetsPage() {
                     Resume
                   </Button>
                 ) : null}
-              </span>
-              <span className="font-mono">
-                {dataset.recordCount.toLocaleString()}
-              </span>
-              <span className="font-mono">{dataset.fileCount}</span>
-              <span className="font-mono">
-                {formatBytes(dataset.totalBytes)}
               </span>
             </article>
           ))}

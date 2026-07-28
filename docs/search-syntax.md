@@ -8,7 +8,10 @@
 - **Contains** performs a bounded literal substring match over complete safe indexed values and requires at least two characters.
 - **Prefix** matches safe indexed values beginning with the query.
 
-Queries are limited to 512 characters. Choose 25, 50, 100, or 200 records per page; page number, result range, and navigation remain visible above and below the scrollable result list.
+Queries are limited to 512 characters. Plain searches start in **Contains**
+mode. Choose 25, 50, 100, or 200 records per page; the result range, editable
+page number, and first/previous/next/last navigation remain visible below the
+result table.
 
 The field selector applies the same structured prefix internally, so choosing
 **Domain** with `example.com` is equivalent to `domain:example.com`.

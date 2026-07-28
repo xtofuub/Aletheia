@@ -383,6 +383,19 @@ pub async fn rebuild_identities(state: State<'_, AppState>) -> Result<u64, Strin
 }
 
 fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
+    connection
+        .execute_batch(
+            "DELETE FROM identity_memberships
+             WHERE user_status = 'automatic'
+               AND link_type IN ('exact_email', 'exact_phone', 'exact_user_id');
+             DELETE FROM identity_groups
+             WHERE NOT EXISTS (
+               SELECT 1 FROM identity_memberships im
+               WHERE im.identity_group_id = identity_groups.id
+             );
+             DELETE FROM identity_candidates;",
+        )
+        .map_err(sanitized)?;
     let mut cursor = 0_i64;
     loop {
         let rows = {
@@ -1570,12 +1583,50 @@ fn store_identity(
         value.to_string()
     };
     let group_id = stable_id("identity", &format!("{field_type_name}\u{1f}{key}"));
+    let candidate_key = stable_id(
+        "identity-candidate",
+        &format!("{field_type_name}\u{1f}{key}"),
+    );
     let display = match field_type {
         FieldType::Email => mask_email(value),
         FieldType::Phone => mask_phone(value),
         FieldType::UserId => "Service-scoped ID".to_string(),
         _ => unreachable!(),
     };
+    let candidate = connection
+        .prepare_cached(
+            "SELECT first_record_id, member_count
+             FROM identity_candidates WHERE candidate_key = ?1",
+        )
+        .map_err(sanitized)?
+        .query_row([&candidate_key], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .optional()
+        .map_err(sanitized)?;
+    let Some((first_record_id, member_count)) = candidate else {
+        connection
+            .prepare_cached(
+                "INSERT INTO identity_candidates(
+                    candidate_key, link_type, display_label, first_record_id,
+                    group_id, member_count
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 1)
+                 ON CONFLICT(candidate_key) DO NOTHING",
+            )
+            .map_err(sanitized)?
+            .execute(params![
+                candidate_key,
+                field_type_name,
+                display,
+                record_id,
+                group_id
+            ])
+            .map_err(sanitized)?;
+        return Ok(());
+    };
+    if first_record_id == record_id {
+        return Ok(());
+    }
     connection
         .prepare_cached(
             "INSERT INTO identity_groups(id, display_label, confidence_level)
@@ -1589,7 +1640,26 @@ fn store_identity(
         "rule": format!("exact_normalized_{field_type_name}"),
         "deterministic": true
     });
-    connection
+    if member_count <= 1 {
+        connection
+            .prepare_cached(
+                "INSERT OR IGNORE INTO identity_memberships(
+                    identity_group_id, record_id, link_type, confidence_score,
+                    explanation_json, user_status
+                 )
+                 SELECT ?1, r.id, ?3, 1.0, ?4, 'automatic'
+                 FROM records r WHERE r.id = ?2",
+            )
+            .map_err(sanitized)?
+            .execute(params![
+                group_id,
+                first_record_id,
+                format!("exact_{field_type_name}"),
+                explanation.to_string()
+            ])
+            .map_err(sanitized)?;
+    }
+    let inserted = connection
         .prepare_cached(
             "INSERT OR IGNORE INTO identity_memberships(
                 identity_group_id, record_id, link_type, confidence_score,
@@ -1604,6 +1674,17 @@ fn store_identity(
             explanation.to_string()
         ])
         .map_err(sanitized)?;
+    if inserted > 0 {
+        connection
+            .prepare_cached(
+                "UPDATE identity_candidates
+                 SET member_count = member_count + 1
+                 WHERE candidate_key = ?1",
+            )
+            .map_err(sanitized)?
+            .execute([candidate_key])
+            .map_err(sanitized)?;
+    }
     Ok(())
 }
 
@@ -1881,7 +1962,7 @@ mod tests {
         batch_byte_limit, decompression_limit, finish_cancelled, flush_batch, load_resume_plan,
         mask_email, normalize_value, prepare_database_rows, prepare_import_database,
         prepare_resume_files, process_record, read_bounded_line, rebuild_identity_groups,
-        run_import, stream_file, writer_memory_budget,
+        run_import, store_identity, stream_file, writer_memory_budget,
     };
     use crate::{
         detection::inspect_paths,
@@ -1963,6 +2044,85 @@ mod tests {
     #[test]
     fn labels_are_masked() {
         assert_eq!(mask_email("person@example.com"), "p•••@example.com");
+    }
+
+    #[test]
+    fn automatic_identities_require_repeated_exact_identifiers_and_rebuild_cleanly() {
+        let workspace = tempdir().expect("temporary workspace");
+        let mut connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(
+                "INSERT INTO datasets(
+                   id, name, parser_version, status, record_count, file_count
+                 ) VALUES ('dataset-id', 'Synthetic identities', 'test', 'ready', 2, 1);
+                 INSERT INTO source_files(
+                   id, dataset_id, absolute_path, relative_path, file_size, format
+                 ) VALUES (
+                   'file-id', 'dataset-id', 'C:\\Synthetic\\identities.csv',
+                   'identities.csv', 128, 'csv'
+                 );
+                 INSERT INTO records(
+                   id, dataset_id, source_file_id, source_location,
+                   record_fingerprint, parser
+                 ) VALUES
+                   ('record-a', 'dataset-id', 'file-id', 'line 2', 'fp-a', 'test'),
+                   ('record-b', 'dataset-id', 'file-id', 'line 3', 'fp-b', 'test');
+                 INSERT INTO field_values(
+                   record_id, field_name, field_type, original_value,
+                   normalized_value, is_sensitive, confidence
+                 ) VALUES
+                   ('record-a', 'email', 'email', 'same@example.test',
+                    'same@example.test', 0, 1.0),
+                   ('record-b', 'email', 'email', 'same@example.test',
+                    'same@example.test', 0, 1.0);",
+            )
+            .expect("synthetic identity records");
+
+        store_identity(
+            &connection,
+            "record-a",
+            "file-id",
+            FieldType::Email,
+            "same@example.test",
+        )
+        .expect("first candidate");
+        store_identity(
+            &connection,
+            "record-b",
+            "file-id",
+            FieldType::Email,
+            "same@example.test",
+        )
+        .expect("second candidate");
+        store_identity(
+            &connection,
+            "record-b",
+            "file-id",
+            FieldType::Email,
+            "same@example.test",
+        )
+        .expect("duplicate candidate");
+
+        let before: (i64, i64, i64) = connection
+            .query_row(
+                "SELECT
+                   (SELECT COUNT(*) FROM identity_groups),
+                   (SELECT COUNT(*) FROM identity_memberships),
+                   (SELECT member_count FROM identity_candidates LIMIT 1)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("automatic identity");
+        assert_eq!(before, (1, 2, 2));
+
+        let rebuilt = rebuild_identity_groups(&mut connection).expect("rebuild identities");
+        let after_members: i64 = connection
+            .query_row("SELECT COUNT(*) FROM identity_memberships", [], |row| {
+                row.get(0)
+            })
+            .expect("rebuilt members");
+        assert_eq!(rebuilt, 1);
+        assert_eq!(after_members, 2);
     }
 
     #[test]
@@ -2098,7 +2258,7 @@ mod tests {
                 stop_on_severe_error: true,
                 extract_urls: true,
                 extract_domains: true,
-                group_identities: false,
+                group_identities: true,
                 deduplicate: true,
                 store_offsets: true,
             },
@@ -2146,6 +2306,20 @@ mod tests {
             )
             .expect("domain aggregate");
         assert_eq!(domain_links as u64, record_count);
+        let identity_candidates: i64 = database
+            .lock()
+            .expect("database")
+            .query_row("SELECT COUNT(*) FROM identity_candidates", [], |row| {
+                row.get(0)
+            })
+            .expect("identity candidates");
+        let identity_groups: i64 = database
+            .lock()
+            .expect("database")
+            .query_row("SELECT COUNT(*) FROM identity_groups", [], |row| row.get(0))
+            .expect("identity groups");
+        assert_eq!(identity_candidates as u64, record_count * 2);
+        assert_eq!(identity_groups, 0);
         eprintln!(
             "indexed {record_count} generated records in {:.2?}",
             started.elapsed()
@@ -2240,13 +2414,16 @@ mod tests {
                 row.get(0)
             })
             .expect("identity links");
-        assert!(identity_links > 0);
-        connection
-            .execute("DELETE FROM identity_groups", [])
-            .expect("clear generated identity groups");
+        assert_eq!(identity_links, 0);
+        let identity_candidates: i64 = connection
+            .query_row("SELECT COUNT(*) FROM identity_candidates", [], |row| {
+                row.get(0)
+            })
+            .expect("identity candidates");
+        assert!(identity_candidates > 0);
         let rebuilt =
             rebuild_identity_groups(&mut connection).expect("rebuild deterministic identities");
-        assert!(rebuilt > 0);
+        assert_eq!(rebuilt, 0);
         drop(connection);
 
         let search = SearchIndex::open_or_create(directory.path()).expect("index");

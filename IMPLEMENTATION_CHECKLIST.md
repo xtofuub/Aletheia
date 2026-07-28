@@ -108,3 +108,17 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Show masked domain source-line contents with consistent location typography
 - [x] Rebuild deterministic identities for already indexed records
 - [x] Add resume, domain masking, identity rebuild, and settings regression tests
+
+## 0.1.6 investigation workflow pass
+
+- [x] Unify Search, Domains, Identities, Datasets, and Settings on Shadcn primitives
+- [x] Add real search pagination, page-size controls, and plain Contains defaults
+- [x] Batch-load search and domain evidence without per-record query loops
+- [x] Add domain paging, hostname filtering, masked line evidence, and count repair
+- [x] Add manual identity search, selection, naming, bundling, and bento cards
+- [x] Materialize automatic identities only for repeated exact identifiers
+- [x] Make identity rebuild deterministic, review-preserving, and member-paginated
+- [x] Separate dataset Resume actions and show live indexing throughput
+- [x] Rebuild Settings with performance presets and persistent save feedback
+- [x] Deepen and normalize the dark theme across all investigation routes
+- [x] Add frontend, Rust, and end-to-end regression coverage

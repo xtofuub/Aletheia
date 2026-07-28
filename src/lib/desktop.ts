@@ -241,6 +241,7 @@ export interface DomainRecordSummary {
 
 export interface DomainDetailsResponse {
   registrableDomain: string;
+  selectedHostname: string | null;
   hostnames: DomainSummary[];
   breaches: DomainBreachSummary[];
   totalRecords: number;
@@ -266,11 +267,22 @@ export interface IdentityMember {
   userStatus: string;
 }
 
+export interface IdentityMembersResponse {
+  total: number;
+  offset: number;
+  members: IdentityMember[];
+}
+
 export interface IdentityActionInput {
   action: "confirm" | "reject" | "merge" | "split" | "undo";
   groupId: string;
   recordIds: string[];
   targetGroupId: string | null;
+}
+
+export interface ManualIdentityInput {
+  name: string;
+  recordIds: string[];
 }
 
 export interface SavedSearch {
@@ -393,7 +405,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     metadataBytes: 0,
     indexBytes: 0,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.5",
+    appVersion: "0.1.6",
   };
 }
 
@@ -402,8 +414,8 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     return invoke<UpdateStatus>("check_for_updates");
   }
   return {
-    currentVersion: "0.1.5",
-    latestVersion: "0.1.5",
+    currentVersion: "0.1.6",
+    latestVersion: "0.1.6",
     updateAvailable: false,
     releaseUrl: "https://github.com/xtofuub/Aletheia/releases",
   };
@@ -576,9 +588,16 @@ export async function searchRecords(
     return candidate.includes(query);
   });
   return {
-    total: matches ? 1 : 0,
+    total: matches ? 137 : 0,
     offset: request.offset,
-    hits: matches ? [hit] : [],
+    hits: matches
+      ? Array.from(
+          {
+            length: Math.max(0, Math.min(request.limit, 137 - request.offset)),
+          },
+          (_, index) => syntheticSearchHit(request.offset + index),
+        )
+      : [],
   };
 }
 
@@ -601,6 +620,21 @@ const syntheticDomains: DomainSummary[] = [
   },
 ];
 
+const syntheticDomainGroups: DomainGroupSummary[] = [
+  {
+    registrableDomain: "example.co.uk",
+    publicSuffix: "co.uk",
+    hostnameCount: syntheticDomains.length,
+    recordCount: 67,
+  },
+  ...Array.from({ length: 72 }, (_, index) => ({
+    registrableDomain: `synthetic-${String(index + 1).padStart(3, "0")}.test`,
+    publicSuffix: "test",
+    hostnameCount: 1,
+    recordCount: 1,
+  })),
+];
+
 export async function listDomains(
   query = "",
   offset = 0,
@@ -614,20 +648,14 @@ export async function listDomains(
     });
   }
   const normalizedQuery = query.trim().toLowerCase();
-  const groups: DomainGroupSummary[] = [
-    {
-      registrableDomain: "example.co.uk",
-      publicSuffix: "co.uk",
-      hostnameCount: syntheticDomains.length,
-      recordCount: 3,
-    },
-  ].filter(
+  const groups = syntheticDomainGroups.filter(
     (group) =>
       !normalizedQuery ||
       group.registrableDomain.startsWith(normalizedQuery) ||
-      syntheticDomains.some((domain) =>
-        domain.hostname.startsWith(normalizedQuery),
-      ),
+      (group.registrableDomain === "example.co.uk" &&
+        syntheticDomains.some((domain) =>
+          domain.hostname.startsWith(normalizedQuery),
+        )),
   );
   return {
     total: groups.length,
@@ -638,6 +666,8 @@ export async function listDomains(
 
 export async function getDomainDetails(
   registrableDomain: string,
+  hostname: string | null,
+  hostnameQuery: string | null,
   datasetId: string | null,
   recordOffset = 0,
   recordLimit = 50,
@@ -645,18 +675,21 @@ export async function getDomainDetails(
   if (isTauriRuntime()) {
     return invoke<DomainDetailsResponse>("get_domain_details", {
       registrableDomain,
+      hostname,
+      hostnameQuery,
       datasetId,
       recordOffset,
       recordLimit,
     });
   }
-  const records: DomainRecordSummary[] = [
-    {
-      recordId: "record-synthetic",
+  const records: DomainRecordSummary[] = Array.from(
+    { length: registrableDomain === "example.co.uk" ? 67 : 1 },
+    (_, index) => ({
+      recordId: `domain-record-synthetic-${index}`,
       datasetId: "dataset-synthetic",
       datasetName: "Authorized synthetic fixture",
       sourceFile: "records_valid.csv",
-      sourceLocation: "line 2",
+      sourceLocation: `line ${index + 2}`,
       parser: "aletheia-parser/1",
       fields: [
         {
@@ -678,30 +711,40 @@ export async function getDomainDetails(
           sensitive: true,
         },
       ],
-    },
-  ];
+    }),
+  );
   const filtered = datasetId
     ? records.filter((record) => record.datasetId === datasetId)
     : records;
+  const hostnameRecords =
+    hostname && hostname !== "portal.example.co.uk" ? [] : filtered;
   return {
     registrableDomain,
-    hostnames: syntheticDomains,
+    selectedHostname: hostname,
+    hostnames: syntheticDomains.filter(
+      (item) =>
+        !hostnameQuery ||
+        item.hostname.startsWith(hostnameQuery.trim().toLowerCase()),
+    ),
     breaches: [
       {
         datasetId: "dataset-synthetic",
         datasetName: "Authorized synthetic fixture",
-        recordCount: 1,
+        recordCount: hostnameRecords.length,
       },
     ],
-    totalRecords: filtered.length,
+    totalRecords: hostnameRecords.length,
     recordOffset,
-    records: filtered.slice(recordOffset, recordOffset + recordLimit),
+    records: hostnameRecords.slice(recordOffset, recordOffset + recordLimit),
   };
 }
 
 export async function listIdentities(): Promise<IdentitySummary[]> {
   if (isTauriRuntime()) return invoke<IdentitySummary[]>("list_identities");
+  const stored = window.localStorage.getItem("aletheia.browser.identities");
+  const manual = stored ? (JSON.parse(stored) as IdentitySummary[]) : [];
   return [
+    ...manual,
     {
       id: "identity-synthetic",
       displayLabel: "a•••@example.com",
@@ -710,6 +753,24 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
       linkType: "exact_email",
       explanation: "exact_normalized_email",
       userStatus: "automatic",
+    },
+    {
+      id: "identity-synthetic-phone",
+      displayLabel: "••••••67",
+      confidenceLevel: "high",
+      memberCount: 8,
+      linkType: "exact_phone",
+      explanation: "exact_normalized_phone",
+      userStatus: "automatic",
+    },
+    {
+      id: "identity-synthetic-service",
+      displayLabel: "Service-scoped ID",
+      confidenceLevel: "high",
+      memberCount: 2,
+      linkType: "exact_user_id",
+      explanation: "exact_normalized_user_id",
+      userStatus: "confirmed",
     },
   ];
 }
@@ -721,11 +782,17 @@ export async function rebuildIdentities(): Promise<number> {
 
 export async function listIdentityMembers(
   groupId: string,
-): Promise<IdentityMember[]> {
+  offset = 0,
+  limit = 25,
+): Promise<IdentityMembersResponse> {
   if (isTauriRuntime()) {
-    return invoke<IdentityMember[]>("list_identity_members", { groupId });
+    return invoke<IdentityMembersResponse>("list_identity_members", {
+      groupId,
+      offset,
+      limit,
+    });
   }
-  return [
+  const members = [
     {
       recordId: "record-synthetic",
       datasetName: "Authorized synthetic fixture",
@@ -741,6 +808,11 @@ export async function listIdentityMembers(
       userStatus: "automatic",
     },
   ];
+  return {
+    total: members.length,
+    offset,
+    members: members.slice(offset, offset + limit),
+  };
 }
 
 export async function applyIdentityAction(
@@ -750,6 +822,33 @@ export async function applyIdentityAction(
     return invoke<string>("apply_identity_action", { input });
   }
   return crypto.randomUUID();
+}
+
+export async function createManualIdentity(
+  input: ManualIdentityInput,
+): Promise<string> {
+  if (isTauriRuntime()) {
+    return invoke<string>("create_manual_identity", { input });
+  }
+  const id = crypto.randomUUID();
+  const current = await listIdentities();
+  const manual = current.filter(
+    (identity) => !identity.id.startsWith("identity-synthetic"),
+  );
+  manual.unshift({
+    id,
+    displayLabel: input.name,
+    confidenceLevel: "user-confirmed",
+    memberCount: input.recordIds.length,
+    linkType: "manual_bundle",
+    explanation: "manual_search_bundle",
+    userStatus: "confirmed",
+  });
+  window.localStorage.setItem(
+    "aletheia.browser.identities",
+    JSON.stringify(manual),
+  );
+  return id;
 }
 
 export async function saveSearch(
@@ -898,14 +997,14 @@ function syntheticInspection(): InspectionResult {
   };
 }
 
-function syntheticSearchHit(): SearchHit {
+function syntheticSearchHit(index = 0): SearchHit {
   return {
-    recordId: "record-synthetic",
+    recordId: `record-synthetic-${index}`,
     datasetId: "dataset-synthetic",
     datasetName: "Authorized synthetic fixture",
     sourceFileId: "file-synthetic",
     sourceFile: "records_valid.csv",
-    sourceLocation: "line 2",
+    sourceLocation: `line ${index + 2}`,
     parser: "aletheia-parser/1",
     matchReason: "normalized field match",
     fields: [

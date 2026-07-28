@@ -54,7 +54,11 @@ try {
 
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
     Get-ChildItem -LiteralPath $releaseRoot -File |
-        Where-Object { $_.Name -like "aletheia_*" -or $_.Name -eq "SHA256SUMS.txt" } |
+        Where-Object {
+            $_.Name -like "aletheia_*" -or
+            $_.Name -eq "SHA256SUMS.txt" -or
+            $_.Name -eq "notes-preview.md"
+        } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
 
     $setupName = "aletheia_${version}_x64-setup.exe"

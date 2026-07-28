@@ -83,6 +83,7 @@ SQLite is authoritative for:
 - import jobs, checkpoints, mappings, and reports
 - record traceability and field metadata
 - domains, URLs, identities, and memberships
+- bounded identity candidates and one-time domain aggregate repair markers
 - saved searches, notes, tags, review state, and bookmarks
 - export history and audit events
 
@@ -102,7 +103,11 @@ before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
 
-Result pages support 25, 50, 100, or 200 records with explicit ranges and navigation. Domain drilldowns load a bounded masked field preview for each linked source line.
+Result pages support 25, 50, 100, or 200 records with explicit ranges and
+navigation. Search hit metadata and fields are loaded in batches instead of one
+SQLite query per row. Domain drilldowns use materialized per-parent and
+per-hostname links, server-side hostname prefix filters, and bounded masked
+field previews for each linked source line.
 
 ## Domain grouping
 
@@ -116,7 +121,11 @@ Automatic groups use deterministic keys only:
 - exact normalized phone
 - exact service-scoped user ID
 
-User merges are confirmed links. Username-only matches remain possible suggestions and are never auto-merged. Merge, split, reject, and undo actions write append-only audit events.
+Unique values remain compact candidates and do not become singleton identity
+groups. A group materializes only after a deterministic key repeats. Username
+matches are never automatically grouped. Manual reviewed bundles contain only
+the records explicitly selected by the user. Merge, split, reject, and undo
+actions write append-only audit events.
 
 An idempotent bounded rebuild applies the same deterministic rules to records indexed by older versions.
 

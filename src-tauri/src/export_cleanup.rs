@@ -194,6 +194,8 @@ pub fn cleanup_generated(
                  DELETE FROM saved_searches;
                  DELETE FROM identity_memberships;
                  DELETE FROM identity_groups;
+                 DELETE FROM identity_candidates;
+                 DELETE FROM domain_link_repairs;
                  DELETE FROM urls;
                  DELETE FROM domains;
                  DELETE FROM field_values;
