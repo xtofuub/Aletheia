@@ -270,7 +270,7 @@ export interface SecuritySettingsInput {
 const browserSettingsKey = "aletheia.browser.settings";
 const defaultBrowserSettings: Settings = {
   authorizationConfirmed: false,
-  theme: "dark",
+  theme: "light",
   storageRoot: "C:\\Aletheia Workspace",
   networkDisabled: true,
   clipboardClearSeconds: 60,

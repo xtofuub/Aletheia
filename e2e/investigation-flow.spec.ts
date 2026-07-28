@@ -6,7 +6,7 @@ test.beforeEach(async ({ page }) => {
       "aletheia.browser.settings",
       JSON.stringify({
         authorizationConfirmed: true,
-        theme: "dark",
+        theme: "light",
         storageRoot: "C:\\Aletheia Test",
         networkDisabled: true,
         clipboardClearSeconds: 60,

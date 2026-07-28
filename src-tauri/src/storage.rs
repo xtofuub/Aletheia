@@ -179,7 +179,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
 fn seed_defaults(connection: &Connection) -> Result<(), StorageError> {
     let defaults = [
         ("authorization_confirmed", "false"),
-        ("theme", "\"dark\""),
+        ("theme", "\"light\""),
         ("network_disabled", "true"),
         ("clipboard_clear_seconds", "60"),
         ("inactivity_lock_minutes", "15"),
@@ -248,6 +248,6 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("theme setting");
-        assert_eq!(theme, "\"dark\"");
+        assert_eq!(theme, "\"light\"");
     }
 }

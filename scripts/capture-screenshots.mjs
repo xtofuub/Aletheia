@@ -11,7 +11,7 @@ await page.addInitScript(() => {
     "aletheia.browser.settings",
     JSON.stringify({
       authorizationConfirmed: true,
-      theme: "dark",
+      theme: "light",
       storageRoot: "C:\\Aletheia Synthetic Workspace",
       networkDisabled: true,
       clipboardClearSeconds: 60,

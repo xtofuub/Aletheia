@@ -1,62 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  ArchiveRestore,
-  BookMarked,
-  Boxes,
-  CircleGauge,
   Database,
-  Download,
-  FolderSearch,
-  Globe2,
-  IdCard,
   Keyboard,
   LockKeyhole,
   Search,
-  Settings,
   ShieldCheck,
 } from "lucide-react";
-import {
-  Link,
-  Outlet,
-  useNavigate,
-  useRouterState,
-} from "@tanstack/react-router";
+import { Outlet, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 
 import { getSettings, getSystemStatus } from "../lib/desktop";
 import { formatBytes } from "../lib/utils";
 import { CommandPalette } from "./command-palette";
+import { AppSidebar } from "./shadcn-dashboard/blocks/sidebar/sidebar-01/app-sidebar";
 import { Button } from "./ui/button";
-
-const navItems = [
-  { to: "/", label: "Overview", icon: CircleGauge },
-  { to: "/search", label: "Search", icon: Search },
-  { to: "/identities", label: "Identities", icon: IdCard },
-  { to: "/domains", label: "Domains", icon: Globe2 },
-  { to: "/datasets", label: "Datasets", icon: Database },
-  { to: "/saved-views", label: "Saved Views", icon: BookMarked },
-  { to: "/exports", label: "Exports", icon: Download },
-  { to: "/settings", label: "Settings", icon: Settings },
-] as const;
-
-const routeNames: Record<string, string> = {
-  "/": "Overview",
-  "/search": "Search",
-  "/identities": "Identities",
-  "/domains": "Domains",
-  "/datasets": "Datasets",
-  "/saved-views": "Saved Views",
-  "/exports": "Exports",
-  "/settings": "Settings",
-};
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "./ui/sidebar";
+import { TooltipProvider } from "./ui/tooltip";
 
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [locked, setLocked] = useState(false);
   const navigate = useNavigate();
-  const pathname = useRouterState({
-    select: (state) => state.location.pathname,
-  });
   const status = useQuery({
     queryKey: ["system-status"],
     queryFn: getSystemStatus,
@@ -112,107 +76,87 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [navigate]);
 
-  const title = useMemo(() => routeNames[pathname] ?? "Aletheia", [pathname]);
-
   return (
-    <div className="app-frame">
-      <aside className="sidebar">
-        <Link to="/" className="brand-lockup brand-lockup--sidebar">
-          <div className="brand-mark" aria-hidden="true">
-            A
-          </div>
-          <span>Aletheia</span>
-        </Link>
+    <TooltipProvider>
+      <SidebarProvider
+        className="aletheia-shell"
+        style={
+          {
+            "--sidebar-width": "16rem",
+            "--sidebar-width-icon": "3.5rem",
+          } as React.CSSProperties
+        }
+      >
+        <AppSidebar />
+        <SidebarInset className="min-h-svh min-w-0 overflow-hidden rounded-none bg-background shadow-none">
+          <header className="dashboard-topbar">
+            <div className="dashboard-topbar__left">
+              <SidebarTrigger
+                className="size-8 rounded-md border-0"
+                aria-label="Toggle navigation"
+              />
+              <span className="dashboard-topbar__divider" aria-hidden="true" />
+              <button
+                className="dashboard-search-trigger"
+                onClick={() => void navigate({ to: "/search" })}
+                aria-label="Search the local index"
+              >
+                <Search aria-hidden="true" />
+                <span>Search local index</span>
+                <kbd>/</kbd>
+              </button>
+            </div>
+            <div className="dashboard-topbar__right">
+              <div className="topbar-status" title="No data is transmitted">
+                <ShieldCheck aria-hidden="true" />
+                <span>Offline</span>
+              </div>
+              <div className="topbar-index" title="Local index storage">
+                <Database aria-hidden="true" />
+                <span>{formatBytes(status.data?.indexBytes ?? 0)}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="topbar-command"
+                onClick={() => setPaletteOpen(true)}
+              >
+                <Keyboard aria-hidden="true" />
+                <span>Commands</span>
+                <kbd>Ctrl K</kbd>
+              </Button>
+              <span
+                className="topbar-avatar"
+                aria-label="Local Aletheia profile"
+              >
+                A
+              </span>
+            </div>
+          </header>
 
-        <nav className="sidebar-nav" aria-label="Primary">
-          {navItems.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className="nav-link"
-              activeProps={{ "data-active": true }}
-              activeOptions={{ exact: item.to === "/" }}
-            >
-              <item.icon size={17} strokeWidth={1.55} aria-hidden="true" />
-              <span>{item.label}</span>
-            </Link>
-          ))}
-        </nav>
+          <main className="route-workspace">
+            <Outlet />
+          </main>
+        </SidebarInset>
 
-        <div className="sidebar-trust">
-          <ShieldCheck size={17} strokeWidth={1.5} aria-hidden="true" />
-          <div>
-            <strong>Local trust boundary</strong>
-            <span>No data transmitted</span>
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        {locked ? (
+          <div className="privacy-lock" role="dialog" aria-modal="true">
+            <div>
+              <LockKeyhole size={24} />
+              <span className="eyebrow">LOCAL PRIVACY LOCK</span>
+              <h2>Workspace hidden after inactivity</h2>
+              <p>
+                No job or source was changed. Unlock to return to the local
+                workspace.
+              </p>
+              <Button variant="primary" onClick={() => setLocked(false)}>
+                Unlock local workspace
+              </Button>
+            </div>
           </div>
-        </div>
-      </aside>
-
-      <div className="app-workspace">
-        <header className="topbar">
-          <div className="topbar__route">
-            <span className="topbar__rail" aria-hidden="true" />
-            <span>{title}</span>
-          </div>
-          <button
-            className="global-search-trigger"
-            onClick={() => void navigate({ to: "/search" })}
-          >
-            <FolderSearch size={16} strokeWidth={1.6} aria-hidden="true" />
-            <span>Search local index</span>
-            <kbd>/</kbd>
-          </button>
-          <div className="topbar__actions">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setPaletteOpen(true)}
-            >
-              <Keyboard size={15} aria-hidden="true" />
-              Commands
-              <kbd className="keycap">Ctrl K</kbd>
-            </Button>
-          </div>
-        </header>
-
-        <main className="route-workspace">
-          <Outlet />
-        </main>
-
-        <footer className="status-strip">
-          <div>
-            <ShieldCheck size={13} strokeWidth={1.7} aria-hidden="true" />
-            <span>Offline</span>
-            <span className="status-strip__secondary">No data transmitted</span>
-          </div>
-          <div>
-            <Boxes size={13} strokeWidth={1.7} aria-hidden="true" />
-            <span>Index {formatBytes(status.data?.indexBytes ?? 0)}</span>
-          </div>
-          <div>
-            <ArchiveRestore size={13} strokeWidth={1.7} aria-hidden="true" />
-            <span>Tasks clear</span>
-          </div>
-        </footer>
-      </div>
-
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-      {locked ? (
-        <div className="privacy-lock" role="dialog" aria-modal="true">
-          <div>
-            <LockKeyhole size={24} />
-            <span className="eyebrow">LOCAL PRIVACY LOCK</span>
-            <h2>Workspace hidden after inactivity</h2>
-            <p>
-              No job or source was changed. Unlock to return to the local
-              workspace.
-            </p>
-            <Button variant="primary" onClick={() => setLocked(false)}>
-              Unlock local workspace
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </div>
+        ) : null}
+      </SidebarProvider>
+    </TooltipProvider>
   );
 }

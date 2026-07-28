@@ -26,11 +26,13 @@ function resolveTheme(theme: Theme) {
 }
 
 export function ThemeProvider({ children }: PropsWithChildren) {
-  const [theme, setThemeState] = useState<Theme>("dark");
+  const [theme, setThemeState] = useState<Theme>("light");
 
   const applyTheme = useCallback((next: Theme) => {
-    document.documentElement.dataset.theme = resolveTheme(next);
-    document.documentElement.style.colorScheme = resolveTheme(next);
+    const resolved = resolveTheme(next);
+    document.documentElement.dataset.theme = resolved;
+    document.documentElement.classList.toggle("dark", resolved === "dark");
+    document.documentElement.style.colorScheme = resolved;
   }, []);
 
   const hydrateTheme = useCallback(
