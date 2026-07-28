@@ -15,6 +15,18 @@ The application can:
 
 It does not download datasets, test credentials, automate logins, scrape websites, enrich records through remote services, transmit telemetry, or contact people.
 
+## Install on Windows
+
+Open [GitHub Releases](https://github.com/xtofuub/Aletheia/releases) and download:
+
+```text
+aletheia_<version>_x64-setup.exe
+```
+
+This x64 NSIS setup executable is the recommended download for Windows 10 and 11. It installs Aletheia for the current user, adds a Start Menu shortcut and Windows uninstaller, and handles the required Microsoft Edge WebView2 Runtime. Ordinary users do not need Rust, Cargo, Node.js, npm, or other development tools.
+
+The release also includes `aletheia_<version>_x64.exe` as a standalone testing binary. It is not the recommended normal installation because it does not create shortcuts or an uninstaller. See [Windows distribution](docs/windows-distribution.md) for checksums, alternate MSI deployment, build requirements, and release instructions.
+
 ## Privacy model
 
 Data workflows have no network client. React never opens datasets directly: Rust owns the read-only handles, detection, parsing, normalization, SQLite writes, Tantivy writes, masking, and exports. Source datasets are referenced but never copied into the repository or deleted by cleanup.
@@ -73,10 +85,10 @@ Build:
 
 ```powershell
 npm run build
-npm run tauri build
+npm run dist:windows
 ```
 
-The native executable and Windows installers are written under `src-tauri/target/release`. Generated build output is ignored by Git.
+The consistently named Windows deliverables are written under `release/`, while native intermediate output remains under `src-tauri/target/release`. Generated build output is ignored by Git.
 
 ## Tests and quality gates
 
@@ -126,3 +138,4 @@ Use Aletheia only with data you are legally authorized to possess and analyze. C
 - [Identity grouping](docs/identity-grouping.md)
 - [Domain grouping](docs/domain-grouping.md)
 - [UI guidelines](docs/ui-guidelines.md)
+- [Windows distribution](docs/windows-distribution.md)

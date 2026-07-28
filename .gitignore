@@ -6,6 +6,8 @@ playwright-report/
 test-results/
 src-tauri/target/
 target/
+release/
+artifacts/
 *.pdb
 *.dSYM/
 
@@ -68,4 +70,3 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
-

@@ -2,6 +2,17 @@
   "name": "aletheia",
   "private": true,
   "version": "0.1.0",
+  "description": "Local-only defensive data investigation workspace",
+  "author": {
+    "name": "xtofuub",
+    "email": "99559348+xtofuub@users.noreply.github.com",
+    "url": "https://github.com/xtofuub"
+  },
+  "homepage": "https://github.com/xtofuub/Aletheia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xtofuub/Aletheia.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -13,6 +24,8 @@
     "test:e2e": "playwright test",
     "screenshots": "node scripts/capture-screenshots.mjs",
     "build": "tsc -b && vite build",
+    "dist:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1",
+    "verify:release-version": "node scripts/verify-release-version.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "safety": "node scripts/safety-check.mjs",

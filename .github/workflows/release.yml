@@ -1,0 +1,77 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Use stable Rust
+        shell: pwsh
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify release version
+        run: npm run verify:release-version
+
+      - name: Run frontend quality gates
+        shell: pwsh
+        run: |
+          npm run format:check
+          npm run lint
+          npm run typecheck
+          npm run test
+          npm run build
+          npm run safety
+
+      - name: Run Rust quality gates
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          cargo fmt --check
+          cargo test
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build Windows installers
+        run: npm run dist:windows
+
+      - name: Preserve release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aletheia-windows-${{ github.ref_name }}
+          path: release/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $artifacts = Get-ChildItem -LiteralPath release -File | ForEach-Object { $_.FullName }
+          gh release create $env:GITHUB_REF_NAME $artifacts `
+            --verify-tag `
+            --generate-notes `
+            --title "Aletheia $env:GITHUB_REF_NAME"
