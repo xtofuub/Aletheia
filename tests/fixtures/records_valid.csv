@@ -1,0 +1,5 @@
+email,username,phone,ip,url,password,password_hash,user_id,record_date
+ava.research@example.com,ava_r,+358401234567,198.51.100.25,https://portal.example.com/login,Example-Secret-Only,0123456789abcdef0123456789abcdef,svc-1001,2025-03-14
+niko.analyst@example.net,niko_a,+442079460123,203.0.113.18,https://api.eu.example.co.uk/v1/profile?session=synthetic,Synthetic-Pass-42,abcdefabcdefabcdefabcdefabcdefab,svc-1002,2024-11-02
+linnea.audit@example.org,linnea,+12025550142,192.0.2.44,https://xn--bcher-kva.example/account,Not-A-Real-Credential,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,svc-1003,2026-01-20
+

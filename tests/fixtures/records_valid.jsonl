@@ -1,0 +1,4 @@
+{"email":"ava.research@example.com","username":"ava_r","url":"https://portal.example.com/login","ip":"198.51.100.25","password":"Synthetic-Only"}
+{"email":"niko.analyst@example.net","username":"niko_a","url":"https://portal.example.co.uk/profile","ip":"203.0.113.18","password_hash":"abcdefabcdefabcdefabcdefabcdefab"}
+{"email":"linnea.audit@example.org","username":"linnea","url":"malformed url","ip":"192.0.2.44","phone":"+12025550142"}
+

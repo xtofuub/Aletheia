@@ -1,0 +1,8 @@
+email,username,phone,ip,url,password,password_hash,user_id,record_date
+missing.columns@example.com,missing_user
+extra.delimiter@example.net,extra_user,+12025550199,198.51.100.77,https://sub.example.net/path,SyntheticOnly,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,svc-2001,2025-07-09,unexpected
+empty.values@example.org,,,,https://example.org,,,,2025-01-01
+duplicate.row@example.com,dupe,+12025550111,192.0.2.9,https://login.example.com,SyntheticDupe,cccccccccccccccccccccccccccccccc,svc-2002,2025-05-05
+duplicate.row@example.com,dupe,+12025550111,192.0.2.9,https://login.example.com,SyntheticDupe,cccccccccccccccccccccccccccccccc,svc-2002,2025-05-05
+malformed.url@example.net,bad_url,+12025550113,203.0.113.22,not a url,SyntheticBadUrl,dddddddddddddddddddddddddddddddd,svc-2003,not-a-date
+

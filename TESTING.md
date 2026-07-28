@@ -1,0 +1,52 @@
+# Testing
+
+## Synthetic fixtures
+
+All repository fixtures are invented. They use `example.com`, `example.net`, `example.org`, `.example`, and RFC documentation IP ranges. `tests/fixtures/synthetic_848_shape.txt` matches only the detected structural shape of the inspected source: pipe-framed preamble-like lines followed by heterogeneous single-value lines.
+
+Never create a fixture from a real record.
+
+## Frontend
+
+`npm run test` runs Vitest and Testing Library tests for onboarding, empty states, and the guarded import wizard.
+
+`npm run test:e2e` runs Playwright flows for:
+
+- first-launch authorization;
+- keyboard command navigation;
+- synthetic import and field mapping;
+- masked search details and redacted export;
+- Public Suffix List domain grouping;
+- deterministic identity review and undo.
+
+## Rust
+
+`cargo test` covers:
+
+- bounded format detection and masking;
+- inconsistent delimiter handling;
+- normalization and secret replacement;
+- URL credential/query-value removal;
+- `co.uk`, IP, and subdomain resolution;
+- SQLite migrations;
+- Tantivy exact, contains, and prefix queries;
+- redacted export rendering;
+- a complete synthetic CSV import into SQLite, Tantivy, domains, and identities;
+- proof that username-only fields never create automatic links.
+
+## Benchmarks
+
+`cargo bench --bench core_benchmarks` measures:
+
+- synthetic parsing and format detection;
+- URL and domain normalization;
+- indexing 1,000 invented records;
+- exact email search;
+- domain-style contains search;
+- loading 1,000 identity groups.
+
+Performance targets are documented goals, not telemetry. Benchmark inputs and results stay local.
+
+## Safety
+
+`npm run safety` rejects tracked generated databases, indexes, archives, likely secrets, and email-like values outside approved reserved-domain fixtures. The same check is installed as a pre-commit hook by `npm install`.

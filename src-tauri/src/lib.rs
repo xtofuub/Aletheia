@@ -1,0 +1,47 @@
+pub mod detection;
+pub mod domain_analysis;
+mod export_cleanup;
+mod importer;
+mod investigation;
+pub mod models;
+pub mod search_index;
+mod settings;
+mod storage;
+
+use tauri::Manager;
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let state = storage::AppState::initialize(app.handle())?;
+            app.manage(state);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            settings::get_settings,
+            settings::save_onboarding,
+            settings::update_theme,
+            settings::update_security_settings,
+            settings::get_system_status,
+            detection::inspect_sources,
+            importer::start_import,
+            importer::pause_import,
+            importer::resume_import,
+            importer::cancel_import,
+            importer::list_datasets,
+            investigation::search_records,
+            investigation::list_domains,
+            investigation::list_identities,
+            investigation::list_identity_members,
+            investigation::apply_identity_action,
+            investigation::save_search,
+            investigation::list_saved_searches,
+            export_cleanup::export_records,
+            export_cleanup::list_exports,
+            export_cleanup::cleanup_generated,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Aletheia");
+}

@@ -1,0 +1,712 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open, save } from "@tauri-apps/plugin-dialog";
+
+export type Theme = "dark" | "light" | "system";
+
+export interface Settings {
+  authorizationConfirmed: boolean;
+  theme: Theme;
+  storageRoot: string;
+  networkDisabled: boolean;
+  clipboardClearSeconds: number;
+  inactivityLockMinutes: number;
+  workerLimit: number;
+  memoryLimitMb: number;
+}
+
+export interface SystemStatus {
+  databaseReady: boolean;
+  offline: boolean;
+  metadataBytes: number;
+  indexBytes: number;
+  storageRoot: string;
+  appVersion: string;
+}
+
+export interface OnboardingInput {
+  authorizationConfirmed: boolean;
+  storageRoot: string;
+}
+
+export type SourceFormat =
+  "text" | "csv" | "tsv" | "delimited" | "jsonl" | "gzip";
+
+export type FieldType =
+  | "email"
+  | "username"
+  | "first_name"
+  | "last_name"
+  | "full_name"
+  | "phone"
+  | "ip_address"
+  | "domain"
+  | "url"
+  | "password"
+  | "password_hash"
+  | "salt"
+  | "date_of_birth"
+  | "address"
+  | "city"
+  | "country"
+  | "postal_code"
+  | "company"
+  | "job_title"
+  | "user_id"
+  | "timestamp"
+  | "unknown";
+
+export interface FieldMapping {
+  sourceName: string;
+  fieldType: FieldType;
+  confidence: number;
+  isSensitive: boolean;
+}
+
+export interface PreviewRow {
+  sourceLocation: number;
+  values: string[];
+}
+
+export interface FileInspection {
+  absolutePath: string;
+  relativePath: string;
+  fileName: string;
+  fileSize: number;
+  modifiedAt: string | null;
+  format: SourceFormat;
+  compressed: boolean;
+  encoding: string;
+  lineEnding: string;
+  delimiter: string | null;
+  hasHeader: boolean;
+  estimatedRecords: number | null;
+  columnCount: number;
+  rowConsistency: number;
+  mappings: FieldMapping[];
+  preview: PreviewRow[];
+  warnings: string[];
+  eligible: boolean;
+}
+
+export interface InspectionResult {
+  files: FileInspection[];
+  rejectedPaths: string[];
+  totalBytes: number;
+}
+
+export interface ImportOptions {
+  skipInvalidRows: boolean;
+  stopOnSevereError: boolean;
+  extractUrls: boolean;
+  extractDomains: boolean;
+  groupIdentities: boolean;
+  deduplicate: boolean;
+  storeOffsets: boolean;
+}
+
+export interface ImportPlan {
+  datasetLabel: string;
+  authorizationNote: string;
+  files: FileInspection[];
+  options: ImportOptions;
+}
+
+export interface ImportStartResult {
+  jobId: string;
+  datasetId: string;
+}
+
+export interface ImportProgress {
+  jobId: string;
+  datasetId: string;
+  status:
+    | "queued"
+    | "running"
+    | "paused"
+    | "cancelling"
+    | "cancelled"
+    | "completed"
+    | "failed";
+  currentFile: string | null;
+  bytesRead: number;
+  totalBytes: number;
+  recordsProcessed: number;
+  recordsIndexed: number;
+  invalidRecords: number;
+  duplicateRecords: number;
+  message: string;
+}
+
+export interface DatasetSummary {
+  id: string;
+  name: string;
+  status: string;
+  recordCount: number;
+  fileCount: number;
+  totalBytes: number;
+  warningCount: number;
+  createdAt: string;
+  lastIndexedAt: string | null;
+}
+
+export type SearchMode = "exact" | "contains" | "prefix";
+
+export interface SearchRequest {
+  query: string;
+  mode: SearchMode;
+  datasetId: string | null;
+  fieldType: FieldType | null;
+  offset: number;
+  limit: number;
+}
+
+export interface SearchField {
+  name: string;
+  fieldType: FieldType;
+  displayValue: string;
+  sensitive: boolean;
+}
+
+export interface SearchHit {
+  recordId: string;
+  datasetId: string;
+  datasetName: string;
+  sourceFileId: string;
+  sourceFile: string;
+  sourceLocation: string;
+  parser: string;
+  matchReason: string;
+  fields: SearchField[];
+}
+
+export interface SearchResponse {
+  total: number;
+  offset: number;
+  hits: SearchHit[];
+}
+
+export interface DomainSummary {
+  id: string;
+  hostname: string;
+  registrableDomain: string;
+  publicSuffix: string | null;
+  isSubdomain: boolean;
+  recordCount: number;
+}
+
+export interface IdentitySummary {
+  id: string;
+  displayLabel: string;
+  confidenceLevel: string;
+  memberCount: number;
+  linkType: string;
+  explanation: string;
+  userStatus: string;
+}
+
+export interface IdentityMember {
+  recordId: string;
+  datasetName: string;
+  sourceFile: string;
+  sourceLocation: string;
+  userStatus: string;
+}
+
+export interface IdentityActionInput {
+  action: "confirm" | "reject" | "merge" | "split" | "undo";
+  groupId: string;
+  recordIds: string[];
+  targetGroupId: string | null;
+}
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  query: string;
+  filtersJson: string;
+  createdAt: string;
+}
+
+export type ExportFormat = "csv" | "json" | "jsonl" | "markdown";
+
+export interface ExportRequest {
+  destinationPath: string;
+  format: ExportFormat;
+  recordIds: string[];
+  maskEmailLocalPart: boolean;
+}
+
+export interface ExportResult {
+  exportId: string;
+  destinationPath: string;
+  manifestPath: string;
+  recordCount: number;
+}
+
+export interface ExportHistoryItem {
+  id: string;
+  format: string;
+  destinationPath: string;
+  recordCount: number;
+  createdAt: string;
+}
+
+export interface CleanupRequest {
+  index: boolean;
+  cache: boolean;
+  temp: boolean;
+  searchHistory: boolean;
+  allGenerated: boolean;
+}
+
+export interface SecuritySettingsInput {
+  clipboardClearSeconds: number;
+  inactivityLockMinutes: number;
+  workerLimit: number;
+  memoryLimitMb: number;
+}
+
+const browserSettingsKey = "aletheia.browser.settings";
+const defaultBrowserSettings: Settings = {
+  authorizationConfirmed: false,
+  theme: "dark",
+  storageRoot: "C:\\Aletheia Workspace",
+  networkDisabled: true,
+  clipboardClearSeconds: 60,
+  inactivityLockMinutes: 15,
+  workerLimit: 2,
+  memoryLimitMb: 512,
+};
+
+export function isTauriRuntime() {
+  return "__TAURI_INTERNALS__" in window;
+}
+
+function readBrowserSettings(): Settings {
+  const stored = window.localStorage.getItem(browserSettingsKey);
+  if (!stored) return defaultBrowserSettings;
+  try {
+    return { ...defaultBrowserSettings, ...(JSON.parse(stored) as Settings) };
+  } catch {
+    return defaultBrowserSettings;
+  }
+}
+
+export async function getSettings(): Promise<Settings> {
+  if (isTauriRuntime()) {
+    return invoke<Settings>("get_settings");
+  }
+  return readBrowserSettings();
+}
+
+export async function saveOnboarding(
+  input: OnboardingInput,
+): Promise<Settings> {
+  if (isTauriRuntime()) {
+    return invoke<Settings>("save_onboarding", { input });
+  }
+  const next = {
+    ...readBrowserSettings(),
+    authorizationConfirmed: input.authorizationConfirmed,
+    storageRoot: input.storageRoot,
+  };
+  window.localStorage.setItem(browserSettingsKey, JSON.stringify(next));
+  return next;
+}
+
+export async function updateTheme(theme: Theme): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("update_theme", { theme });
+    return;
+  }
+  window.localStorage.setItem(
+    browserSettingsKey,
+    JSON.stringify({ ...readBrowserSettings(), theme }),
+  );
+}
+
+export async function getSystemStatus(): Promise<SystemStatus> {
+  if (isTauriRuntime()) {
+    return invoke<SystemStatus>("get_system_status");
+  }
+  const settings = readBrowserSettings();
+  return {
+    databaseReady: true,
+    offline: true,
+    metadataBytes: 0,
+    indexBytes: 0,
+    storageRoot: settings.storageRoot,
+    appVersion: "0.1.0",
+  };
+}
+
+export async function selectStorageFolder(current: string): Promise<string> {
+  if (!isTauriRuntime()) return current;
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose Aletheia storage",
+  });
+  return typeof selected === "string" ? selected : current;
+}
+
+export async function selectSourceFiles(): Promise<string[]> {
+  if (!isTauriRuntime()) return ["C:\\Synthetic\\records_valid.csv"];
+  const selected = await open({
+    directory: false,
+    multiple: true,
+    title: "Choose authorized dataset files",
+    filters: [
+      {
+        name: "Supported datasets",
+        extensions: ["txt", "csv", "tsv", "jsonl", "ndjson", "log", "gz"],
+      },
+    ],
+  });
+  if (!selected) return [];
+  return Array.isArray(selected) ? selected : [selected];
+}
+
+export async function selectSourceFolder(): Promise<string[]> {
+  if (!isTauriRuntime()) return ["C:\\Synthetic"];
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose authorized dataset folder",
+  });
+  return typeof selected === "string" ? [selected] : [];
+}
+
+export async function inspectSources(
+  paths: string[],
+): Promise<InspectionResult> {
+  if (isTauriRuntime()) {
+    return invoke<InspectionResult>("inspect_sources", { paths });
+  }
+  return syntheticInspection();
+}
+
+export async function startImport(
+  plan: ImportPlan,
+): Promise<ImportStartResult> {
+  if (isTauriRuntime()) {
+    return invoke<ImportStartResult>("start_import", { plan });
+  }
+  const result = {
+    jobId: crypto.randomUUID(),
+    datasetId: crypto.randomUUID(),
+  };
+  const dataset: DatasetSummary = {
+    id: result.datasetId,
+    name: plan.datasetLabel,
+    status: "ready",
+    recordCount: 3,
+    fileCount: plan.files.length,
+    totalBytes: plan.files.reduce((sum, file) => sum + file.fileSize, 0),
+    warningCount: 0,
+    createdAt: new Date().toISOString(),
+    lastIndexedAt: new Date().toISOString(),
+  };
+  window.localStorage.setItem(
+    "aletheia.browser.datasets",
+    JSON.stringify([dataset]),
+  );
+  return result;
+}
+
+export async function listenImportProgress(
+  callback: (progress: ImportProgress) => void,
+): Promise<UnlistenFn> {
+  if (isTauriRuntime()) {
+    return listen<ImportProgress>("import-progress", (event) =>
+      callback(event.payload),
+    );
+  }
+  return () => undefined;
+}
+
+export async function pauseImport(jobId: string): Promise<void> {
+  if (isTauriRuntime()) await invoke("pause_import", { jobId });
+}
+
+export async function resumeImport(jobId: string): Promise<void> {
+  if (isTauriRuntime()) await invoke("resume_import", { jobId });
+}
+
+export async function cancelImport(jobId: string): Promise<void> {
+  if (isTauriRuntime()) await invoke("cancel_import", { jobId });
+}
+
+export async function listDatasets(): Promise<DatasetSummary[]> {
+  if (isTauriRuntime()) return invoke<DatasetSummary[]>("list_datasets");
+  const stored = window.localStorage.getItem("aletheia.browser.datasets");
+  return stored ? (JSON.parse(stored) as DatasetSummary[]) : [];
+}
+
+export async function searchRecords(
+  request: SearchRequest,
+): Promise<SearchResponse> {
+  if (isTauriRuntime()) {
+    return invoke<SearchResponse>("search_records", { request });
+  }
+  const query = request.query.toLowerCase().replace(/^[^:]+:/, "");
+  const hit = syntheticSearchHit();
+  const matches = hit.fields.some((field) =>
+    field.displayValue.toLowerCase().includes(query),
+  );
+  return {
+    total: matches ? 1 : 0,
+    offset: request.offset,
+    hits: matches ? [hit] : [],
+  };
+}
+
+export async function listDomains(): Promise<DomainSummary[]> {
+  if (isTauriRuntime()) return invoke<DomainSummary[]>("list_domains");
+  return [
+    {
+      id: "domain-synthetic",
+      hostname: "portal.example.co.uk",
+      registrableDomain: "example.co.uk",
+      publicSuffix: "co.uk",
+      isSubdomain: true,
+      recordCount: 3,
+    },
+    {
+      id: "domain-parent-synthetic",
+      hostname: "example.co.uk",
+      registrableDomain: "example.co.uk",
+      publicSuffix: "co.uk",
+      isSubdomain: false,
+      recordCount: 2,
+    },
+  ];
+}
+
+export async function listIdentities(): Promise<IdentitySummary[]> {
+  if (isTauriRuntime()) return invoke<IdentitySummary[]>("list_identities");
+  return [
+    {
+      id: "identity-synthetic",
+      displayLabel: "a•••@example.com",
+      confidenceLevel: "high",
+      memberCount: 3,
+      linkType: "exact_email",
+      explanation: "exact_normalized_email",
+      userStatus: "automatic",
+    },
+  ];
+}
+
+export async function listIdentityMembers(
+  groupId: string,
+): Promise<IdentityMember[]> {
+  if (isTauriRuntime()) {
+    return invoke<IdentityMember[]>("list_identity_members", { groupId });
+  }
+  return [
+    {
+      recordId: "record-synthetic",
+      datasetName: "Authorized synthetic fixture",
+      sourceFile: "records_valid.csv",
+      sourceLocation: "line 2",
+      userStatus: "automatic",
+    },
+    {
+      recordId: "record-synthetic-2",
+      datasetName: "Authorized synthetic fixture",
+      sourceFile: "records_valid.csv",
+      sourceLocation: "line 3",
+      userStatus: "automatic",
+    },
+  ];
+}
+
+export async function applyIdentityAction(
+  input: IdentityActionInput,
+): Promise<string> {
+  if (isTauriRuntime()) {
+    return invoke<string>("apply_identity_action", { input });
+  }
+  return crypto.randomUUID();
+}
+
+export async function saveSearch(
+  name: string,
+  query: string,
+  filtersJson = "{}",
+): Promise<SavedSearch> {
+  if (isTauriRuntime()) {
+    return invoke<SavedSearch>("save_search", {
+      input: { name, query, filtersJson },
+    });
+  }
+  const item: SavedSearch = {
+    id: crypto.randomUUID(),
+    name,
+    query,
+    filtersJson,
+    createdAt: new Date().toISOString(),
+  };
+  const current = await listSavedSearches();
+  window.localStorage.setItem(
+    "aletheia.browser.saved-searches",
+    JSON.stringify([item, ...current]),
+  );
+  return item;
+}
+
+export async function listSavedSearches(): Promise<SavedSearch[]> {
+  if (isTauriRuntime()) return invoke<SavedSearch[]>("list_saved_searches");
+  const stored = window.localStorage.getItem("aletheia.browser.saved-searches");
+  return stored ? (JSON.parse(stored) as SavedSearch[]) : [];
+}
+
+export async function selectExportDestination(
+  format: ExportFormat,
+): Promise<string | null> {
+  if (!isTauriRuntime()) return `C:\\Synthetic\\findings.${format}`;
+  const extension = format === "markdown" ? "md" : format;
+  return save({
+    title: "Save redacted findings",
+    defaultPath: `aletheia-findings.${extension}`,
+    filters: [
+      { name: `${format.toUpperCase()} export`, extensions: [extension] },
+    ],
+  });
+}
+
+export async function exportRecords(
+  request: ExportRequest,
+): Promise<ExportResult> {
+  if (isTauriRuntime()) {
+    return invoke<ExportResult>("export_records", { request });
+  }
+  return {
+    exportId: crypto.randomUUID(),
+    destinationPath: request.destinationPath,
+    manifestPath: `${request.destinationPath}.manifest.json`,
+    recordCount: request.recordIds.length,
+  };
+}
+
+export async function listExports(): Promise<ExportHistoryItem[]> {
+  if (isTauriRuntime()) return invoke<ExportHistoryItem[]>("list_exports");
+  return [];
+}
+
+export async function cleanupGenerated(request: CleanupRequest): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("cleanup_generated", { request });
+    return;
+  }
+  if (request.allGenerated) {
+    window.localStorage.removeItem("aletheia.browser.datasets");
+    window.localStorage.removeItem("aletheia.browser.saved-searches");
+  }
+}
+
+export async function updateSecuritySettings(
+  input: SecuritySettingsInput,
+): Promise<Settings> {
+  if (isTauriRuntime()) {
+    return invoke<Settings>("update_security_settings", { input });
+  }
+  const next = { ...readBrowserSettings(), ...input, networkDisabled: true };
+  window.localStorage.setItem(browserSettingsKey, JSON.stringify(next));
+  return next;
+}
+
+function syntheticInspection(): InspectionResult {
+  const mappings: FieldMapping[] = [
+    ["email", "email", false],
+    ["username", "username", false],
+    ["phone", "phone", true],
+    ["ip", "ip_address", false],
+    ["url", "url", false],
+    ["password", "password", true],
+    ["password_hash", "password_hash", true],
+    ["user_id", "user_id", false],
+    ["record_date", "timestamp", false],
+  ].map(([sourceName, fieldType, isSensitive]) => ({
+    sourceName: sourceName as string,
+    fieldType: fieldType as FieldType,
+    confidence: 0.98,
+    isSensitive: isSensitive as boolean,
+  }));
+  return {
+    files: [
+      {
+        absolutePath: "C:\\Synthetic\\records_valid.csv",
+        relativePath: "records_valid.csv",
+        fileName: "records_valid.csv",
+        fileSize: 842,
+        modifiedAt: "2026-01-20T10:00:00Z",
+        format: "csv",
+        compressed: false,
+        encoding: "UTF-8",
+        lineEnding: "LF",
+        delimiter: "comma",
+        hasHeader: true,
+        estimatedRecords: 3,
+        columnCount: mappings.length,
+        rowConsistency: 1,
+        mappings,
+        preview: [
+          {
+            sourceLocation: 2,
+            values: [
+              "a•••@example.com",
+              "av•••",
+              "••••••67",
+              "198.51.100.25",
+              "https://portal.example.com/login",
+              "••••••••••••",
+              "••••••••••••",
+              "svc-1001",
+              "2025-03-14",
+            ],
+          },
+        ],
+        warnings: [],
+        eligible: true,
+      },
+    ],
+    rejectedPaths: [],
+    totalBytes: 842,
+  };
+}
+
+function syntheticSearchHit(): SearchHit {
+  return {
+    recordId: "record-synthetic",
+    datasetId: "dataset-synthetic",
+    datasetName: "Authorized synthetic fixture",
+    sourceFileId: "file-synthetic",
+    sourceFile: "records_valid.csv",
+    sourceLocation: "line 2",
+    parser: "aletheia-parser/1",
+    matchReason: "normalized field match",
+    fields: [
+      {
+        name: "email",
+        fieldType: "email",
+        displayValue: "a•••@example.com",
+        sensitive: false,
+      },
+      {
+        name: "url",
+        fieldType: "url",
+        displayValue: "https://portal.example.com/login",
+        sensitive: false,
+      },
+      {
+        name: "password",
+        fieldType: "password",
+        displayValue: "[REDACTED]",
+        sensitive: true,
+      },
+    ],
+  };
+}

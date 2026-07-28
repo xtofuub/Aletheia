@@ -1,0 +1,71 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+src-tauri/target/
+target/
+*.pdb
+*.dSYM/
+
+# Local datasets: never commit source data
+data/
+datasets/
+imports/
+samples/private/
+private/
+quarantine/
+*.breach
+*.dump
+*.sql.gz
+*.csv.gz
+*.tsv.gz
+*.jsonl.gz
+*.ndjson.gz
+*.txt.gz
+848.txt
+E_848.txt
+
+# Generated Aletheia state
+.aletheia/
+.local-breach-finder/
+index/
+indexes/
+tantivy/
+storage/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+
+# Exports, temporary extraction, cache, and logs
+exports/
+tmp/
+temp/
+cache/
+extracted/
+*.log
+*.trace
+*.export.csv
+*.export.json
+*.export.jsonl
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and OS state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+

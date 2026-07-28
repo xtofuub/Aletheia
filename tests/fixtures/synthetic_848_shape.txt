@@ -1,0 +1,9 @@
+| SYNTHETIC FORMAT FIXTURE - NO REAL RECORDS |
+| one value per line; mapping must be confirmed |
+ava.research@example.com
+niko.analyst@example.net
+sample_user_17
+row_without_detectable_type
+linnea.audit@example.org
+portal_account_test
+
