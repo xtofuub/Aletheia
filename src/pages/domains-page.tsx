@@ -1,119 +1,294 @@
-import { useMemo, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Database,
+  FileSearch,
   Globe2,
   LoaderCircle,
   Network,
+  Search,
 } from "lucide-react";
 
 import { PageHeader } from "../components/page-header";
+import { Button } from "../components/ui/button";
 import { EmptyState } from "../components/ui/empty-state";
-import { listDomains, type DomainSummary } from "../lib/desktop";
+import {
+  getDomainDetails,
+  listDomains,
+  type DomainGroupSummary,
+} from "../lib/desktop";
+
+const pageSize = 50;
 
 export function DomainsPage() {
-  const domains = useQuery({ queryKey: ["domains"], queryFn: listDomains });
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const tree = useMemo(() => {
-    const groups = new Map<string, DomainSummary[]>();
-    for (const domain of domains.data ?? []) {
-      const current = groups.get(domain.registrableDomain) ?? [];
-      current.push(domain);
-      groups.set(domain.registrableDomain, current);
-    }
-    return [...groups.entries()];
-  }, [domains.data]);
+  const [draft, setDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<DomainGroupSummary | null>(null);
+  const [datasetId, setDatasetId] = useState<string | null>(null);
+  const [recordOffset, setRecordOffset] = useState(0);
+  const domains = useQuery({
+    queryKey: ["domains", query, offset],
+    queryFn: () => listDomains(query, offset, pageSize),
+  });
+  const details = useQuery({
+    queryKey: [
+      "domain-details",
+      selected?.registrableDomain,
+      datasetId,
+      recordOffset,
+    ],
+    queryFn: () =>
+      getDomainDetails(
+        selected?.registrableDomain ?? "",
+        datasetId,
+        recordOffset,
+        pageSize,
+      ),
+    enabled: Boolean(selected),
+  });
 
-  function toggle(parent: string) {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(parent)) next.delete(parent);
-      else next.add(parent);
-      return next;
-    });
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    setOffset(0);
+    setSelected(null);
+    setDatasetId(null);
+    setRecordOffset(0);
+    setQuery(draft.trim());
   }
+
+  function openDomain(group: DomainGroupSummary) {
+    setSelected(group);
+    setDatasetId(null);
+    setRecordOffset(0);
+  }
+
+  function filterDataset(nextDatasetId: string | null) {
+    setDatasetId(nextDatasetId);
+    setRecordOffset(0);
+  }
+
+  const domainHasNext =
+    (domains.data?.offset ?? 0) + (domains.data?.groups.length ?? 0) <
+    (domains.data?.total ?? 0);
+  const recordsHaveNext =
+    (details.data?.recordOffset ?? 0) + (details.data?.records.length ?? 0) <
+    (details.data?.totalRecords ?? 0);
 
   return (
     <div className="page">
       <PageHeader
         title="Domains"
-        description="Explore registrable parent domains, subdomains, URLs, datasets, and linked records."
-        meta={`${tree.length.toLocaleString()} PARENTS`}
+        description="Find a domain, then inspect every linked dataset and source record."
+        meta={`${(domains.data?.total ?? 0).toLocaleString()} PARENTS`}
       />
+
+      <form className="domain-search" onSubmit={submit}>
+        <Search size={17} aria-hidden="true" />
+        <input
+          aria-label="Search domains"
+          placeholder="Search a parent domain or hostname"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          maxLength={253}
+        />
+        <Button size="sm" variant="primary" type="submit">
+          Search
+        </Button>
+      </form>
+
       {domains.isLoading ? (
         <div className="loading-line">
           <LoaderCircle className="animate-spin" size={16} />
-          Resolving local domain groups
+          Searching local domain index
         </div>
-      ) : tree.length ? (
-        <section className="domain-explorer">
-          <header className="domain-explorer__head">
-            <span>Registrable domain</span>
-            <span>Suffix</span>
-            <span>Observed records</span>
-          </header>
-          {tree.map(([parent, entries]) => {
-            const open = expanded.has(parent);
-            const parentEntry = entries.find((entry) => !entry.isSubdomain);
-            const total = entries.reduce(
-              (sum, entry) => sum + entry.recordCount,
-              0,
-            );
-            return (
-              <div className="domain-group" key={parent}>
-                <button
-                  className="domain-row"
-                  aria-expanded={open}
-                  onClick={() => toggle(parent)}
-                >
-                  <span className="domain-row__name">
-                    {open ? (
-                      <ChevronDown size={14} />
-                    ) : (
-                      <ChevronRight size={14} />
-                    )}
-                    <Globe2 size={15} />
-                    <strong>{parent}</strong>
-                    <small>
-                      {entries.filter((entry) => entry.isSubdomain).length}{" "}
-                      subdomains
-                    </small>
+      ) : domains.data?.groups.length ? (
+        <div className="domain-workspace" data-detail={Boolean(selected)}>
+          <section className="domain-explorer">
+            <header className="domain-explorer__head">
+              <span>Registrable domain</span>
+              <span>Hosts</span>
+              <span>Records</span>
+            </header>
+            {domains.data.groups.map((group) => (
+              <button
+                className="domain-row"
+                data-active={
+                  selected?.registrableDomain === group.registrableDomain
+                }
+                key={group.registrableDomain}
+                onClick={() => openDomain(group)}
+              >
+                <span className="domain-row__name">
+                  <Globe2 size={15} />
+                  <span>
+                    <strong>{group.registrableDomain}</strong>
+                    <small>{group.publicSuffix ?? "private suffix"}</small>
                   </span>
-                  <span className="font-mono">
-                    {parentEntry?.publicSuffix ??
-                      entries[0]?.publicSuffix ??
-                      "none"}
-                  </span>
-                  <span className="font-mono">{total.toLocaleString()}</span>
-                </button>
-                {open ? (
-                  <div className="domain-children">
-                    {entries
-                      .filter((entry) => entry.hostname !== parent)
-                      .map((entry) => (
-                        <article key={entry.id}>
-                          <span>
-                            <Network size={13} />
-                            <code>{entry.hostname}</code>
-                          </span>
-                          <span className="font-mono">
-                            {entry.recordCount.toLocaleString()} records
-                          </span>
-                        </article>
+                </span>
+                <span className="font-mono">
+                  {group.hostnameCount.toLocaleString()}
+                </span>
+                <span className="font-mono">
+                  {group.recordCount.toLocaleString()}
+                </span>
+              </button>
+            ))}
+            <footer className="result-pagination">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - pageSize))}
+              >
+                <ChevronLeft size={14} />
+                Previous
+              </Button>
+              <span className="font-mono">
+                {offset + 1}–
+                {Math.min(
+                  offset + domains.data.groups.length,
+                  domains.data.total,
+                ).toLocaleString()}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!domainHasNext}
+                onClick={() => setOffset(offset + pageSize)}
+              >
+                Next
+                <ChevronRight size={14} />
+              </Button>
+            </footer>
+          </section>
+
+          {selected ? (
+            <aside className="domain-detail">
+              <header className="domain-detail__header">
+                <div>
+                  <span className="eyebrow">DOMAIN EVIDENCE</span>
+                  <h2>{selected.registrableDomain}</h2>
+                </div>
+                <Globe2 size={18} />
+              </header>
+              {details.isLoading ? (
+                <div className="loading-line">
+                  <LoaderCircle className="animate-spin" size={15} />
+                  Loading linked evidence
+                </div>
+              ) : details.data ? (
+                <>
+                  <section className="domain-detail__section">
+                    <h3>
+                      <Network size={14} />
+                      Observed hostnames
+                    </h3>
+                    <div className="domain-hostnames">
+                      {details.data.hostnames.map((hostname) => (
+                        <span key={hostname.id}>
+                          <code>{hostname.hostname}</code>
+                          <small>{hostname.recordCount.toLocaleString()}</small>
+                        </span>
                       ))}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </section>
+                    </div>
+                  </section>
+
+                  <section className="domain-detail__section">
+                    <h3>
+                      <Database size={14} />
+                      Linked breach datasets
+                    </h3>
+                    <div className="domain-breaches">
+                      <button
+                        data-active={!datasetId}
+                        onClick={() => filterDataset(null)}
+                      >
+                        <span>All datasets</span>
+                        <strong>
+                          {details.data.breaches.length.toLocaleString()}
+                        </strong>
+                      </button>
+                      {details.data.breaches.map((breach) => (
+                        <button
+                          data-active={datasetId === breach.datasetId}
+                          key={breach.datasetId}
+                          onClick={() => filterDataset(breach.datasetId)}
+                        >
+                          <span>{breach.datasetName}</span>
+                          <strong>{breach.recordCount.toLocaleString()}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="domain-detail__section domain-records">
+                    <h3>
+                      <FileSearch size={14} />
+                      Linked records
+                      <small>
+                        {details.data.totalRecords.toLocaleString()}
+                      </small>
+                    </h3>
+                    {details.data.records.map((record) => (
+                      <article key={record.recordId}>
+                        <span>
+                          <strong>{record.datasetName}</strong>
+                          <small>{record.sourceFile}</small>
+                        </span>
+                        <span className="font-mono">
+                          {record.sourceLocation}
+                          <small>{record.parser}</small>
+                        </span>
+                      </article>
+                    ))}
+                    <footer className="result-pagination">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={recordOffset === 0}
+                        onClick={() =>
+                          setRecordOffset(Math.max(0, recordOffset - pageSize))
+                        }
+                      >
+                        <ChevronLeft size={14} />
+                        Previous
+                      </Button>
+                      <span className="font-mono">
+                        {details.data.totalRecords
+                          ? details.data.recordOffset + 1
+                          : 0}
+                        –
+                        {Math.min(
+                          details.data.recordOffset +
+                            details.data.records.length,
+                          details.data.totalRecords,
+                        ).toLocaleString()}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!recordsHaveNext}
+                        onClick={() => setRecordOffset(recordOffset + pageSize)}
+                      >
+                        Next
+                        <ChevronRight size={14} />
+                      </Button>
+                    </footer>
+                  </section>
+                </>
+              ) : null}
+            </aside>
+          ) : null}
+        </div>
       ) : (
         <EmptyState
           icon={Globe2}
-          title="No normalized domains"
-          description="Hostnames and URLs extracted during import will be grouped with Public Suffix List semantics."
-          detail="portal.example.co.uk is grouped under example.co.uk."
+          title={query ? "No matching domains" : "No normalized domains"}
+          description="Domains extracted during import appear here and stay connected to their datasets and source records."
+          detail="Search is local and prefix-indexed for large workspaces."
         />
       )}
     </div>

@@ -16,6 +16,7 @@ use tauri::{AppHandle, Manager};
 const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_V2: &str = include_str!("../migrations/0002_search_history.sql");
 const MIGRATION_V3: &str = include_str!("../migrations/0003_import_performance.sql");
+const MIGRATION_V4: &str = include_str!("../migrations/0004_record_domains.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -185,6 +186,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 4 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V4)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -247,12 +257,21 @@ mod tests {
         let table_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name IN ('datasets', 'source_files', 'settings')",
+                 WHERE type = 'table'
+                   AND name IN (
+                     'datasets',
+                     'source_files',
+                     'settings',
+                     'record_domains',
+                     'record_domain_parents',
+                     'domain_dataset_counts',
+                     'hostname_dataset_counts'
+                   )",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 3);
+        assert_eq!(table_count, 7);
 
         let theme: String = connection
             .query_row(

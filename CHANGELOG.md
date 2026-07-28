@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4 - 2026-07-28
+
+- Fixed exact domain searches so a bare domain, `domain:` query, or Domain field filter resolves domains extracted from both URL and domain fields.
+- Added a searchable domain explorer with parent-domain pagination, hostname evidence, linked breach-dataset filters, and paginated source-record drilldown.
+- Added incremental record-to-hostname, record-to-parent, and per-dataset domain aggregates so domain lookup avoids full-workspace record scans.
+- Explained in the interface that identity groups are created automatically during import using strict normalized email, phone, and service-scoped ID rules.
+- Moved identity list, member, and review work off the command thread and bounded the initial group view for large workspaces.
+- Extended 64-bit resource-math coverage and the configurable generated-stream soak ceiling to 4 TiB while preserving fixed memory ceilings, pause, and cancellation behavior.
+- Expanded the 100,000-record generated full-index soak to cover URL extraction and incremental domain aggregates.
+- Added changelog-backed GitHub release notes that identify the recommended setup executable and list every addition and change.
+
 ## 0.1.3 - 2026-07-28
 
 - Unified dark mode around a neutral graphite palette and eliminated the startup theme flash.

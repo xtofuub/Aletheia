@@ -70,7 +70,7 @@ read-only file
 
 Backpressure is provided by the synchronous parser-to-batch callback: the reader cannot advance while a bounded SQLite/Tantivy batch is being committed. Jobs expose running, paused, cancelled, completed, and failed states. Cancellation is checked between records and every 64 KiB while discarding an oversized record. Parser errors are counted and sanitized; raw record values are never logged.
 
-Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 32 MiB, and Tantivy receives at most 256 MiB. Tantivy and sanitized job checkpoints are committed every 100,000 records and at every file boundary. Identity groups are materialized incrementally inside each batch instead of accumulating the dataset in memory.
+Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 32 MiB, and Tantivy receives at most 256 MiB. Tantivy and sanitized job checkpoints are committed every 1,000,000 records and at every file boundary. Identity and record-to-domain links are materialized incrementally inside each batch instead of accumulating the dataset in memory. All byte and record totals use 64-bit counters for multi-terabyte inputs.
 
 Supported MVP inputs are TXT, CSV, TSV, JSONL, NDJSON, and GZIP-wrapped variants. Format detection uses a small byte sample, not the extension alone. The parser enforces maximum sample, line, field, and decompression sizes.
 
@@ -93,11 +93,12 @@ Raw records are not copied into SQLite. Recognized field values needed for detai
 The frontend sends a parsed search request with mode, query, filters, sort, offset, and limit. Rust compiles it into a bounded Tantivy query and returns view models that are masked by default.
 
 - Exact: normalized term query
-- Contains: indexed n-gram or bounded safe fallback
-- Prefix: prefix-oriented indexed term query
-- Fuzzy: allowed only for non-secret text types
-- Regex: size and complexity limited
-- Related: resolves identity membership before querying
+- Contains: escaped literal regex over safe normalized terms
+- Prefix: escaped prefix regex over safe normalized terms
+
+Exact domain queries use the record-to-domain SQLite index so parent domains
+also resolve hostnames extracted from URL fields. Secret fields are rejected
+before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
 
@@ -125,7 +126,7 @@ Cleanup resolves and verifies every generated path under the configured storage 
 
 ## UI architecture
 
-The app uses a persistent left rail, top command/search bar, route workspace, optional right details panel, and bottom privacy/status strip. React Query owns server state; router search parameters own searchable/filterable UI state; local component state owns transient controls.
+The app uses a persistent left rail, top command/search bar, route workspace, optional right details panel, and bottom privacy/status strip. React Query owns server state and local component state owns transient controls.
 
 Obsidian Signal uses graphite surfaces, fine neutral borders, a cool cyan primary accent, violet only as a secondary analysis cue, and mono type for technical values. Status includes text or icons so color is never the only signal. Dense screens use separators and alignment, not generic card grids.
 

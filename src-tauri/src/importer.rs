@@ -973,9 +973,18 @@ fn flush_batch(
         }
         if plan.options.extract_domains || plan.options.extract_urls {
             for (domain, url) in &record.domains {
-                store_domain(&transaction, &record.id, domain, url.as_ref()).map_err(sanitized)?;
+                exact_values.push(domain.hostname.clone());
+                exact_values.push(format!("domain:{}", domain.hostname));
+                if domain.registrable_domain != domain.hostname {
+                    exact_values.push(domain.registrable_domain.clone());
+                    exact_values.push(format!("domain:{}", domain.registrable_domain));
+                }
+                store_domain(&transaction, &record.id, dataset_id, domain, url.as_ref())
+                    .map_err(sanitized)?;
             }
         }
+        exact_values.sort_unstable();
+        exact_values.dedup();
         writer
             .add_document(make_document(
                 index_fields,
@@ -1425,12 +1434,14 @@ mod tests {
     }
 
     #[test]
-    fn resource_math_supports_hundreds_of_gibibytes_without_overflow() {
+    fn resource_math_supports_multi_terabyte_sources_without_overflow() {
         let three_hundred_gib = 300_u64 * 1024 * 1024 * 1024;
+        let four_tebibytes = 4_u64 * 1024 * 1024 * 1024 * 1024;
         assert_eq!(
             decompression_limit(three_hundred_gib),
             three_hundred_gib * 100
         );
+        assert_eq!(decompression_limit(four_tebibytes), four_tebibytes * 100);
         assert_eq!(batch_byte_limit(256), 16 * 1024 * 1024);
         assert_eq!(batch_byte_limit(8_192), 32 * 1024 * 1024);
         assert_eq!(BATCH_RECORDS, 10_000);
@@ -1481,7 +1492,7 @@ mod tests {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(1)
-            .clamp(1, 300);
+            .clamp(1, 4_096);
         let target_bytes = gibibytes * 1024 * 1024 * 1024;
         let source = RepeatingRecordReader::new(target_bytes);
         let mut reader = BufReader::with_capacity(64 * 1024, source);
@@ -1532,8 +1543,8 @@ mod tests {
             options: ImportOptions {
                 skip_invalid_rows: true,
                 stop_on_severe_error: true,
-                extract_urls: false,
-                extract_domains: false,
+                extract_urls: true,
+                extract_domains: true,
                 group_identities: false,
                 deduplicate: true,
                 store_offsets: true,
@@ -1569,6 +1580,18 @@ mod tests {
             )
             .expect("indexed count");
         assert_eq!(indexed as u64, record_count);
+        let domain_links: i64 = database
+            .lock()
+            .expect("database")
+            .query_row(
+                "SELECT record_count FROM domain_dataset_counts
+                 WHERE registrable_domain = 'example.net'
+                   AND dataset_id = 'dataset-soak'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("domain aggregate");
+        assert_eq!(domain_links as u64, record_count);
         eprintln!(
             "indexed {record_count} generated records in {:.2?}",
             started.elapsed()
@@ -1639,6 +1662,15 @@ mod tests {
             )
             .expect("domain count");
         assert_eq!(co_uk_count, 1);
+        let linked_domain_records: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM record_domains
+                 WHERE registrable_domain = 'example.co.uk'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("record domain links");
+        assert!(linked_domain_records > 0);
         let username_links: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM identity_memberships
@@ -1668,6 +1700,17 @@ mod tests {
             )
             .expect("search");
         assert_eq!(record_ids.len(), 1);
+        let (_, domain_record_ids) = search
+            .search_record_ids(
+                "example.co.uk",
+                SearchMode::Exact,
+                None,
+                Some("domain"),
+                0,
+                20,
+            )
+            .expect("exact domain search");
+        assert!(!domain_record_ids.is_empty());
     }
 
     #[test]

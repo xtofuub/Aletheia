@@ -13,6 +13,10 @@ The application can:
 - export selected records as redacted CSV, JSON, JSONL, or Markdown with a manifest;
 - clear generated indexes, metadata, caches, temporary files, and history without deleting source files.
 
+The import path uses fixed memory ceilings and 64-bit counters for
+multi-terabyte sources. Completion speed still depends on record shape, local
+SSD throughput, and having enough workspace capacity for SQLite and Tantivy.
+
 It does not download datasets, test credentials, automate logins, scrape websites, enrich records through remote services, transmit telemetry, or contact people.
 
 ## Install on Windows

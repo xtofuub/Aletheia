@@ -78,8 +78,8 @@ export function IdentitiesPage() {
     <div className="page">
       <PageHeader
         title="Identities"
-        description="Review deterministic links without turning uncertain associations into facts."
-        meta="EXPLAINABLE LINKS"
+        description="Review automatically created, deterministic identity links."
+        meta="AUTOMATIC + REVIEWABLE"
         action={
           lastEvent ? (
             <Button
@@ -94,6 +94,19 @@ export function IdentitiesPage() {
           ) : undefined
         }
       />
+      <section className="identity-explainer">
+        <ShieldQuestion size={17} />
+        <div>
+          <strong>
+            Yes—identity groups are created automatically during import.
+          </strong>
+          <span>
+            Grouping only uses exact normalized emails and phones, or matching
+            IDs from the same service. It never guesses from usernames or fuzzy
+            similarity, and every automatic link can be reviewed here.
+          </span>
+        </div>
+      </section>
       {identities.isLoading ? (
         <div className="loading-line">
           <LoaderCircle className="animate-spin" size={16} />
@@ -260,8 +273,8 @@ export function IdentitiesPage() {
             <div>
               <strong>Conservative grouping policy</strong>
               <span>
-                Email and phone links require exact normalization. User IDs are
-                service-scoped. Username-only records are never auto-merged.
+                “Automatic” means created by those strict import rules. Confirm,
+                reject, merge, split, and undo preserve an audit trail.
               </span>
             </div>
             <Unlink size={16} />

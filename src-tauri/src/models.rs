@@ -258,6 +258,53 @@ pub struct DomainSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DomainGroupSummary {
+    pub registrable_domain: String,
+    pub public_suffix: Option<String>,
+    pub hostname_count: u64,
+    pub record_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainSearchResponse {
+    pub total: u64,
+    pub offset: usize,
+    pub groups: Vec<DomainGroupSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainBreachSummary {
+    pub dataset_id: String,
+    pub dataset_name: String,
+    pub record_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainRecordSummary {
+    pub record_id: String,
+    pub dataset_id: String,
+    pub dataset_name: String,
+    pub source_file: String,
+    pub source_location: String,
+    pub parser: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainDetailsResponse {
+    pub registrable_domain: String,
+    pub hostnames: Vec<DomainSummary>,
+    pub breaches: Vec<DomainBreachSummary>,
+    pub total_records: u64,
+    pub record_offset: usize,
+    pub records: Vec<DomainRecordSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentitySummary {
     pub id: String,
     pub display_label: String,

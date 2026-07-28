@@ -12,4 +12,10 @@ Aletheia normalizes HTTP and HTTPS URLs by:
 
 The bundled Public Suffix List determines the registrable parent. Aletheia therefore groups `portal.example.co.uk` under `example.co.uk`, not `co.uk`. IP addresses remain their own parent and are not passed through suffix heuristics.
 
-The domain explorer shows parent domains, public suffixes, subdomain counts, hostnames, and observed record totals. No DNS request or remote enrichment occurs.
+The domain explorer has a local prefix search for parent domains and observed
+hostnames. Selecting a parent shows its hostnames, every linked breach dataset,
+and paginated source records. These links are materialized incrementally during
+import so opening a domain does not scan the full workspace. Older URL links
+are backfilled locally only when that domain is requested.
+
+No DNS request or remote enrichment occurs.

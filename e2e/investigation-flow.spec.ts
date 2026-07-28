@@ -39,6 +39,7 @@ test("imports a synthetic source and exposes a searchable dataset", async ({
     .getByRole("textbox", { name: "Search local index" })
     .fill("example.com");
   await page.keyboard.press("Enter");
+  await page.getByLabel("Field").selectOption("domain");
   await expect(page.getByText("a•••@example.com")).toBeVisible();
   await page.getByText("a•••@example.com").click();
   await expect(page.getByText("[REDACTED]")).toBeVisible();
@@ -55,12 +56,19 @@ test("domain and identity explorers expose explainable local groups", async ({
 }) => {
   await page.goto("/domains");
   await expect(page.getByText("example.co.uk").first()).toBeVisible();
-  await page
-    .getByRole("button", { name: /example.co.uk.*subdomains/i })
-    .click();
+  await page.getByLabel("Search domains").fill("portal");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByRole("button", { name: /example.co.uk/i }).click();
   await expect(page.getByText("portal.example.co.uk")).toBeVisible();
+  await expect(page.getByText("Linked breach datasets")).toBeVisible();
+  await expect(
+    page.getByText("Authorized synthetic fixture").first(),
+  ).toBeVisible();
 
   await page.getByRole("link", { name: "Identities" }).click();
+  await expect(
+    page.getByText(/identity groups are created automatically/i),
+  ).toBeVisible();
   await expect(page.getByText("a•••@example.com")).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
   await expect(

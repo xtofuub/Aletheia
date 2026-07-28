@@ -578,7 +578,7 @@ export function OverviewPage() {
       </section>
 
       <footer className="overview-footer">
-        <span>Aletheia v0.1.3</span>
+        <span>Aletheia v0.1.4</span>
         <span>Local-first investigation</span>
         <span>
           <Search aria-hidden="true" />

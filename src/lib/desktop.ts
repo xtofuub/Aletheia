@@ -200,6 +200,43 @@ export interface DomainSummary {
   recordCount: number;
 }
 
+export interface DomainGroupSummary {
+  registrableDomain: string;
+  publicSuffix: string | null;
+  hostnameCount: number;
+  recordCount: number;
+}
+
+export interface DomainSearchResponse {
+  total: number;
+  offset: number;
+  groups: DomainGroupSummary[];
+}
+
+export interface DomainBreachSummary {
+  datasetId: string;
+  datasetName: string;
+  recordCount: number;
+}
+
+export interface DomainRecordSummary {
+  recordId: string;
+  datasetId: string;
+  datasetName: string;
+  sourceFile: string;
+  sourceLocation: string;
+  parser: string;
+}
+
+export interface DomainDetailsResponse {
+  registrableDomain: string;
+  hostnames: DomainSummary[];
+  breaches: DomainBreachSummary[];
+  totalRecords: number;
+  recordOffset: number;
+  records: DomainRecordSummary[];
+}
+
 export interface IdentitySummary {
   id: string;
   displayLabel: string;
@@ -343,7 +380,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     metadataBytes: 0,
     indexBytes: 0,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.3",
+    appVersion: "0.1.4",
   };
 }
 
@@ -453,14 +490,12 @@ export async function listDatasets(): Promise<DatasetSummary[]> {
 export async function getOverviewStats(): Promise<OverviewStats> {
   if (isTauriRuntime()) return invoke<OverviewStats>("get_overview_stats");
   const [domains, identities] = await Promise.all([
-    listDomains(),
+    listDomains("", 0, 1),
     listIdentities(),
   ]);
   return {
     identityGroupCount: identities.length,
-    parentDomainCount: new Set(
-      domains.map((domain) => domain.registrableDomain),
-    ).size,
+    parentDomainCount: domains.total,
   };
 }
 
@@ -470,11 +505,31 @@ export async function searchRecords(
   if (isTauriRuntime()) {
     return invoke<SearchResponse>("search_records", { request });
   }
-  const query = request.query.toLowerCase().replace(/^[^:]+:/, "");
+  const inlineField = request.query.match(/^([a-z_]+):(.+)$/i);
+  const query = (inlineField?.[2] ?? request.query)
+    .trim()
+    .replace(/^"|"$/g, "")
+    .toLowerCase();
+  const requestedField =
+    request.fieldType ??
+    (inlineField?.[1]?.toLowerCase() as FieldType | undefined);
   const hit = syntheticSearchHit();
-  const matches = hit.fields.some((field) =>
-    field.displayValue.toLowerCase().includes(query),
-  );
+  const candidates = hit.fields
+    .filter((field) => !requestedField || field.fieldType === requestedField)
+    .map((field) => field.displayValue.toLowerCase());
+  const looksLikeBareDomain =
+    !requestedField &&
+    query.includes(".") &&
+    !query.includes("@") &&
+    !query.includes("/");
+  if (requestedField === "domain" || looksLikeBareDomain) {
+    candidates.push("portal.example.com", "example.com");
+  }
+  const matches = candidates.some((candidate) => {
+    if (request.mode === "exact") return candidate === query;
+    if (request.mode === "prefix") return candidate.startsWith(query);
+    return candidate.includes(query);
+  });
   return {
     total: matches ? 1 : 0,
     offset: request.offset,
@@ -482,26 +537,101 @@ export async function searchRecords(
   };
 }
 
-export async function listDomains(): Promise<DomainSummary[]> {
-  if (isTauriRuntime()) return invoke<DomainSummary[]>("list_domains");
-  return [
+const syntheticDomains: DomainSummary[] = [
+  {
+    id: "domain-synthetic",
+    hostname: "portal.example.co.uk",
+    registrableDomain: "example.co.uk",
+    publicSuffix: "co.uk",
+    isSubdomain: true,
+    recordCount: 3,
+  },
+  {
+    id: "domain-parent-synthetic",
+    hostname: "example.co.uk",
+    registrableDomain: "example.co.uk",
+    publicSuffix: "co.uk",
+    isSubdomain: false,
+    recordCount: 2,
+  },
+];
+
+export async function listDomains(
+  query = "",
+  offset = 0,
+  limit = 50,
+): Promise<DomainSearchResponse> {
+  if (isTauriRuntime()) {
+    return invoke<DomainSearchResponse>("list_domains", {
+      query,
+      offset,
+      limit,
+    });
+  }
+  const normalizedQuery = query.trim().toLowerCase();
+  const groups: DomainGroupSummary[] = [
     {
-      id: "domain-synthetic",
-      hostname: "portal.example.co.uk",
       registrableDomain: "example.co.uk",
       publicSuffix: "co.uk",
-      isSubdomain: true,
+      hostnameCount: syntheticDomains.length,
       recordCount: 3,
     },
+  ].filter(
+    (group) =>
+      !normalizedQuery ||
+      group.registrableDomain.startsWith(normalizedQuery) ||
+      syntheticDomains.some((domain) =>
+        domain.hostname.startsWith(normalizedQuery),
+      ),
+  );
+  return {
+    total: groups.length,
+    offset,
+    groups: groups.slice(offset, offset + limit),
+  };
+}
+
+export async function getDomainDetails(
+  registrableDomain: string,
+  datasetId: string | null,
+  recordOffset = 0,
+  recordLimit = 50,
+): Promise<DomainDetailsResponse> {
+  if (isTauriRuntime()) {
+    return invoke<DomainDetailsResponse>("get_domain_details", {
+      registrableDomain,
+      datasetId,
+      recordOffset,
+      recordLimit,
+    });
+  }
+  const records: DomainRecordSummary[] = [
     {
-      id: "domain-parent-synthetic",
-      hostname: "example.co.uk",
-      registrableDomain: "example.co.uk",
-      publicSuffix: "co.uk",
-      isSubdomain: false,
-      recordCount: 2,
+      recordId: "record-synthetic",
+      datasetId: "dataset-synthetic",
+      datasetName: "Authorized synthetic fixture",
+      sourceFile: "records_valid.csv",
+      sourceLocation: "line 2",
+      parser: "aletheia-parser/1",
     },
   ];
+  const filtered = datasetId
+    ? records.filter((record) => record.datasetId === datasetId)
+    : records;
+  return {
+    registrableDomain,
+    hostnames: syntheticDomains,
+    breaches: [
+      {
+        datasetId: "dataset-synthetic",
+        datasetName: "Authorized synthetic fixture",
+        recordCount: 1,
+      },
+    ],
+    totalRecords: filtered.length,
+    recordOffset,
+    records: filtered.slice(recordOffset, recordOffset + recordLimit),
+  };
 }
 
 export async function listIdentities(): Promise<IdentitySummary[]> {

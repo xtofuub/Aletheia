@@ -52,6 +52,7 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Exclude secret fields and avoid unsafe regex/fuzzy modes
 - [x] Add field and dataset filters, sort, pagination, and virtualization
 - [x] Add masked record details and source traceability
+- [x] Resolve exact domain queries from URL-derived hostname and parent links
 - [x] Add saved searches and bounded local search history
 - [x] Pass phase quality gates and update documentation
 
@@ -62,6 +63,7 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Integrate Public Suffix List resolution
 - [x] Materialize parent-domain and subdomain statistics
 - [x] Build the expandable domain explorer
+- [x] Add domain search, breach-dataset filters, and record drilldown
 - [x] Cover `co.uk`, Unicode/IDNA, malformed URL, credential, query, and IP cases
 - [x] Pass phase quality gates and update documentation
 
@@ -85,9 +87,12 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Add path, archive/discovery, line, decompression, query, and regex protections
 - [x] Bound oversized-line draining, record batches, and Tantivy writer memory
 - [x] Commit safe index/checkpoint boundaries during multi-hundred-gigabyte imports
+- [x] Validate fixed-memory resource math and generated streams through 4 TiB
+- [x] Add indexed hostname, parent-domain, and per-dataset record links
 - [x] Materialize identity groups incrementally without dataset-sized memory
 - [x] Complete responsive, accessibility, keyboard, and reduced-motion review
 - [x] Add performance benchmarks and smoke targets
 - [x] Complete the required documentation set and synthetic screenshots
 - [x] Pass frontend, Rust, end-to-end, native build, and safety gates
 - [x] Build the Windows executable and installer configuration
+- [x] Publish changelog-backed release notes with setup guidance

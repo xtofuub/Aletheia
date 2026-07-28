@@ -41,6 +41,7 @@ pub fn run() {
             investigation::get_overview_stats,
             investigation::search_records,
             investigation::list_domains,
+            investigation::get_domain_details,
             investigation::list_identities,
             investigation::list_identity_members,
             investigation::apply_identity_action,

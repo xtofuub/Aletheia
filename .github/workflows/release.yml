@@ -82,8 +82,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $notes = Join-Path $env:RUNNER_TEMP "aletheia-release-notes.md"
+          node scripts/extract-release-notes.mjs $notes
           $artifacts = Get-ChildItem -LiteralPath release -File | ForEach-Object { $_.FullName }
           gh release create $env:GITHUB_REF_NAME $artifacts `
             --verify-tag `
-            --generate-notes `
+            --notes-file $notes `
             --title "Aletheia $env:GITHUB_REF_NAME"

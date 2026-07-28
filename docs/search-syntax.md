@@ -2,11 +2,16 @@
 
 ## Modes
 
-- **Exact** matches a complete normalized field value.
+- **Exact** matches a complete normalized field value. A bare domain or
+  `domain:` query also matches hostnames extracted from URLs and their
+  registrable parent.
 - **Contains** performs a bounded literal substring match over complete safe indexed values and requires at least two characters.
 - **Prefix** matches safe indexed values beginning with the query.
 
 Queries are limited to 512 characters and result pages to 200 records.
+
+The field selector applies the same structured prefix internally, so choosing
+**Domain** with `example.com` is equivalent to `domain:example.com`.
 
 ## Structured fields
 

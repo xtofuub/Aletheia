@@ -100,18 +100,29 @@ pub fn normalize_url(value: &str) -> Option<NormalizedUrl> {
 pub fn store_domain(
     connection: &Connection,
     record_id: &str,
+    dataset_id: &str,
     domain: &NormalizedDomain,
     normalized_url: Option<&NormalizedUrl>,
 ) -> Result<(), rusqlite::Error> {
+    let hostname_link_created = connection
+        .prepare_cached(
+            "INSERT OR IGNORE INTO record_domains(record_id, hostname, registrable_domain)
+             VALUES (?1, ?2, ?3)",
+        )?
+        .execute(params![
+            record_id,
+            domain.hostname,
+            domain.registrable_domain
+        ])?;
     let domain_id = stable_id("domain", &domain.hostname);
     connection
         .prepare_cached(
             "INSERT INTO domains(
             id, hostname, registrable_domain, public_suffix, is_subdomain,
             record_count, first_observed, last_observed
-         ) VALUES (?1, ?2, ?3, ?4, ?5, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT(hostname) DO UPDATE SET
-            record_count = record_count + 1,
+            record_count = record_count + excluded.record_count,
             last_observed = CURRENT_TIMESTAMP",
         )?
         .execute(params![
@@ -119,8 +130,36 @@ pub fn store_domain(
             domain.hostname,
             domain.registrable_domain,
             domain.public_suffix,
-            domain.is_subdomain
+            domain.is_subdomain,
+            hostname_link_created as i64,
         ])?;
+    if hostname_link_created == 1 {
+        connection
+            .prepare_cached(
+                "INSERT INTO hostname_dataset_counts(hostname, dataset_id, record_count)
+                 VALUES (?1, ?2, 1)
+                 ON CONFLICT(hostname, dataset_id) DO UPDATE SET
+                   record_count = record_count + 1",
+            )?
+            .execute(params![domain.hostname, dataset_id])?;
+    }
+    let parent_link_created = connection
+        .prepare_cached(
+            "INSERT OR IGNORE INTO record_domain_parents(record_id, registrable_domain)
+             VALUES (?1, ?2)",
+        )?
+        .execute(params![record_id, domain.registrable_domain])?;
+    if parent_link_created == 1 {
+        connection
+            .prepare_cached(
+                "INSERT INTO domain_dataset_counts(
+                    registrable_domain, dataset_id, record_count
+                 ) VALUES (?1, ?2, 1)
+                 ON CONFLICT(registrable_domain, dataset_id) DO UPDATE SET
+                   record_count = record_count + 1",
+            )?
+            .execute(params![domain.registrable_domain, dataset_id])?;
+    }
 
     if let Some(url) = normalized_url {
         connection

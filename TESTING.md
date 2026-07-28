@@ -41,7 +41,7 @@ $env:ALETHEIA_SOAK_GIB = "1"
 cargo test --manifest-path src-tauri/Cargo.toml generated_gibibyte_stream_stays_bounded -- --ignored
 ```
 
-Raise `ALETHEIA_SOAK_GIB` up to `300` for a long local parser soak. Runtime scales with the requested byte count.
+Raise `ALETHEIA_SOAK_GIB` up to `4096` for a long local parser soak. Runtime scales with the requested byte count; the generated reader does not allocate or write a source file of that size.
 
 The ignored full-pipeline soak generates invented CSV rows, then exercises SQLite and Tantivy together:
 
