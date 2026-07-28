@@ -41,9 +41,16 @@ impl SearchIndex {
         self.index.writer(WRITER_MEMORY_BYTES).map_err(sanitized)
     }
 
-    pub fn writer_with_memory(&self, memory_bytes: usize) -> Result<IndexWriter, String> {
+    pub fn writer_with_limits(
+        &self,
+        worker_limit: usize,
+        memory_bytes: usize,
+    ) -> Result<IndexWriter, String> {
+        let memory_bytes = memory_bytes.clamp(64 * 1024 * 1024, 2 * 1024 * 1024 * 1024);
+        let workers_allowed_by_memory = (memory_bytes / 15_000_000).max(1);
+        let workers = worker_limit.clamp(1, 8).min(workers_allowed_by_memory);
         self.index
-            .writer(memory_bytes.clamp(15_000_000, 256_000_000))
+            .writer_with_num_threads(workers, memory_bytes)
             .map_err(sanitized)
     }
 
@@ -73,6 +80,7 @@ impl SearchIndex {
         }
 
         let (structured_type, value) = split_structured_query(&query_text);
+        let value = value.trim_matches('"');
         let requested_type = field_type.or(structured_type);
         let term_value = requested_type
             .map(|kind| format!("{kind}:{value}"))

@@ -13,6 +13,8 @@ these groups automatically as records are indexed. “Automatic” describes the
 strict rule that created the link; it is not a confidence guess and it does not
 contact an external service.
 
+The **Rebuild groups** action applies the same rules to already indexed records. It is idempotent, processes local fields in bounded batches, preserves existing review states, and removes empty groups left by prior merge or split actions.
+
 Each membership records a link type, confidence score, machine-readable explanation, and user review status. The interface shows the masked group label, reason, member count, and confidence.
 
 Users can confirm or reject memberships, merge complete groups, or select records to split into a reviewed group. Every change appends an audit event. Undo appends another event and restores the prior membership state; audit history is never rewritten.

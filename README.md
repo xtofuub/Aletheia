@@ -6,6 +6,7 @@ The application can:
 
 - inspect local TXT, CSV, TSV, JSONL, NDJSON, and GZIP sources through read-only handles;
 - stream records into a bounded local indexing pipeline;
+- resume cancelled or interrupted imports from persisted local checkpoints;
 - search normalized fields with exact, contains, prefix, and structured queries;
 - preserve dataset, source file, line, parser, and record traceability;
 - group domains with Public Suffix List semantics;
@@ -34,6 +35,8 @@ The release also includes `aletheia_<version>_x64.exe` as a standalone testing b
 ## Privacy model
 
 Data workflows have no network client. React never opens datasets directly: Rust owns the read-only handles, detection, parsing, normalization, SQLite writes, Tantivy writes, masking, and exports. Source datasets are referenced but never copied into the repository or deleted by cleanup.
+
+An optional update check contacts only the official GitHub Releases API with the app version in the user agent. It never includes dataset content, paths, names, queries, indexes, or exports and can be disabled in Settings.
 
 Secret fields are excluded from the general index. Their original values are replaced before storage. Sensitive result fields are masked by default. Search history and export audit data remain inside the selected local workspace.
 

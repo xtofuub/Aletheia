@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export type Theme = "dark" | "light" | "system";
 
@@ -13,6 +14,7 @@ export interface Settings {
   inactivityLockMinutes: number;
   workerLimit: number;
   memoryLimitMb: number;
+  automaticUpdateChecks: boolean;
 }
 
 export interface SystemStatus {
@@ -22,6 +24,13 @@ export interface SystemStatus {
   indexBytes: number;
   storageRoot: string;
   appVersion: string;
+}
+
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseUrl: string;
 }
 
 export interface OnboardingInput {
@@ -126,6 +135,7 @@ export interface ImportProgress {
     | "paused"
     | "cancelling"
     | "cancelled"
+    | "interrupted"
     | "completed"
     | "failed";
   currentFile: string | null;
@@ -226,6 +236,7 @@ export interface DomainRecordSummary {
   sourceFile: string;
   sourceLocation: string;
   parser: string;
+  fields: SearchField[];
 }
 
 export interface DomainDetailsResponse {
@@ -307,6 +318,7 @@ export interface SecuritySettingsInput {
   inactivityLockMinutes: number;
   workerLimit: number;
   memoryLimitMb: number;
+  automaticUpdateChecks: boolean;
 }
 
 const browserSettingsKey = "aletheia.browser.settings";
@@ -319,6 +331,7 @@ const defaultBrowserSettings: Settings = {
   inactivityLockMinutes: 15,
   workerLimit: 2,
   memoryLimitMb: 512,
+  automaticUpdateChecks: true,
 };
 
 export function isTauriRuntime() {
@@ -380,8 +393,31 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     metadataBytes: 0,
     indexBytes: 0,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.4",
+    appVersion: "0.1.5",
   };
+}
+
+export async function checkForUpdates(): Promise<UpdateStatus> {
+  if (isTauriRuntime()) {
+    return invoke<UpdateStatus>("check_for_updates");
+  }
+  return {
+    currentVersion: "0.1.5",
+    latestVersion: "0.1.5",
+    updateAvailable: false,
+    releaseUrl: "https://github.com/xtofuub/Aletheia/releases",
+  };
+}
+
+export async function openReleasePage(releaseUrl: string): Promise<void> {
+  if (!releaseUrl.startsWith("https://github.com/xtofuub/Aletheia/releases/")) {
+    throw new Error("Release link is not trusted");
+  }
+  if (isTauriRuntime()) {
+    await openUrl(releaseUrl);
+    return;
+  }
+  window.open(releaseUrl, "_blank", "noopener,noreferrer");
 }
 
 export async function selectStorageFolder(current: string): Promise<string> {
@@ -475,6 +511,15 @@ export async function pauseImport(jobId: string): Promise<void> {
 
 export async function resumeImport(jobId: string): Promise<void> {
   if (isTauriRuntime()) await invoke("resume_import", { jobId });
+}
+
+export async function resumeDatasetImport(
+  datasetId: string,
+): Promise<ImportStartResult> {
+  if (isTauriRuntime()) {
+    return invoke<ImportStartResult>("resume_dataset_import", { datasetId });
+  }
+  return { jobId: crypto.randomUUID(), datasetId };
 }
 
 export async function cancelImport(jobId: string): Promise<void> {
@@ -613,6 +658,26 @@ export async function getDomainDetails(
       sourceFile: "records_valid.csv",
       sourceLocation: "line 2",
       parser: "aletheia-parser/1",
+      fields: [
+        {
+          name: "email",
+          fieldType: "email",
+          displayValue: "a•••@example.com",
+          sensitive: false,
+        },
+        {
+          name: "domain",
+          fieldType: "domain",
+          displayValue: "example.co.uk",
+          sensitive: false,
+        },
+        {
+          name: "password",
+          fieldType: "password",
+          displayValue: "[REDACTED]",
+          sensitive: true,
+        },
+      ],
     },
   ];
   const filtered = datasetId
@@ -647,6 +712,11 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
       userStatus: "automatic",
     },
   ];
+}
+
+export async function rebuildIdentities(): Promise<number> {
+  if (isTauriRuntime()) return invoke<number>("rebuild_identities");
+  return (await listIdentities()).length;
 }
 
 export async function listIdentityMembers(

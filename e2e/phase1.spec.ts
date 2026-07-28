@@ -30,8 +30,7 @@ test("first launch requires authorization and opens the dashboard", async ({
 });
 
 test("command palette exposes app navigation", async ({ page }) => {
-  await page.goto("/");
-  await page.evaluate(() => {
+  await page.addInitScript(() => {
     window.localStorage.setItem(
       "aletheia.browser.settings",
       JSON.stringify({
@@ -46,7 +45,7 @@ test("command palette exposes app navigation", async ({ page }) => {
       }),
     );
   });
-  await page.reload();
+  await page.goto("/");
   await expect(page.getByRole("button", { name: /Commands/i })).toBeVisible();
   await page.keyboard.press("Control+K");
   await expect(

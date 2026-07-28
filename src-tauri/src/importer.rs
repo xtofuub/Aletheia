@@ -1,8 +1,8 @@
 use std::{
     fs::{self, File},
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     mem,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -10,7 +10,7 @@ use std::{
 
 use encoding_rs::{Encoding, UTF_8};
 use flate2::read::GzDecoder;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -35,7 +35,9 @@ const MAX_DECOMPRESSION_RATIO: u64 = 100;
 const MIN_DECOMPRESSION_LIMIT: u64 = 64 * 1024 * 1024;
 const BATCH_RECORDS: usize = 10_000;
 const MIN_BATCH_BYTES: usize = 4 * 1024 * 1024;
-const MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BATCH_BYTES: usize = 64 * 1024 * 1024;
+const MIN_WRITER_BYTES: usize = 64 * 1024 * 1024;
+const MAX_WRITER_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const INDEX_CHECKPOINT_RECORDS: u64 = 1_000_000;
 const PARSER_VERSION: &str = "aletheia-parser/1";
 
@@ -43,6 +45,8 @@ const PARSER_VERSION: &str = "aletheia-parser/1";
 struct WorkerFile {
     id: String,
     inspection: FileInspection,
+    resume_offset: u64,
+    resume_line: u64,
 }
 
 struct ProcessedField {
@@ -98,6 +102,7 @@ impl ProcessedRecord {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Counters {
     bytes_read: u64,
     records_processed: u64,
@@ -117,6 +122,10 @@ impl<R> CountingReader<R> {
             inner,
             bytes_read: 0,
         }
+    }
+
+    fn with_bytes_read(inner: R, bytes_read: u64) -> Self {
+        Self { inner, bytes_read }
     }
 }
 
@@ -164,14 +173,16 @@ pub async fn start_import(
 ) -> Result<ImportStartResult, String> {
     validate_plan(&plan)?;
     let (worker_limit, memory_limit_mb) = import_resource_limits(&state.database)?;
-    if state
+    if !state
         .jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?
-        .len()
-        >= worker_limit as usize
+        .is_empty()
     {
-        return Err("the configured local worker limit is already in use".to_string());
+        return Err(
+            "another import is active; Aletheia uses one writer with multiple index workers"
+                .to_string(),
+        );
     }
     let dataset_id = Uuid::new_v4().to_string();
     let job_id = Uuid::new_v4().to_string();
@@ -206,6 +217,7 @@ pub async fn start_import(
                     &job_id,
                     &dataset_id,
                     total_bytes,
+                    worker_limit,
                     memory_limit_mb,
                     worker_files,
                     &plan,
@@ -236,6 +248,209 @@ pub async fn start_import(
         }
     });
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn resume_dataset_import(
+    dataset_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<ImportStartResult, String> {
+    if dataset_id.len() > 128 {
+        return Err("dataset identifier is invalid".to_string());
+    }
+    let (worker_limit, memory_limit_mb) = import_resource_limits(&state.database)?;
+    if !state
+        .jobs
+        .lock()
+        .map_err(|_| "import job registry is unavailable".to_string())?
+        .is_empty()
+    {
+        return Err("another import is already active".to_string());
+    }
+
+    let (job_id, mut plan) = load_resume_plan(&state.database, &dataset_id)?;
+    validate_plan(&plan)?;
+    let worker_files = prepare_resume_files(&state.database, &dataset_id, &mut plan)?;
+    if worker_files.is_empty() {
+        return Err("this dataset has no unfinished source files".to_string());
+    }
+    let total_bytes = total_source_bytes(&plan);
+    let plan_json =
+        serde_json::to_string(&plan).map_err(|_| "saved import plan is invalid".to_string())?;
+    {
+        let connection = state
+            .database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?;
+        connection
+            .execute(
+                "UPDATE import_jobs
+                 SET status = 'queued', finished_at = NULL, plan_json = ?2
+                 WHERE id = ?1",
+                params![job_id, plan_json],
+            )
+            .map_err(sanitized)?;
+        connection
+            .execute(
+                "UPDATE datasets SET status = 'queued' WHERE id = ?1",
+                [&dataset_id],
+            )
+            .map_err(sanitized)?;
+    }
+
+    let control = Arc::new(JobControl::default());
+    state
+        .jobs
+        .lock()
+        .map_err(|_| "import job registry is unavailable".to_string())?
+        .insert(job_id.clone(), control.clone());
+    let database = state.database.clone();
+    let storage_root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
+    let jobs = state.jobs.clone();
+    let result = ImportStartResult {
+        job_id: job_id.clone(),
+        dataset_id: dataset_id.clone(),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let run_result = open_database(&storage_root)
+            .map_err(|_| "metadata database worker could not start".to_string())
+            .and_then(|worker_connection| {
+                prepare_import_database(&worker_connection)?;
+                let worker_database = Arc::new(Mutex::new(worker_connection));
+                run_import(
+                    Some(&app),
+                    &worker_database,
+                    &storage_root,
+                    &job_id,
+                    &dataset_id,
+                    total_bytes,
+                    worker_limit,
+                    memory_limit_mb,
+                    worker_files,
+                    &plan,
+                    &control,
+                )
+            });
+        if let Err(error) = run_result {
+            mark_failed(&database, &job_id, &dataset_id);
+            let _ = app.emit(
+                "import-progress",
+                ImportProgress {
+                    job_id: job_id.clone(),
+                    dataset_id: dataset_id.clone(),
+                    status: "failed".to_string(),
+                    current_file: None,
+                    bytes_read: 0,
+                    total_bytes,
+                    records_processed: 0,
+                    records_indexed: 0,
+                    invalid_records: 0,
+                    duplicate_records: 0,
+                    message: error,
+                },
+            );
+        }
+        if let Ok(mut registry) = jobs.lock() {
+            registry.remove(&job_id);
+        }
+    });
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn rebuild_identities(state: State<'_, AppState>) -> Result<u64, String> {
+    if !state
+        .jobs
+        .lock()
+        .map_err(|_| "import job registry is unavailable".to_string())?
+        .is_empty()
+    {
+        return Err("finish or cancel the active import before rebuilding identities".to_string());
+    }
+    let storage_root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut connection = open_database(&storage_root)
+            .map_err(|_| "identity database worker could not start".to_string())?;
+        rebuild_identity_groups(&mut connection)
+    })
+    .await
+    .map_err(|_| "identity rebuild task failed".to_string())?
+}
+
+fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
+    let mut cursor = 0_i64;
+    loop {
+        let rows = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT fv.id, fv.record_id, r.source_file_id,
+                            fv.field_type, fv.normalized_value
+                     FROM field_values fv
+                     JOIN records r ON r.id = fv.record_id
+                     WHERE fv.id > ?1
+                       AND fv.field_type IN ('email', 'phone', 'user_id')
+                       AND fv.normalized_value <> ''
+                     ORDER BY fv.id
+                     LIMIT 10000",
+                )
+                .map_err(sanitized)?;
+            statement
+                .query_map([cursor], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })
+                .map_err(sanitized)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sanitized)?
+        };
+        if rows.is_empty() {
+            break;
+        }
+        cursor = rows.last().map(|row| row.0).unwrap_or(cursor);
+        let transaction = connection.transaction().map_err(sanitized)?;
+        for (_, record_id, source_file_id, field_type, normalized_value) in rows {
+            store_identity(
+                &transaction,
+                &record_id,
+                &source_file_id,
+                parse_stored_field_type(&field_type),
+                &normalized_value,
+            )?;
+        }
+        transaction.commit().map_err(sanitized)?;
+    }
+    connection
+        .execute(
+            "DELETE FROM identity_groups
+             WHERE NOT EXISTS (
+               SELECT 1 FROM identity_memberships im
+               WHERE im.identity_group_id = identity_groups.id
+             )",
+            [],
+        )
+        .map_err(sanitized)?;
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM identity_groups
+             WHERE EXISTS (
+               SELECT 1 FROM identity_memberships im
+               WHERE im.identity_group_id = identity_groups.id
+             )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count.max(0) as u64)
+        .map_err(sanitized)
 }
 
 fn prepare_import_database(connection: &Connection) -> Result<(), String> {
@@ -284,7 +499,19 @@ pub fn cancel_import(job_id: String, state: State<'_, AppState>) -> Result<(), S
         .get(&job_id)
         .ok_or_else(|| "import job is no longer active".to_string())?;
     control.cancel();
-    update_job_status(&state.database, &job_id, "cancelling")
+    update_job_status(&state.database, &job_id, "cancelling")?;
+    let connection = state
+        .database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    connection
+        .execute(
+            "UPDATE datasets SET status = 'cancelling'
+             WHERE id = (SELECT dataset_id FROM import_jobs WHERE id = ?1)",
+            [&job_id],
+        )
+        .map_err(sanitized)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -354,7 +581,7 @@ fn import_resource_limits(database: &Arc<Mutex<Connection>>) -> Result<(u32, u32
     };
     Ok((
         read("worker_limit", 2).clamp(1, 8),
-        read("memory_limit_mb", 512).clamp(256, 8192),
+        read("memory_limit_mb", 512).clamp(256, 4096),
     ))
 }
 
@@ -424,9 +651,15 @@ fn prepare_database_rows(
         .map_err(sanitized)?;
     transaction
         .execute(
-            "INSERT INTO import_jobs(id, dataset_id, status, total_bytes)
-             VALUES (?1, ?2, 'queued', ?3)",
-            params![job_id, dataset_id, total_bytes as i64],
+            "INSERT INTO import_jobs(id, dataset_id, status, total_bytes, plan_json)
+             VALUES (?1, ?2, 'queued', ?3, ?4)",
+            params![
+                job_id,
+                dataset_id,
+                total_bytes as i64,
+                serde_json::to_string(plan)
+                    .map_err(|_| "import plan could not be saved".to_string())?
+            ],
         )
         .map_err(sanitized)?;
 
@@ -480,10 +713,286 @@ fn prepare_database_rows(
         worker_files.push(WorkerFile {
             id: file_id,
             inspection: cloned,
+            resume_offset: 0,
+            resume_line: 0,
         });
     }
     transaction.commit().map_err(sanitized)?;
     Ok(worker_files)
+}
+
+fn load_resume_plan(
+    database: &Arc<Mutex<Connection>>,
+    dataset_id: &str,
+) -> Result<(String, ImportPlan), String> {
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    let saved = connection
+        .query_row(
+            "SELECT j.id, j.plan_json, d.name, d.authorization_note
+             FROM import_jobs j
+             JOIN datasets d ON d.id = j.dataset_id
+             WHERE j.dataset_id = ?1
+               AND j.status IN ('cancelled', 'interrupted', 'failed')
+             ORDER BY j.created_at DESC
+             LIMIT 1",
+            [dataset_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sanitized)?
+        .ok_or_else(|| "this dataset has no resumable import".to_string())?;
+    if let Some(plan_json) = saved.1 {
+        let plan = serde_json::from_str::<ImportPlan>(&plan_json)
+            .map_err(|_| "saved import plan is invalid".to_string())?;
+        return Ok((saved.0, plan));
+    }
+
+    let mut path_statement = connection
+        .prepare(
+            "SELECT absolute_path FROM source_files
+             WHERE dataset_id = ?1 ORDER BY rowid",
+        )
+        .map_err(sanitized)?;
+    let paths = path_statement
+        .query_map([dataset_id], |row| row.get::<_, String>(0))
+        .map_err(sanitized)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sanitized)?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    drop(path_statement);
+    drop(connection);
+
+    let inspection = crate::detection::inspect_paths(&paths)?;
+    if !inspection.rejected_paths.is_empty() || inspection.files.len() != paths.len() {
+        return Err("one or more original source files are unavailable".to_string());
+    }
+    let mut plan = ImportPlan {
+        dataset_label: saved.2,
+        authorization_note: saved.3,
+        files: inspection.files,
+        options: crate::models::ImportOptions {
+            skip_invalid_rows: true,
+            stop_on_severe_error: true,
+            extract_urls: true,
+            extract_domains: true,
+            group_identities: true,
+            deduplicate: true,
+            store_offsets: true,
+        },
+    };
+    restore_saved_mappings(database, dataset_id, &mut plan)?;
+    Ok((saved.0, plan))
+}
+
+fn restore_saved_mappings(
+    database: &Arc<Mutex<Connection>>,
+    dataset_id: &str,
+    plan: &mut ImportPlan,
+) -> Result<(), String> {
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    for inspection in &mut plan.files {
+        let file_id = connection
+            .query_row(
+                "SELECT id FROM source_files
+                 WHERE dataset_id = ?1 AND lower(absolute_path) = lower(?2)",
+                params![dataset_id, inspection.absolute_path],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(sanitized)?
+            .ok_or_else(|| "saved source mapping is unavailable".to_string())?;
+        let mut mapping_statement = connection
+            .prepare(
+                "SELECT source_name, field_type, confidence, is_sensitive
+                 FROM field_mappings WHERE source_file_id = ?1 ORDER BY id",
+            )
+            .map_err(sanitized)?;
+        inspection.mappings = mapping_statement
+            .query_map([file_id], |row| {
+                let field_type: String = row.get(1)?;
+                Ok(FieldMapping {
+                    source_name: row.get(0)?,
+                    field_type: parse_stored_field_type(&field_type),
+                    confidence: row.get(2)?,
+                    is_sensitive: row.get(3)?,
+                })
+            })
+            .map_err(sanitized)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sanitized)?;
+    }
+    Ok(())
+}
+
+fn prepare_resume_files(
+    database: &Arc<Mutex<Connection>>,
+    dataset_id: &str,
+    plan: &mut ImportPlan,
+) -> Result<Vec<WorkerFile>, String> {
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, absolute_path, file_size, index_status
+             FROM source_files WHERE dataset_id = ?1 ORDER BY rowid",
+        )
+        .map_err(sanitized)?;
+    let source_files = statement
+        .query_map([dataset_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)? as u64,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(sanitized)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(sanitized)?;
+    drop(statement);
+
+    let mut worker_files = Vec::new();
+    for (file_id, absolute_path, expected_size, status) in source_files {
+        if status == "indexed" {
+            continue;
+        }
+        let inspection = plan
+            .files
+            .iter()
+            .find(|file| file.absolute_path.eq_ignore_ascii_case(&absolute_path))
+            .cloned()
+            .ok_or_else(|| "saved source inspection is unavailable".to_string())?;
+        let metadata = fs::metadata(&absolute_path)
+            .map_err(|_| "an original source file is unavailable".to_string())?;
+        if !metadata.is_file() || metadata.len() != expected_size {
+            return Err("an original source changed; resume was stopped safely".to_string());
+        }
+        let checkpoint = connection
+            .query_row(
+                "SELECT byte_offset, source_location
+                 FROM records WHERE source_file_id = ?1
+                 ORDER BY rowid DESC LIMIT 1",
+                [&file_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?.unwrap_or(0).max(0) as u64,
+                        row.get::<_, String>(1)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sanitized)?;
+        let (resume_offset, resume_line) = checkpoint
+            .map(|(offset, location)| (offset, parse_source_line(&location)))
+            .unwrap_or((0, 0));
+        worker_files.push(WorkerFile {
+            id: file_id,
+            inspection,
+            resume_offset,
+            resume_line,
+        });
+    }
+    Ok(worker_files)
+}
+
+fn load_initial_counters(
+    database: &Arc<Mutex<Connection>>,
+    dataset_id: &str,
+    job_id: &str,
+    files: &[WorkerFile],
+) -> Result<Counters, String> {
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    let records_indexed = connection
+        .query_row(
+            "SELECT COUNT(*) FROM records WHERE dataset_id = ?1",
+            [dataset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sanitized)?
+        .max(0) as u64;
+    let (invalid_records, duplicate_records) = connection
+        .query_row(
+            "SELECT invalid_records, duplicate_records
+             FROM import_jobs WHERE id = ?1",
+            [job_id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(sanitized)?;
+    let indexed_bytes = connection
+        .query_row(
+            "SELECT COALESCE(SUM(file_size), 0) FROM source_files
+             WHERE dataset_id = ?1 AND index_status = 'indexed'",
+            [dataset_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sanitized)?
+        .max(0) as u64;
+    let resumed_plain_bytes = files
+        .iter()
+        .filter(|file| !file.inspection.compressed)
+        .map(|file| file.resume_offset)
+        .sum::<u64>();
+    let invalid_records = invalid_records.max(0) as u64;
+    let duplicate_records = duplicate_records.max(0) as u64;
+    Ok(Counters {
+        bytes_read: indexed_bytes.saturating_add(resumed_plain_bytes),
+        records_processed: records_indexed
+            .saturating_add(invalid_records)
+            .saturating_add(duplicate_records),
+        records_indexed,
+        invalid_records,
+        duplicate_records,
+    })
+}
+
+fn parse_source_line(value: &str) -> u64 {
+    value
+        .strip_prefix("line ")
+        .and_then(|line| line.parse().ok())
+        .unwrap_or(0)
+}
+
+fn parse_stored_field_type(value: &str) -> FieldType {
+    match value {
+        "email" => FieldType::Email,
+        "username" => FieldType::Username,
+        "first_name" => FieldType::FirstName,
+        "last_name" => FieldType::LastName,
+        "full_name" => FieldType::FullName,
+        "phone" => FieldType::Phone,
+        "ip_address" => FieldType::IpAddress,
+        "domain" => FieldType::Domain,
+        "url" => FieldType::Url,
+        "password" => FieldType::Password,
+        "password_hash" => FieldType::PasswordHash,
+        "salt" => FieldType::Salt,
+        "date_of_birth" => FieldType::DateOfBirth,
+        "address" => FieldType::Address,
+        "city" => FieldType::City,
+        "country" => FieldType::Country,
+        "postal_code" => FieldType::PostalCode,
+        "company" => FieldType::Company,
+        "job_title" => FieldType::JobTitle,
+        "user_id" => FieldType::UserId,
+        "timestamp" => FieldType::Timestamp,
+        _ => FieldType::Unknown,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -494,6 +1003,7 @@ fn run_import(
     job_id: &str,
     dataset_id: &str,
     total_bytes: u64,
+    worker_limit: u32,
     memory_limit_mb: u32,
     files: Vec<WorkerFile>,
     plan: &ImportPlan,
@@ -502,17 +1012,10 @@ fn run_import(
     update_job_status(database, job_id, "running")?;
     update_dataset_status(database, dataset_id, "indexing")?;
     let search = SearchIndex::open_or_create(storage_root)?;
-    let writer_memory =
-        ((memory_limit_mb as usize * 1024 * 1024) / 4).clamp(15_000_000, 256_000_000);
+    let writer_memory = writer_memory_budget(memory_limit_mb);
     let batch_byte_limit = batch_byte_limit(memory_limit_mb);
-    let mut writer = search.writer_with_memory(writer_memory)?;
-    let mut counters = Counters {
-        bytes_read: 0,
-        records_processed: 0,
-        records_indexed: 0,
-        invalid_records: 0,
-        duplicate_records: 0,
-    };
+    let mut writer = search.writer_with_limits(worker_limit as usize, writer_memory)?;
+    let mut counters = load_initial_counters(database, dataset_id, job_id, &files)?;
     let mut last_emit = Instant::now();
     let mut last_index_checkpoint = 0_u64;
 
@@ -645,20 +1148,37 @@ fn stream_file<F>(
 where
     F: FnMut(ProcessedRecord, &mut Counters) -> Result<(), String>,
 {
-    let source = File::open(&file.inspection.absolute_path)
+    let mut source = File::open(&file.inspection.absolute_path)
         .map_err(|_| "source file could not be opened read-only".to_string())?;
+    if !file.inspection.compressed && file.resume_offset > 0 {
+        source
+            .seek(SeekFrom::Start(file.resume_offset))
+            .map_err(|_| "source resume position is unavailable".to_string())?;
+    }
     let source_reader = if file.inspection.compressed {
         SourceReader::Gzip(GzDecoder::new(CountingReader::new(source)))
     } else {
-        SourceReader::Plain(CountingReader::new(source))
+        SourceReader::Plain(CountingReader::with_bytes_read(source, file.resume_offset))
     };
     let mut reader = BufReader::with_capacity(64 * 1024, source_reader);
     let encoding = Encoding::for_label(file.inspection.encoding.as_bytes()).unwrap_or(UTF_8);
     let decompression_limit = decompression_limit(file.inspection.file_size);
     let mut line = Vec::with_capacity(4096);
-    let mut line_number = 0_u64;
-    let mut decompressed_bytes = 0_u64;
-    let mut accounted_source_bytes = 0_u64;
+    let mut line_number = if file.inspection.compressed {
+        0
+    } else {
+        file.resume_line.saturating_sub(1)
+    };
+    let mut decompressed_bytes = if file.inspection.compressed {
+        0
+    } else {
+        file.resume_offset
+    };
+    let mut accounted_source_bytes = if file.inspection.compressed {
+        0
+    } else {
+        file.resume_offset
+    };
     loop {
         wait_if_paused(control)?;
         let line_start = decompressed_bytes;
@@ -675,6 +1195,14 @@ where
         decompressed_bytes = decompressed_bytes.saturating_add(bounded.bytes_consumed);
         if file.inspection.compressed && decompressed_bytes > decompression_limit {
             return Err("compressed source exceeded the safe decompression limit".to_string());
+        }
+        let replaying_from_start =
+            file.resume_line > 0 && (file.inspection.compressed || file.resume_offset == 0);
+        let rereading_seek_checkpoint = !file.inspection.compressed
+            && file.resume_offset > 0
+            && line_number == file.resume_line;
+        if (replaying_from_start && line_number <= file.resume_line) || rereading_seek_checkpoint {
+            continue;
         }
         if bounded.exceeded_limit {
             counters.invalid_records += 1;
@@ -773,6 +1301,14 @@ fn decompression_limit(file_size: u64) -> u64 {
 
 fn batch_byte_limit(memory_limit_mb: u32) -> usize {
     ((memory_limit_mb as usize * 1024 * 1024) / 16).clamp(MIN_BATCH_BYTES, MAX_BATCH_BYTES)
+}
+
+fn writer_memory_budget(memory_limit_mb: u32) -> usize {
+    (memory_limit_mb as usize * 1024 * 1024)
+        .saturating_mul(3)
+        .checked_div(4)
+        .unwrap_or(MIN_WRITER_BYTES)
+        .clamp(MIN_WRITER_BYTES, MAX_WRITER_BYTES)
 }
 
 fn parse_values(text: &str, inspection: &FileInspection) -> Result<Vec<String>, ()> {
@@ -996,6 +1532,19 @@ fn flush_batch(
         counters.records_indexed += 1;
     }
     transaction.commit().map_err(sanitized)?;
+    connection
+        .execute(
+            "UPDATE datasets
+             SET record_count = ?2, warning_count = ?3,
+                 last_indexed_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            params![
+                dataset_id,
+                counters.records_indexed as i64,
+                counters.invalid_records as i64
+            ],
+        )
+        .map_err(sanitized)?;
     Ok(())
 }
 
@@ -1328,9 +1877,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        BATCH_RECORDS, INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES, batch_byte_limit,
-        decompression_limit, mask_email, normalize_value, prepare_database_rows,
-        prepare_import_database, process_record, read_bounded_line, run_import,
+        BATCH_RECORDS, Counters, INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES,
+        batch_byte_limit, decompression_limit, finish_cancelled, flush_batch, load_resume_plan,
+        mask_email, normalize_value, prepare_database_rows, prepare_import_database,
+        prepare_resume_files, process_record, read_bounded_line, rebuild_identity_groups,
+        run_import, stream_file, writer_memory_budget,
     };
     use crate::{
         detection::inspect_paths,
@@ -1443,7 +1994,9 @@ mod tests {
         );
         assert_eq!(decompression_limit(four_tebibytes), four_tebibytes * 100);
         assert_eq!(batch_byte_limit(256), 16 * 1024 * 1024);
-        assert_eq!(batch_byte_limit(8_192), 32 * 1024 * 1024);
+        assert_eq!(batch_byte_limit(4_096), 64 * 1024 * 1024);
+        assert_eq!(writer_memory_budget(256), 192 * 1024 * 1024);
+        assert_eq!(writer_memory_budget(4_096), 2 * 1024 * 1024 * 1024);
         assert_eq!(BATCH_RECORDS, 10_000);
         assert_eq!(INDEX_CHECKPOINT_RECORDS, 1_000_000);
     }
@@ -1563,6 +2116,7 @@ mod tests {
             "job-soak",
             "dataset-soak",
             plan.files.iter().map(|file| file.file_size).sum(),
+            2,
             512,
             files,
             &plan,
@@ -1633,6 +2187,7 @@ mod tests {
             "job-test",
             "dataset-test",
             plan.files.iter().map(|file| file.file_size).sum(),
+            2,
             512,
             files,
             &plan,
@@ -1640,7 +2195,7 @@ mod tests {
         )
         .expect("import");
 
-        let connection = database.lock().expect("database lock");
+        let mut connection = database.lock().expect("database lock");
         let record_count: i64 = connection
             .query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
             .expect("record count");
@@ -1686,6 +2241,12 @@ mod tests {
             })
             .expect("identity links");
         assert!(identity_links > 0);
+        connection
+            .execute("DELETE FROM identity_groups", [])
+            .expect("clear generated identity groups");
+        let rebuilt =
+            rebuild_identity_groups(&mut connection).expect("rebuild deterministic identities");
+        assert!(rebuilt > 0);
         drop(connection);
 
         let search = SearchIndex::open_or_create(directory.path()).expect("index");
@@ -1711,6 +2272,105 @@ mod tests {
             )
             .expect("exact domain search");
         assert!(!domain_record_ids.is_empty());
+    }
+
+    #[test]
+    fn cancelled_plain_import_resumes_without_reindexing_stored_records() {
+        let workspace = tempdir().expect("temporary workspace");
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("records_valid.csv");
+        let inspection = inspect_paths(&[fixture]).expect("inspection");
+        let plan = synthetic_plan(inspection.files);
+        let database = Arc::new(Mutex::new(
+            open_database(workspace.path()).expect("database"),
+        ));
+        let files = prepare_database_rows(&database, "dataset-resume", "job-resume", &plan)
+            .expect("database rows");
+        let search = SearchIndex::open_or_create(workspace.path()).expect("index");
+        let mut writer = search.writer().expect("writer");
+        let control = JobControl::default();
+        let mut counters = Counters {
+            bytes_read: 0,
+            records_processed: 0,
+            records_indexed: 0,
+            invalid_records: 0,
+            duplicate_records: 0,
+        };
+        let mut first_batch = Vec::new();
+        let partial = stream_file(
+            &files[0],
+            &plan,
+            &control,
+            &mut counters,
+            |record, counters| {
+                first_batch.push(record);
+                flush_batch(
+                    &database,
+                    &mut writer,
+                    search.fields,
+                    "dataset-resume",
+                    &files[0],
+                    &plan,
+                    counters,
+                    &mut first_batch,
+                )?;
+                control.cancel();
+                Ok(())
+            },
+        );
+        assert!(partial.is_err());
+        writer.commit().expect("partial commit");
+        drop(writer);
+        finish_cancelled(
+            None,
+            &database,
+            "job-resume",
+            "dataset-resume",
+            plan.files[0].file_size,
+            &counters,
+        )
+        .expect("cancelled status");
+
+        let (job_id, mut resumed_plan) =
+            load_resume_plan(&database, "dataset-resume").expect("saved plan");
+        let resumed_files = prepare_resume_files(&database, "dataset-resume", &mut resumed_plan)
+            .expect("resume files");
+        assert!(resumed_files[0].resume_offset > 0);
+        run_import(
+            None,
+            &database,
+            workspace.path(),
+            &job_id,
+            "dataset-resume",
+            resumed_plan.files[0].file_size,
+            2,
+            512,
+            resumed_files,
+            &resumed_plan,
+            &JobControl::default(),
+        )
+        .expect("resumed import");
+
+        let connection = database.lock().expect("database");
+        let record_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM records WHERE dataset_id = 'dataset-resume'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("record count");
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM datasets WHERE id = 'dataset-resume'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("dataset status");
+        assert_eq!(record_count, 3);
+        assert_eq!(status, "ready");
     }
 
     #[test]
@@ -1745,6 +2405,7 @@ mod tests {
                 &job_id,
                 &dataset_id,
                 plan.files.iter().map(|file| file.file_size).sum(),
+                2,
                 512,
                 files,
                 &plan,
@@ -1796,6 +2457,7 @@ mod tests {
             "job-gzip",
             "dataset-gzip",
             plan.files.iter().map(|file| file.file_size).sum(),
+            2,
             512,
             files,
             &plan,

@@ -366,7 +366,7 @@ fn load_domain_details(
         .map_err(sanitized)?;
     let bounded_limit = record_limit.clamp(1, 100) as i64;
     let bounded_offset = record_offset.min(i64::MAX as usize) as i64;
-    let records = record_statement
+    let mut records = record_statement
         .query_map(
             params![
                 registrable_domain,
@@ -382,12 +382,17 @@ fn load_domain_details(
                     source_file: row.get(3)?,
                     source_location: row.get(4)?,
                     parser: row.get(5)?,
+                    fields: Vec::new(),
                 })
             },
         )
         .map_err(sanitized)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(sanitized)?;
+    drop(record_statement);
+    for record in &mut records {
+        record.fields = load_display_fields(connection, &record.record_id, 16)?;
+    }
 
     Ok(DomainDetailsResponse {
         registrable_domain: registrable_domain.to_string(),
@@ -407,12 +412,12 @@ fn exact_domain_query(request: &SearchRequest) -> Option<NormalizedDomain> {
     let candidate = if let Some(value) = raw.strip_prefix("domain:") {
         if request
             .field_type
-            .is_some_and(|field_type| field_type != FieldType::Domain)
+            .is_some_and(|field_type| !matches!(field_type, FieldType::Domain | FieldType::Url))
         {
             return None;
         }
         value.trim_matches('"')
-    } else if request.field_type == Some(FieldType::Domain)
+    } else if matches!(request.field_type, Some(FieldType::Domain | FieldType::Url))
         || (request.field_type.is_none()
             && !raw.contains(['/', '@', ' '])
             && (raw.contains('.') || raw.parse::<std::net::IpAddr>().is_ok()))
@@ -491,29 +496,21 @@ fn search_domain_record_ids(
     offset: usize,
     limit: usize,
 ) -> Result<(usize, Vec<String>), String> {
-    let (link_table, link_column, count_table, count_column, value) =
-        if domain.hostname == domain.registrable_domain {
-            (
-                "record_domain_parents",
-                "registrable_domain",
-                "domain_dataset_counts",
-                "registrable_domain",
-                domain.registrable_domain.as_str(),
-            )
-        } else {
-            (
-                "record_domains",
-                "hostname",
-                "hostname_dataset_counts",
-                "hostname",
-                domain.hostname.as_str(),
-            )
-        };
+    let (link_table, link_column, value) = if domain.hostname == domain.registrable_domain {
+        (
+            "record_domain_parents",
+            "registrable_domain",
+            domain.registrable_domain.as_str(),
+        )
+    } else {
+        ("record_domains", "hostname", domain.hostname.as_str())
+    };
     let count_sql = format!(
-        "SELECT COALESCE(SUM(record_count), 0)
-         FROM {count_table}
-         WHERE {count_column} = ?1
-           AND (?2 IS NULL OR dataset_id = ?2)"
+        "SELECT COUNT(*)
+         FROM {link_table} rd
+         JOIN records r ON r.id = rd.record_id
+         WHERE rd.{link_column} = ?1
+           AND (?2 IS NULL OR r.dataset_id = ?2)"
     );
     let total = connection
         .query_row(&count_sql, params![value, dataset_id], |row| {
@@ -897,28 +894,7 @@ fn load_search_hit(connection: &Connection, record_id: &str) -> Result<Option<Se
     else {
         return Ok(None);
     };
-    let mut statement = connection
-        .prepare(
-            "SELECT field_name, field_type, original_value, normalized_value, is_sensitive
-             FROM field_values WHERE record_id = ?1 ORDER BY id",
-        )
-        .map_err(sanitized)?;
-    let rows = statement
-        .query_map(params![record_id], |row| {
-            let field_type_name: String = row.get(1)?;
-            let original: String = row.get(2)?;
-            let normalized: String = row.get(3)?;
-            let sensitive: bool = row.get(4)?;
-            let field_type = parse_field_type(&field_type_name);
-            Ok(SearchField {
-                name: row.get(0)?,
-                field_type,
-                display_value: mask_for_display(field_type, sensitive, &original, &normalized),
-                sensitive,
-            })
-        })
-        .map_err(sanitized)?;
-    let fields = rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)?;
+    let fields = load_display_fields(connection, record_id, usize::MAX)?;
     Ok(Some(SearchHit {
         record_id: id,
         dataset_id,
@@ -930,6 +906,38 @@ fn load_search_hit(connection: &Connection, record_id: &str) -> Result<Option<Se
         match_reason: "normalized field match".to_string(),
         fields,
     }))
+}
+
+fn load_display_fields(
+    connection: &Connection,
+    record_id: &str,
+    limit: usize,
+) -> Result<Vec<SearchField>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT field_name, field_type, original_value, normalized_value, is_sensitive
+             FROM field_values WHERE record_id = ?1 ORDER BY id LIMIT ?2",
+        )
+        .map_err(sanitized)?;
+    let rows = statement
+        .query_map(
+            params![record_id, limit.min(i64::MAX as usize) as i64],
+            |row| {
+                let field_type_name: String = row.get(1)?;
+                let original: String = row.get(2)?;
+                let normalized: String = row.get(3)?;
+                let sensitive: bool = row.get(4)?;
+                let field_type = parse_field_type(&field_type_name);
+                Ok(SearchField {
+                    name: row.get(0)?,
+                    field_type,
+                    display_value: mask_for_display(field_type, sensitive, &original, &normalized),
+                    sensitive,
+                })
+            },
+        )
+        .map_err(sanitized)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)
 }
 
 fn selected_or_all_records(
@@ -1216,6 +1224,14 @@ mod tests {
                     'record-1', 'dataset-1', 'file-1', 'line 2',
                     'synthetic-fingerprint', 'test-parser'
                  );
+                 INSERT INTO field_values(
+                    record_id, field_name, field_type, original_value,
+                    normalized_value, is_sensitive, confidence
+                 ) VALUES
+                    ('record-1', 'email', 'email', 'person@example.co.uk',
+                     'person@example.co.uk', 0, 1.0),
+                    ('record-1', 'password', 'password', '[REDACTED]',
+                     'blake3:synthetic', 1, 1.0);
                  INSERT INTO domains(
                     id, hostname, registrable_domain, public_suffix,
                     is_subdomain, record_count
@@ -1260,5 +1276,10 @@ mod tests {
         assert_eq!(details.breaches[0].dataset_name, "Synthetic breach");
         assert_eq!(details.total_records, 1);
         assert_eq!(details.records[0].source_location, "line 2");
+        assert_eq!(
+            details.records[0].fields[0].display_value,
+            "p•••@example.co.uk"
+        );
+        assert_eq!(details.records[0].fields[1].display_value, "[REDACTED]");
     }
 }

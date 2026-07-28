@@ -4,7 +4,7 @@
 
 Aletheia is a local-only Windows desktop investigation app for data the user is authorized to analyze. Source files are opened read-only. Their records, file paths, search queries, index contents, and exports never cross the local trust boundary.
 
-The app does not download breach data, test credentials, automate logins, scrape sites, enrich records through network services, or contact people.
+The app does not download breach data, test credentials, automate logins, scrape sites, enrich records through network services, or contact people. Its only optional outbound request checks the official GitHub Releases API for a newer app version and carries no workspace information.
 
 ## Stack
 
@@ -68,9 +68,9 @@ read-only file
   -> checkpoint and throttled progress event
 ```
 
-Backpressure is provided by the synchronous parser-to-batch callback: the reader cannot advance while a bounded SQLite/Tantivy batch is being committed. Jobs expose running, paused, cancelled, completed, and failed states. Cancellation is checked between records and every 64 KiB while discarding an oversized record. Parser errors are counted and sanitized; raw record values are never logged.
+Backpressure is provided by the synchronous parser-to-batch callback: the reader cannot advance while a bounded SQLite/Tantivy batch is being committed. Jobs expose running, paused, cancelled, interrupted, completed, and failed states. Cancellation is checked between records and every 64 KiB while discarding an oversized record. Cancelled and interrupted jobs preserve a resumable plan and source position. Parser errors are counted and sanitized; raw record values are never logged.
 
-Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 32 MiB, and Tantivy receives at most 256 MiB. Tantivy and sanitized job checkpoints are committed every 1,000,000 records and at every file boundary. Identity and record-to-domain links are materialized incrementally inside each batch instead of accumulating the dataset in memory. All byte and record totals use 64-bit counters for multi-terabyte inputs.
+Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 64 MiB, and Tantivy receives between 64 MiB and 2 GiB. The worker limit controls one Tantivy writer's indexing threads, and only one import writer runs at a time. Tantivy and sanitized job checkpoints are committed every 1,000,000 records and at every file boundary. Identity and record-to-domain links are materialized incrementally inside each batch instead of accumulating the dataset in memory. All byte and record totals use 64-bit counters for multi-terabyte inputs.
 
 Supported MVP inputs are TXT, CSV, TSV, JSONL, NDJSON, and GZIP-wrapped variants. Format detection uses a small byte sample, not the extension alone. The parser enforces maximum sample, line, field, and decompression sizes.
 
@@ -102,6 +102,8 @@ before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
 
+Result pages support 25, 50, 100, or 200 records with explicit ranges and navigation. Domain drilldowns load a bounded masked field preview for each linked source line.
+
 ## Domain grouping
 
 URL and hostname normalization lowercases hostnames, removes trailing dots and ports, preserves Unicode safely, and uses Public Suffix List semantics to find the registrable domain. It never assumes the last two labels form the parent.
@@ -115,6 +117,8 @@ Automatic groups use deterministic keys only:
 - exact service-scoped user ID
 
 User merges are confirmed links. Username-only matches remain possible suggestions and are never auto-merged. Merge, split, reject, and undo actions write append-only audit events.
+
+An idempotent bounded rebuild applies the same deterministic rules to records indexed by older versions.
 
 ## Redaction and export
 

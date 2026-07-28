@@ -20,7 +20,7 @@ Sources are rejected if they disappear or change size between inspection and imp
 
 SQLite is authoritative for metadata and analysis. Tantivy stores record IDs plus safe normalized search values. Secret originals are replaced before either store is written.
 
-Cancellation is checked between records and while paused. Completed batches remain valid and traceable; source files are never rolled back because they are never modified.
+Cancellation is checked between records and while paused. Completed batches remain valid and traceable; source files are never rolled back because they are never modified. Cancelled and interrupted jobs can resume after source-size validation. Plain files seek to the last stored byte offset; compressed files replay safely to the last stored line without reinserting it.
 
 The background importer uses its own SQLite WAL connection. Dashboard reads therefore do not wait behind a long import transaction, and completed or failed jobs stop their high-frequency UI polling automatically.
 
@@ -30,9 +30,9 @@ Input size is tracked with 64-bit counters, including multi-terabyte sources. Pl
 
 The configured memory limit controls two independent budgets:
 
-- Tantivy writer memory: 15–256 MiB
-- pending SQLite/Tantivy record batch: 4–32 MiB, with a 10,000-record ceiling
+- Tantivy writer memory: 64 MiB–2 GiB
+- pending SQLite/Tantivy record batch: 4–64 MiB, with a 10,000-record ceiling
 
-Search-index commits and sanitized SQLite checkpoints occur every 1,000,000 indexed records and at each file boundary. Prepared SQLite statements are reused across each batch, and normalized field lookup is served by Tantivy instead of duplicate SQLite indexes. Tantivy documents contain only the record ID, dataset filter, and exact normalized values required by current search modes. Removal of legacy redundant indexes happens in the background worker before an import, never during application startup. Identity and domain grouping are incremental, so their memory use does not grow with dataset size.
+The worker setting controls one Tantivy writer's indexing threads; Aletheia permits one active import so multiple jobs cannot contend for the same index writer. Search-index commits and sanitized SQLite checkpoints occur every 1,000,000 indexed records and at each file boundary. Prepared SQLite statements are reused across each batch, and normalized field lookup is served by Tantivy instead of duplicate SQLite indexes. Tantivy documents contain only the record ID, dataset filter, and exact normalized values required by current search modes. Removal of legacy redundant indexes happens in the background worker before an import, never during application startup. Identity and domain grouping are incremental, so their memory use does not grow with dataset size.
 
 Hundreds-of-gigabytes and terabyte-scale imports remain dependent on local SSD throughput, record shape, and free space. The generated SQLite and Tantivy stores can be larger than the source, especially when records contain many searchable fields. Put the workspace on a fast local volume with substantial headroom; network shares and nearly-full system drives are poor targets. Aletheia guarantees bounded processing, not a fixed completion time on every drive.

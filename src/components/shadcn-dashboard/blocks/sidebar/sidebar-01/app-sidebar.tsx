@@ -76,7 +76,7 @@ export function AppSidebar() {
                 Aletheia
               </span>
               <span className="rounded-full border border-border bg-background px-1.5 py-0.5 font-mono text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
-                v0.1.4
+                v0.1.5
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -97,7 +97,7 @@ export function AppSidebar() {
           </div>
           <p>Evidence stays on this device.</p>
           <div className="local-protection__states">
-            <span>Offline</span>
+            <span>Data local</span>
             <span>Read-only</span>
             <span>Masked</span>
           </div>

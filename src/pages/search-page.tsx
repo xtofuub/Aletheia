@@ -44,6 +44,7 @@ export function SearchPage() {
     "relevance",
   );
   const [offset, setOffset] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<SearchHit | null>(null);
   const [saveName, setSaveName] = useState("");
@@ -52,7 +53,7 @@ export function SearchPage() {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
   const results = useQuery({
-    queryKey: ["search", query, mode, datasetId, fieldType, offset],
+    queryKey: ["search", query, mode, datasetId, fieldType, offset, pageSize],
     queryFn: () =>
       searchRecords({
         query,
@@ -60,7 +61,7 @@ export function SearchPage() {
         datasetId,
         fieldType,
         offset,
-        limit: 50,
+        limit: pageSize,
       }),
     enabled: query.length > 0,
   });
@@ -138,6 +139,16 @@ export function SearchPage() {
   const hasNext =
     (results.data?.offset ?? 0) + (results.data?.hits.length ?? 0) <
     (results.data?.total ?? 0);
+  const totalPages = Math.max(
+    1,
+    Math.ceil((results.data?.total ?? 0) / pageSize),
+  );
+  const currentPage = Math.min(totalPages, Math.floor(offset / pageSize) + 1);
+
+  function movePage(nextOffset: number) {
+    setOffset(Math.max(0, nextOffset));
+    scrollRef.current?.scrollTo({ top: 0 });
+  }
 
   return (
     <div className="page page--search">
@@ -298,12 +309,46 @@ export function SearchPage() {
           <LoaderCircle className="animate-spin" size={16} />
           Searching the local index
         </div>
+      ) : results.isError ? (
+        <EmptyState
+          icon={Search}
+          title="Search could not complete"
+          description={String(results.error)}
+          detail="The local index was not changed."
+          action={
+            <Button variant="primary" onClick={() => void results.refetch()}>
+              Try again
+            </Button>
+          }
+        />
       ) : results.data?.hits.length ? (
         <div className="result-workspace" data-detail={Boolean(detail)}>
           <section className="result-list">
             <header className="result-list__head">
               <span>{results.data.total.toLocaleString()} matches</span>
-              <span>Masked by default</span>
+              <div className="result-list__tools">
+                <label>
+                  <span>Rows per page</span>
+                  <select
+                    aria-label="Results per page"
+                    value={pageSize}
+                    onChange={(event) => {
+                      setPageSize(Number(event.target.value));
+                      movePage(0);
+                    }}
+                  >
+                    {[25, 50, 100, 200].map((value) => (
+                      <option value={value} key={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="font-mono">
+                  Page {currentPage.toLocaleString()} of{" "}
+                  {totalPages.toLocaleString()}
+                </span>
+              </div>
             </header>
             <div className="result-scroll" ref={scrollRef}>
               <div
@@ -338,7 +383,9 @@ export function SearchPage() {
                             {hit.datasetName} · {hit.sourceFile}
                           </small>
                         </span>
-                        <span className="font-mono">{hit.sourceLocation}</span>
+                        <span className="source-location">
+                          {hit.sourceLocation}
+                        </span>
                       </button>
                     </article>
                   );
@@ -350,20 +397,24 @@ export function SearchPage() {
                 variant="ghost"
                 size="sm"
                 disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - 50))}
+                onClick={() => movePage(offset - pageSize)}
               >
                 <ChevronLeft size={14} />
                 Previous
               </Button>
               <span className="font-mono">
                 {offset + 1}–
-                {Math.min(offset + 50, results.data.total).toLocaleString()}
+                {Math.min(
+                  offset + results.data.hits.length,
+                  results.data.total,
+                ).toLocaleString()}{" "}
+                of {results.data.total.toLocaleString()}
               </span>
               <Button
                 variant="ghost"
                 size="sm"
                 disabled={!hasNext}
-                onClick={() => setOffset(offset + 50)}
+                onClick={() => movePage(offset + pageSize)}
               >
                 Next
                 <ChevronRight size={14} />
@@ -395,7 +446,10 @@ export function SearchPage() {
                 <span>
                   <strong>{detail.sourceFile}</strong>
                   <small>
-                    {detail.sourceLocation} · {detail.parser}
+                    <span className="source-location">
+                      {detail.sourceLocation}
+                    </span>{" "}
+                    · {detail.parser}
                   </small>
                 </span>
               </div>

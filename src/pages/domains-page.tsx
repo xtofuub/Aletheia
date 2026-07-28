@@ -227,21 +227,36 @@ export function DomainsPage() {
                   <section className="domain-detail__section domain-records">
                     <h3>
                       <FileSearch size={14} />
-                      Linked records
+                      Masked line contents
                       <small>
                         {details.data.totalRecords.toLocaleString()}
                       </small>
                     </h3>
                     {details.data.records.map((record) => (
                       <article key={record.recordId}>
-                        <span>
-                          <strong>{record.datasetName}</strong>
-                          <small>{record.sourceFile}</small>
-                        </span>
-                        <span className="font-mono">
-                          {record.sourceLocation}
-                          <small>{record.parser}</small>
-                        </span>
+                        <header>
+                          <span>
+                            <strong>{record.datasetName}</strong>
+                            <small>{record.sourceFile}</small>
+                          </span>
+                          <span className="source-location">
+                            {record.sourceLocation}
+                            <small>{record.parser}</small>
+                          </span>
+                        </header>
+                        <dl>
+                          {record.fields.map((field) => (
+                            <div key={`${record.recordId}-${field.name}`}>
+                              <dt>{field.name}</dt>
+                              <dd
+                                className="font-mono"
+                                data-sensitive={field.sensitive}
+                              >
+                                {field.displayValue || "—"}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
                       </article>
                     ))}
                     <footer className="result-pagination">

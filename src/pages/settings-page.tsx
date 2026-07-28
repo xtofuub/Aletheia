@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
@@ -28,6 +28,18 @@ const themeOptions: Array<{ value: Theme; label: string }> = [
   { value: "system", label: "System" },
 ];
 
+function settingsToProtections(
+  settings: Awaited<ReturnType<typeof getSettings>>,
+): SecuritySettingsInput {
+  return {
+    clipboardClearSeconds: settings.clipboardClearSeconds,
+    inactivityLockMinutes: settings.inactivityLockMinutes,
+    workerLimit: settings.workerLimit,
+    memoryLimitMb: settings.memoryLimitMb,
+    automaticUpdateChecks: settings.automaticUpdateChecks,
+  };
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const { theme, setTheme } = useTheme();
@@ -35,6 +47,9 @@ export function SettingsPage() {
     null,
   );
   const [notice, setNotice] = useState("");
+  const [protections, setProtections] = useState<SecuritySettingsInput | null>(
+    null,
+  );
   const status = useQuery({
     queryKey: ["system-status"],
     queryFn: getSystemStatus,
@@ -45,10 +60,12 @@ export function SettingsPage() {
   });
   const security = useMutation({
     mutationFn: updateSecuritySettings,
-    onSuccess: async () => {
-      setNotice("Security settings saved locally");
-      await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    onSuccess: (saved) => {
+      queryClient.setQueryData(["settings"], saved);
+      setProtections(settingsToProtections(saved));
+      setNotice("Resource protections saved and active");
     },
+    onError: () => setNotice("Resource protections could not be saved"),
   });
   const cleanup = useMutation({
     mutationFn: (scope: "index" | "all") =>
@@ -73,14 +90,26 @@ export function SettingsPage() {
     },
   });
 
-  function saveSecurity(formData: FormData) {
-    const input: SecuritySettingsInput = {
-      clipboardClearSeconds: Number(formData.get("clipboard")),
-      inactivityLockMinutes: Number(formData.get("lock")),
-      workerLimit: Number(formData.get("workers")),
-      memoryLimitMb: Number(formData.get("memory")),
-    };
-    security.mutate(input);
+  const currentProtections =
+    protections ??
+    (settings.data ? settingsToProtections(settings.data) : null);
+
+  function saveSecurity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!currentProtections) return;
+    setNotice("");
+    security.mutate(currentProtections);
+  }
+
+  function setProtection<K extends keyof SecuritySettingsInput>(
+    key: K,
+    value: SecuritySettingsInput[K],
+  ) {
+    setProtections((current) =>
+      currentProtections
+        ? { ...(current ?? currentProtections), [key]: value }
+        : current,
+    );
   }
 
   function requestCleanup(scope: "index" | "all") {
@@ -182,16 +211,19 @@ export function SettingsPage() {
               <p>Bounds for local sensitive work.</p>
             </div>
           </div>
-          {settings.data ? (
-            <form
-              className="security-form"
-              action={(formData) => saveSecurity(formData)}
-            >
+          {currentProtections ? (
+            <form className="security-form" onSubmit={saveSecurity}>
               <label>
                 <span>Clipboard clear</span>
                 <select
                   name="clipboard"
-                  defaultValue={settings.data.clipboardClearSeconds}
+                  value={currentProtections.clipboardClearSeconds}
+                  onChange={(event) =>
+                    setProtection(
+                      "clipboardClearSeconds",
+                      Number(event.target.value),
+                    )
+                  }
                 >
                   <option value={30}>30 seconds</option>
                   <option value={60}>60 seconds</option>
@@ -203,8 +235,15 @@ export function SettingsPage() {
                 <span>Inactivity lock</span>
                 <select
                   name="lock"
-                  defaultValue={settings.data.inactivityLockMinutes}
+                  value={currentProtections.inactivityLockMinutes}
+                  onChange={(event) =>
+                    setProtection(
+                      "inactivityLockMinutes",
+                      Number(event.target.value),
+                    )
+                  }
                 >
+                  <option value={0}>Disabled</option>
                   <option value={5}>5 minutes</option>
                   <option value={15}>15 minutes</option>
                   <option value={30}>30 minutes</option>
@@ -212,31 +251,69 @@ export function SettingsPage() {
                 </select>
               </label>
               <label>
-                <span>Worker limit</span>
-                <select name="workers" defaultValue={settings.data.workerLimit}>
+                <span>Index workers</span>
+                <select
+                  name="workers"
+                  value={currentProtections.workerLimit}
+                  onChange={(event) =>
+                    setProtection("workerLimit", Number(event.target.value))
+                  }
+                >
                   {[1, 2, 4, 6, 8].map((value) => (
                     <option key={value} value={value}>
                       {value}
                     </option>
                   ))}
                 </select>
+                <small>
+                  Threads used by one import. More can help CPU-heavy indexing,
+                  but can hurt on a slow drive.
+                </small>
               </label>
               <label>
-                <span>Memory limit</span>
+                <span>Index memory budget</span>
                 <select
                   name="memory"
-                  defaultValue={settings.data.memoryLimitMb}
+                  value={currentProtections.memoryLimitMb}
+                  onChange={(event) =>
+                    setProtection("memoryLimitMb", Number(event.target.value))
+                  }
                 >
-                  {[256, 512, 1024, 2048, 4096, 8192].map((value) => (
+                  {[256, 512, 1024, 2048, 4096].map((value) => (
                     <option key={value} value={value}>
                       {value} MiB
                     </option>
                   ))}
                 </select>
+                <small>
+                  Per-import ceiling. More memory reduces index flushes; it
+                  cannot overcome disk or SQLite bottlenecks.
+                </small>
               </label>
-              <Button size="sm" variant="secondary" type="submit">
+              <label className="security-form__toggle">
+                <input
+                  type="checkbox"
+                  checked={currentProtections.automaticUpdateChecks}
+                  onChange={(event) =>
+                    setProtection("automaticUpdateChecks", event.target.checked)
+                  }
+                />
+                <span>
+                  Check GitHub for updates
+                  <small>
+                    Sends only the app version request. Dataset information is
+                    never included.
+                  </small>
+                </span>
+              </label>
+              <Button
+                size="sm"
+                variant="secondary"
+                type="submit"
+                disabled={security.isPending}
+              >
                 <Check size={14} />
-                Save protections
+                {security.isPending ? "Saving" : "Save protections"}
               </Button>
             </form>
           ) : null}

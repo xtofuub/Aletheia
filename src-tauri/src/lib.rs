@@ -7,6 +7,7 @@ pub mod models;
 pub mod search_index;
 mod settings;
 mod storage;
+mod updater;
 
 use tauri::Manager;
 
@@ -32,8 +33,11 @@ pub fn run() {
             settings::update_theme,
             settings::update_security_settings,
             settings::get_system_status,
+            updater::check_for_updates,
             detection::inspect_sources,
             importer::start_import,
+            importer::resume_dataset_import,
+            importer::rebuild_identities,
             importer::pause_import,
             importer::resume_import,
             importer::cancel_import,

@@ -96,3 +96,15 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Pass frontend, Rust, end-to-end, native build, and safety gates
 - [x] Build the Windows executable and installer configuration
 - [x] Publish changelog-backed release notes with setup guidance
+
+## 0.1.5 reliability pass
+
+- [x] Make resource settings atomic, controlled, and immediately visible
+- [x] Add disabled inactivity lock and optional GitHub update checks
+- [x] Apply worker and memory settings to the real Tantivy writer
+- [x] Recover stale job states and resume cancelled or interrupted imports
+- [x] Keep dataset totals and the index-growth chart current during indexing
+- [x] Add explicit search page sizes, ranges, navigation, and error states
+- [x] Show masked domain source-line contents with consistent location typography
+- [x] Rebuild deterministic identities for already indexed records
+- [x] Add resume, domain masking, identity rebuild, and settings regression tests

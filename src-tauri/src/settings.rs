@@ -17,6 +17,7 @@ pub struct Settings {
     pub inactivity_lock_minutes: u32,
     pub worker_limit: u32,
     pub memory_limit_mb: u32,
+    pub automatic_update_checks: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +34,7 @@ pub struct SecuritySettingsInput {
     pub inactivity_lock_minutes: u32,
     pub worker_limit: u32,
     pub memory_limit_mb: u32,
+    pub automatic_update_checks: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,16 +92,29 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
 
+    let clipboard_clear_seconds: u32 =
+        read_json(&connection, "clipboard_clear_seconds")?.unwrap_or(60);
+    let inactivity_lock_minutes: u32 =
+        read_json(&connection, "inactivity_lock_minutes")?.unwrap_or(15);
     Ok(Settings {
         authorization_confirmed: read_json(&connection, "authorization_confirmed")?
             .unwrap_or(false),
         theme: read_json(&connection, "theme")?.unwrap_or_else(|| "light".to_string()),
         storage_root: storage_root.to_string_lossy().into_owned(),
         network_disabled: read_json(&connection, "network_disabled")?.unwrap_or(true),
-        clipboard_clear_seconds: read_json(&connection, "clipboard_clear_seconds")?.unwrap_or(60),
-        inactivity_lock_minutes: read_json(&connection, "inactivity_lock_minutes")?.unwrap_or(15),
-        worker_limit: read_json(&connection, "worker_limit")?.unwrap_or(2),
-        memory_limit_mb: read_json(&connection, "memory_limit_mb")?.unwrap_or(512),
+        clipboard_clear_seconds: clipboard_clear_seconds.clamp(15, 600),
+        inactivity_lock_minutes: if inactivity_lock_minutes <= 240 {
+            inactivity_lock_minutes
+        } else {
+            15
+        },
+        worker_limit: read_json(&connection, "worker_limit")?
+            .unwrap_or(2)
+            .clamp(1, 8),
+        memory_limit_mb: read_json(&connection, "memory_limit_mb")?
+            .unwrap_or(512)
+            .clamp(256, 4096),
+        automatic_update_checks: read_json(&connection, "automatic_update_checks")?.unwrap_or(true),
     })
 }
 
@@ -142,31 +157,43 @@ pub fn update_security_settings(
     input: SecuritySettingsInput,
     state: State<'_, AppState>,
 ) -> Result<Settings, String> {
-    if !(15..=600).contains(&input.clipboard_clear_seconds)
-        || !(1..=240).contains(&input.inactivity_lock_minutes)
-        || !(1..=8).contains(&input.worker_limit)
-        || !(256..=8192).contains(&input.memory_limit_mb)
-    {
-        return Err("one or more security settings are outside safe limits".to_string());
+    if !(15..=600).contains(&input.clipboard_clear_seconds) {
+        return Err("clipboard clearing must be between 15 and 600 seconds".to_string());
+    }
+    if input.inactivity_lock_minutes != 0 && !(1..=240).contains(&input.inactivity_lock_minutes) {
+        return Err("inactivity lock must be disabled or between 1 and 240 minutes".to_string());
+    }
+    if !(1..=8).contains(&input.worker_limit) {
+        return Err("index workers must be between 1 and 8".to_string());
+    }
+    if !(256..=4096).contains(&input.memory_limit_mb) {
+        return Err("index memory must be between 256 and 4096 MiB".to_string());
     }
     {
-        let connection = state
+        let mut connection = state
             .database
             .lock()
             .map_err(|_| "metadata database is unavailable".to_string())?;
+        let transaction = connection.transaction().map_err(sanitize)?;
         write_json(
-            &connection,
+            &transaction,
             "clipboard_clear_seconds",
             &input.clipboard_clear_seconds,
         )?;
         write_json(
-            &connection,
+            &transaction,
             "inactivity_lock_minutes",
             &input.inactivity_lock_minutes,
         )?;
-        write_json(&connection, "worker_limit", &input.worker_limit)?;
-        write_json(&connection, "memory_limit_mb", &input.memory_limit_mb)?;
-        write_json(&connection, "network_disabled", &true)?;
+        write_json(&transaction, "worker_limit", &input.worker_limit)?;
+        write_json(&transaction, "memory_limit_mb", &input.memory_limit_mb)?;
+        write_json(
+            &transaction,
+            "automatic_update_checks",
+            &input.automatic_update_checks,
+        )?;
+        write_json(&transaction, "network_disabled", &true)?;
+        transaction.commit().map_err(sanitize)?;
     }
     get_settings(state)
 }

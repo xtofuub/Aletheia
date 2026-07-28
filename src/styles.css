@@ -1746,6 +1746,18 @@ button:disabled {
   color: var(--success);
 }
 
+.dataset-status-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dataset-status-cell [data-slot="button"] {
+  min-height: 26px;
+  padding-inline: 6px;
+  font-size: 8px;
+}
+
 .search-controls {
   display: flex;
   min-height: 50px;
@@ -1848,6 +1860,31 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.result-list__tools,
+.result-list__tools label,
+.identity-page-actions {
+  display: flex;
+  align-items: center;
+}
+
+.result-list__tools {
+  gap: 12px;
+}
+
+.result-list__tools label {
+  gap: 6px;
+}
+
+.result-list__tools select {
+  height: 26px;
+  padding: 0 24px 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  font: 600 9px var(--font-mono);
+}
+
 .result-scroll {
   min-height: 0;
   overflow: auto;
@@ -1921,6 +1958,15 @@ button:disabled {
 .result-pagination {
   border-top: 1px solid var(--border);
   border-bottom: 0;
+}
+
+.source-location {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .record-detail {
@@ -2253,21 +2299,23 @@ button:disabled {
 }
 
 .domain-records article {
-  display: grid;
-  min-height: 50px;
-  align-items: center;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  padding: 7px 14px;
+  padding: 9px 14px 11px;
   border-top: 1px solid var(--border);
 }
 
-.domain-records article strong,
-.domain-records article small {
+.domain-records article header {
+  display: grid;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.domain-records article header strong,
+.domain-records article header small {
   display: block;
 }
 
-.domain-records article strong {
+.domain-records article header strong {
   overflow: hidden;
   color: var(--text-primary);
   font-size: 9px;
@@ -2275,16 +2323,52 @@ button:disabled {
   white-space: nowrap;
 }
 
-.domain-records article small {
+.domain-records article header small {
   margin-top: 3px;
   color: var(--text-tertiary);
   font-size: 8px;
 }
 
-.domain-records article > span:last-child {
+.domain-records article header > span:last-child {
   color: var(--text-secondary);
   font-size: 8px;
   text-align: right;
+}
+
+.domain-records dl {
+  display: grid;
+  gap: 3px;
+  margin: 9px 0 0;
+}
+
+.domain-records dl div {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.3fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--surface-inset);
+}
+
+.domain-records dt,
+.domain-records dd {
+  overflow: hidden;
+  margin: 0;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.domain-records dt {
+  color: var(--text-tertiary);
+}
+
+.domain-records dd {
+  color: var(--text-secondary);
+}
+
+.domain-records dd[data-sensitive="true"] {
+  color: var(--warning);
 }
 
 .identity-list__head,
@@ -2295,6 +2379,18 @@ button:disabled {
   grid-template-columns: minmax(230px, 1fr) minmax(210px, 0.8fr) 80px auto;
   gap: 16px;
   padding: 0 14px;
+}
+
+.identity-page-actions {
+  gap: 6px;
+}
+
+.identity-review-state {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font: 650 8px var(--font-sans);
+  text-transform: uppercase;
 }
 
 .identity-list__head {
@@ -2588,6 +2684,41 @@ button:disabled {
   font-size: 9px;
 }
 
+.security-form label > small {
+  color: var(--text-tertiary);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.security-form__toggle {
+  display: flex !important;
+  grid-column: 1 / -1;
+  align-items: flex-start;
+  gap: 8px !important;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-inset);
+}
+
+.security-form__toggle input {
+  margin-top: 2px;
+  accent-color: var(--signal);
+}
+
+.security-form__toggle > span {
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+
+.security-form__toggle small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .security-form button {
   grid-column: 1 / -1;
   justify-self: end;
@@ -2681,6 +2812,52 @@ button:disabled {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.update-notice {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 65;
+  width: min(350px, calc(100vw - 36px));
+  padding: 17px;
+  border: 1px solid color-mix(in srgb, var(--signal) 32%, var(--border));
+  border-radius: 9px;
+  background: var(--surface-raised);
+  box-shadow: 0 22px 70px rgb(0 0 0 / 0.28);
+}
+
+.update-notice strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.update-notice p {
+  margin: 7px 0 13px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.update-notice__close {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.update-notice__close:hover {
+  background: var(--surface-inset);
+  color: var(--text-primary);
 }
 
 /* Shadcn Dashboard shell, adapted for Aletheia. */

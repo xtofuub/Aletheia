@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5 - 2026-07-28
+
+- Made resource-protection settings save atomically and refresh immediately, added a disabled inactivity-lock option, and expanded the real per-import memory budget to 4 GiB.
+- Connected the worker limit to Tantivy writer threads, connected the memory limit to writer and batch budgets, and prevented competing imports from fighting over one local index.
+- Added resumable cancelled and interrupted imports with persisted plans, source validation, plain-file byte seeking, compressed-file replay protection, and duplicate-safe checkpoints.
+- Recover stale queued, running, paused, and cancelling jobs on startup so datasets no longer remain incorrectly marked as indexing after the app or computer stops.
+- Keep dataset record totals current during indexing so dashboard counts and the index-growth chart update while work is running.
+- Added optional GitHub release checks and an in-app update notification without sending dataset paths, names, queries, or record information.
+- Added 25, 50, 100, and 200-row search pages with visible page counts, ranges, navigation, consistent source-location typography, and surfaced search errors.
+- Fixed exact quoted-value handling and made exact bare-domain lookup work through Domain or URL filters while using authoritative linked-record counts.
+- Added masked field contents to domain record drilldowns so each source line shows useful evidence instead of only a line number.
+- Added a bounded, idempotent identity rebuild for already indexed records, clearer member inspection, and removal of empty identity groups.
+- Added regression coverage for cancelled-import resume, masked domain evidence, identity rebuilding, search pagination, and the updated review workflow.
+
 ## 0.1.4 - 2026-07-28
 
 - Fixed exact domain searches so a bare domain, `domain:` query, or Domain field filter resolves domains extracted from both URL and domain fields.

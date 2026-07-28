@@ -2,7 +2,7 @@
 
 ## Trust boundary
 
-Aletheia is a local desktop application. Dataset contents, paths, queries, indexes, identity links, notes, and exports are processed on the user's computer. Core data workflows contain no outbound network client or credential-testing capability.
+Aletheia is a local desktop application. Dataset contents, paths, queries, indexes, identity links, notes, and exports are processed on the user's computer. Core data workflows contain no outbound network client or credential-testing capability. The optional update checker is restricted to the official Aletheia GitHub Releases endpoint and sends no workspace information.
 
 ## Source protection
 
@@ -31,6 +31,8 @@ Aletheia is a local desktop application. Dataset contents, paths, queries, index
 Passwords, password hashes, and salts are replaced with `[REDACTED]` plus a one-way BLAKE3 comparison fingerprint before storage. They never enter the general Tantivy index or redacted export. Email local parts and phone values are masked in result views. Address and date-of-birth fields are excluded or redacted by strict export defaults.
 
 Logs and user-facing failures contain operation categories, not raw records.
+
+Domain line previews use the same masking rules as search results. Identity rebuilding reads only already indexed local fields and remains bounded to 10,000-row transactions.
 
 ## Reporting
 

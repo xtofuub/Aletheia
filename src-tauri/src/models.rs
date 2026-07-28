@@ -290,6 +290,7 @@ pub struct DomainRecordSummary {
     pub source_file: String,
     pub source_location: String,
     pub parser: String,
+    pub fields: Vec<SearchField>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

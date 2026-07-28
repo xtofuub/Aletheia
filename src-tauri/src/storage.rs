@@ -17,6 +17,7 @@ const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_V2: &str = include_str!("../migrations/0002_search_history.sql");
 const MIGRATION_V3: &str = include_str!("../migrations/0003_import_performance.sql");
 const MIGRATION_V4: &str = include_str!("../migrations/0004_record_domains.sql");
+const MIGRATION_V5: &str = include_str!("../migrations/0005_resumable_imports.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -86,6 +87,7 @@ impl AppState {
         let storage_root =
             read_locator(&app_data_dir)?.unwrap_or_else(|| app_data_dir.join("workspace"));
         let database = open_database(&storage_root)?;
+        recover_interrupted_imports(&database)?;
 
         Ok(Self {
             database: Arc::new(Mutex::new(database)),
@@ -112,6 +114,7 @@ impl AppState {
 
         let normalized = normalize_path(root)?;
         let next_database = open_database(&normalized)?;
+        recover_interrupted_imports(&next_database)?;
 
         write_locator(&self.app_data_dir, &normalized)?;
 
@@ -195,7 +198,57 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 5 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V5)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
+    Ok(())
+}
+
+fn recover_interrupted_imports(connection: &Connection) -> Result<(), StorageError> {
+    connection.execute_batch(
+        "UPDATE datasets
+         SET status = CASE
+           WHEN id IN (
+             SELECT dataset_id FROM import_jobs WHERE status = 'cancelling'
+           ) THEN 'cancelled'
+           ELSE 'interrupted'
+         END,
+         record_count = (
+           SELECT COUNT(*) FROM records r WHERE r.dataset_id = datasets.id
+         ),
+         warning_count = COALESCE((
+           SELECT MAX(invalid_records) FROM import_jobs j
+           WHERE j.dataset_id = datasets.id
+         ), warning_count),
+         last_indexed_at = COALESCE(last_indexed_at, CURRENT_TIMESTAMP)
+         WHERE id IN (
+           SELECT dataset_id FROM import_jobs
+           WHERE status IN ('queued', 'running', 'paused', 'cancelling')
+         );
+
+         UPDATE source_files
+         SET index_status = 'pending'
+         WHERE index_status = 'indexing'
+           AND dataset_id IN (
+             SELECT dataset_id FROM import_jobs
+             WHERE status IN ('queued', 'running', 'paused', 'cancelling')
+           );
+
+         UPDATE import_jobs
+         SET status = CASE
+           WHEN status = 'cancelling' THEN 'cancelled'
+           ELSE 'interrupted'
+         END,
+         finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+         WHERE status IN ('queued', 'running', 'paused', 'cancelling');",
+    )?;
     Ok(())
 }
 
@@ -208,6 +261,7 @@ fn seed_defaults(connection: &Connection) -> Result<(), StorageError> {
         ("inactivity_lock_minutes", "15"),
         ("worker_limit", "2"),
         ("memory_limit_mb", "512"),
+        ("automatic_update_checks", "true"),
     ];
     for (key, value_json) in defaults {
         connection.execute(
@@ -247,7 +301,7 @@ fn normalize_path(path: &Path) -> Result<PathBuf, StorageError> {
 mod tests {
     use tempfile::tempdir;
 
-    use super::open_database;
+    use super::{open_database, recover_interrupted_imports};
 
     #[test]
     fn migration_creates_foundation_tables_and_defaults() {
@@ -281,5 +335,65 @@ mod tests {
             )
             .expect("theme setting");
         assert_eq!(theme, "\"light\"");
+    }
+
+    #[test]
+    fn startup_recovery_marks_orphaned_imports_and_restores_record_totals() {
+        let directory = tempdir().expect("temporary directory");
+        let connection = open_database(directory.path()).expect("database opens");
+        connection
+            .execute_batch(
+                "INSERT INTO datasets(
+                   id, name, status, parser_version, record_count, file_count
+                 ) VALUES ('dataset-recovery', 'Synthetic', 'indexing', 'test', 0, 1);
+                 INSERT INTO source_files(
+                   id, dataset_id, absolute_path, relative_path, file_size,
+                   format, index_status
+                 ) VALUES (
+                   'file-recovery', 'dataset-recovery',
+                   'C:\\Synthetic\\records.csv', 'records.csv', 128,
+                   'csv', 'indexing'
+                 );
+                 INSERT INTO import_jobs(
+                   id, dataset_id, status, records_indexed
+                 ) VALUES (
+                   'job-recovery', 'dataset-recovery', 'running', 1
+                 );
+                 INSERT INTO records(
+                   id, dataset_id, source_file_id, source_location,
+                   record_fingerprint, parser
+                 ) VALUES (
+                   'record-recovery', 'dataset-recovery', 'file-recovery',
+                   'line 2', 'synthetic', 'test'
+                 );",
+            )
+            .expect("orphaned import state");
+
+        recover_interrupted_imports(&connection).expect("recovery");
+        let dataset: (String, i64) = connection
+            .query_row(
+                "SELECT status, record_count FROM datasets
+                 WHERE id = 'dataset-recovery'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("dataset");
+        let job: String = connection
+            .query_row(
+                "SELECT status FROM import_jobs WHERE id = 'job-recovery'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("job");
+        let file: String = connection
+            .query_row(
+                "SELECT index_status FROM source_files WHERE id = 'file-recovery'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("source");
+        assert_eq!(dataset, ("interrupted".to_string(), 1));
+        assert_eq!(job, "interrupted");
+        assert_eq!(file, "pending");
     }
 }

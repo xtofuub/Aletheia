@@ -8,7 +8,7 @@
 - **Contains** performs a bounded literal substring match over complete safe indexed values and requires at least two characters.
 - **Prefix** matches safe indexed values beginning with the query.
 
-Queries are limited to 512 characters and result pages to 200 records.
+Queries are limited to 512 characters. Choose 25, 50, 100, or 200 records per page; page number, result range, and navigation remain visible above and below the scrollable result list.
 
 The field selector applies the same structured prefix internally, so choosing
 **Domain** with `example.com` is equivalent to `domain:example.com`.
@@ -31,4 +31,4 @@ Password, password-hash, and salt fields cannot be searched. Regex and fuzzy sec
 
 ## Results
 
-Every result includes dataset, source file, source location, parser, match reason, and masked fields. Select explicit records to export them through the strict redaction pipeline. Saved views keep the query and filters only in local SQLite.
+Every result includes dataset, source file, consistently formatted source location, parser, match reason, and masked fields. Search failures are shown instead of being presented as empty results. Select explicit records to export them through the strict redaction pipeline. Saved views keep the query and filters only in local SQLite.

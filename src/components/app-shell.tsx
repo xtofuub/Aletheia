@@ -1,15 +1,22 @@
 import { useEffect, useState } from "react";
 import {
+  ArrowUpRight,
   Database,
   Keyboard,
   LockKeyhole,
   Search,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { Outlet, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 
-import { getSettings, getSystemStatus } from "../lib/desktop";
+import {
+  checkForUpdates,
+  getSettings,
+  getSystemStatus,
+  openReleasePage,
+} from "../lib/desktop";
 import { formatBytes } from "../lib/utils";
 import { CommandPalette } from "./command-palette";
 import { AppSidebar } from "./shadcn-dashboard/blocks/sidebar/sidebar-01/app-sidebar";
@@ -21,6 +28,9 @@ import appIcon from "../assets/app-icon.svg";
 export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [locked, setLocked] = useState(false);
+  const [dismissedUpdate, setDismissedUpdate] = useState(() =>
+    window.localStorage.getItem("aletheia.dismissed-update"),
+  );
   const navigate = useNavigate();
   const status = useQuery({
     queryKey: ["system-status"],
@@ -31,9 +41,35 @@ export function AppShell() {
     queryKey: ["settings"],
     queryFn: getSettings,
   });
+  const update = useQuery({
+    queryKey: ["update-check"],
+    queryFn: checkForUpdates,
+    enabled: settings.data?.automaticUpdateChecks === true,
+    retry: false,
+    staleTime: 24 * 60 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const availableUpdate =
+    update.data?.updateAvailable &&
+    update.data.latestVersion !== dismissedUpdate
+      ? update.data
+      : null;
+
+  function dismissUpdate() {
+    if (!availableUpdate) return;
+    window.localStorage.setItem(
+      "aletheia.dismissed-update",
+      availableUpdate.latestVersion,
+    );
+    setDismissedUpdate(availableUpdate.latestVersion);
+  }
 
   useEffect(() => {
     if (!settings.data) return;
+    if (settings.data.inactivityLockMinutes === 0) {
+      return;
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const reset = () => {
       if (timer) clearTimeout(timer);
@@ -110,7 +146,7 @@ export function AppShell() {
             <div className="dashboard-topbar__right">
               <div className="topbar-status" title="No data is transmitted">
                 <ShieldCheck aria-hidden="true" />
-                <span>Offline</span>
+                <span>Data local</span>
               </div>
               <div className="topbar-index" title="Local index storage">
                 <Database aria-hidden="true" />
@@ -141,6 +177,31 @@ export function AppShell() {
         </SidebarInset>
 
         <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        {availableUpdate ? (
+          <aside className="update-notice" role="status" aria-live="polite">
+            <button
+              className="update-notice__close"
+              aria-label="Dismiss update"
+              onClick={dismissUpdate}
+            >
+              <X size={14} />
+            </button>
+            <span className="eyebrow">UPDATE AVAILABLE</span>
+            <strong>Aletheia {availableUpdate.latestVersion}</strong>
+            <p>
+              A newer Windows release is ready. Your local workspace is not
+              included in this check.
+            </p>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => void openReleasePage(availableUpdate.releaseUrl)}
+            >
+              View release
+              <ArrowUpRight size={14} />
+            </Button>
+          </aside>
+        ) : null}
         {locked ? (
           <div className="privacy-lock" role="dialog" aria-modal="true">
             <div>

@@ -467,7 +467,7 @@ function MaskedPreview({ file }: { file: FileInspection }) {
           <tbody>
             {file.preview.slice(0, 6).map((row) => (
               <tr key={row.sourceLocation}>
-                <td>{row.sourceLocation}</td>
+                <td className="source-location">{row.sourceLocation}</td>
                 {row.values.map((value, index) => (
                   <td key={`${row.sourceLocation}-${index}`}>
                     <code>{value || "empty"}</code>

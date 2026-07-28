@@ -184,7 +184,11 @@ function IndexChartTooltip({ active, payload, label }: ChartTooltipProps) {
 export function OverviewPage() {
   const navigate = useNavigate();
   const reducedMotion = useReducedMotion();
-  const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
+  const datasets = useQuery({
+    queryKey: ["datasets"],
+    queryFn: listDatasets,
+    refetchInterval: 2_000,
+  });
   const overviewStats = useQuery({
     queryKey: ["overview-stats"],
     queryFn: getOverviewStats,
@@ -374,7 +378,7 @@ export function OverviewPage() {
                       type="linear"
                       stroke="var(--foreground)"
                       strokeWidth={1.7}
-                      dot={false}
+                      dot={{ r: 2.5, strokeWidth: 0 }}
                       activeDot={{ r: 4, strokeWidth: 0 }}
                       isAnimationActive={!reducedMotion}
                       animationDuration={700}
@@ -386,7 +390,7 @@ export function OverviewPage() {
                       stroke="var(--muted-foreground)"
                       strokeWidth={1.4}
                       strokeDasharray="4 4"
-                      dot={false}
+                      dot={{ r: 2, strokeWidth: 0 }}
                       activeDot={{ r: 4, strokeWidth: 0 }}
                       isAnimationActive={!reducedMotion}
                       animationBegin={120}
@@ -493,7 +497,7 @@ export function OverviewPage() {
           <article>
             <div>
               <span>Privacy posture</span>
-              <strong>Offline</strong>
+              <strong>Data workflows offline</strong>
               <small>No data transmitted</small>
             </div>
             <span className="kpi-icon kpi-icon--safe">
@@ -578,7 +582,7 @@ export function OverviewPage() {
       </section>
 
       <footer className="overview-footer">
-        <span>Aletheia v0.1.4</span>
+        <span>Aletheia v0.1.5</span>
         <span>Local-first investigation</span>
         <span>
           <Search aria-hidden="true" />

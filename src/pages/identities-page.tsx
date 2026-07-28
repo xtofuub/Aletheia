@@ -5,10 +5,12 @@ import {
   GitMerge,
   IdCard,
   LoaderCircle,
+  RefreshCw,
   RotateCcw,
   Scissors,
   ShieldQuestion,
   Unlink,
+  Users,
   XCircle,
 } from "lucide-react";
 
@@ -19,6 +21,7 @@ import {
   applyIdentityAction,
   listIdentities,
   listIdentityMembers,
+  rebuildIdentities,
   type IdentityActionInput,
 } from "../lib/desktop";
 
@@ -31,6 +34,7 @@ export function IdentitiesPage() {
   const [selectedMembers, setSelectedMembers] = useState<Set<string>>(
     new Set(),
   );
+  const [notice, setNotice] = useState("");
   const identities = useQuery({
     queryKey: ["identities"],
     queryFn: listIdentities,
@@ -44,6 +48,25 @@ export function IdentitiesPage() {
       setOpenGroup(null);
       setSelectedMembers(new Set());
       await queryClient.invalidateQueries({ queryKey: ["identities"] });
+    },
+  });
+  const rebuild = useMutation({
+    mutationFn: rebuildIdentities,
+    onSuccess: async (count) => {
+      setNotice(
+        `${count.toLocaleString()} deterministic identity groups are ready`,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["identities"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview-stats"] }),
+      ]);
+    },
+    onError: (error) => {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Identity groups could not be rebuilt",
+      );
     },
   });
   const members = useQuery({
@@ -81,19 +104,35 @@ export function IdentitiesPage() {
         description="Review automatically created, deterministic identity links."
         meta="AUTOMATIC + REVIEWABLE"
         action={
-          lastEvent ? (
+          <div className="identity-page-actions">
             <Button
               size="sm"
-              variant="secondary"
-              disabled={action.isPending}
-              onClick={() => apply("undo", lastEvent)}
+              variant="outline"
+              disabled={rebuild.isPending}
+              onClick={() => rebuild.mutate()}
             >
-              <RotateCcw size={14} />
-              Undo last review
+              {rebuild.isPending ? (
+                <LoaderCircle className="animate-spin" size={14} />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              {rebuild.isPending ? "Building groups" : "Rebuild groups"}
             </Button>
-          ) : undefined
+            {lastEvent ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={action.isPending}
+                onClick={() => apply("undo", lastEvent)}
+              >
+                <RotateCcw size={14} />
+                Undo last review
+              </Button>
+            ) : null}
+          </div>
         }
       />
+      {notice ? <p className="notice-line">{notice}</p> : null}
       <section className="identity-explainer">
         <ShieldQuestion size={17} />
         <div>
@@ -140,6 +179,9 @@ export function IdentitiesPage() {
               </div>
               <span className="font-mono">
                 {identity.memberCount.toLocaleString()}
+                <small className="identity-review-state">
+                  {identity.userStatus}
+                </small>
               </span>
               <div className="identity-actions">
                 <Button
@@ -180,8 +222,8 @@ export function IdentitiesPage() {
                     setSelectedMembers(new Set());
                   }}
                 >
-                  <Scissors size={14} />
-                  Split
+                  <Users size={14} />
+                  Members
                 </Button>
               </div>
               {mergeSource === identity.id ? (
@@ -256,7 +298,7 @@ export function IdentitiesPage() {
                         />
                         <span>
                           <strong>{member.datasetName}</strong>
-                          <small className="font-mono">
+                          <small className="source-location">
                             {member.sourceFile} · {member.sourceLocation}
                           </small>
                         </span>
@@ -286,6 +328,20 @@ export function IdentitiesPage() {
           title="No identity groups"
           description="Exact normalized emails, phones, and service-scoped identifiers will form explainable groups after indexing."
           detail="A username alone never creates an automatic merge."
+          action={
+            <Button
+              variant="primary"
+              disabled={rebuild.isPending}
+              onClick={() => rebuild.mutate()}
+            >
+              {rebuild.isPending ? (
+                <LoaderCircle className="animate-spin" size={14} />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              Build from indexed records
+            </Button>
+          }
         />
       )}
       {action.isError ? (

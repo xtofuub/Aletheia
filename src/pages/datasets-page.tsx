@@ -21,6 +21,7 @@ import {
   listDatasets,
   listenImportProgress,
   pauseImport,
+  resumeDatasetImport,
   resumeImport,
   startImport,
   type ImportPlan,
@@ -29,7 +30,7 @@ import {
 import { formatBytes } from "../lib/utils";
 
 function isTerminalImport(status: ImportProgress["status"]) {
-  return ["completed", "cancelled", "failed"].includes(status);
+  return ["completed", "cancelled", "interrupted", "failed"].includes(status);
 }
 
 export function DatasetsPage() {
@@ -112,6 +113,42 @@ export function DatasetsPage() {
           }
         : current,
     );
+  }
+
+  async function continueDataset(
+    dataset: Awaited<ReturnType<typeof listDatasets>>[number],
+  ) {
+    try {
+      const result = await resumeDatasetImport(dataset.id);
+      setActiveJob({
+        ...result,
+        status: "queued",
+        currentFile: null,
+        bytesRead: 0,
+        totalBytes: dataset.totalBytes,
+        recordsProcessed: dataset.recordCount,
+        recordsIndexed: dataset.recordCount,
+        invalidRecords: dataset.warningCount,
+        duplicateRecords: 0,
+        message: "Resume queued from the last stored record",
+      });
+      await queryClient.invalidateQueries({ queryKey: ["datasets"] });
+    } catch (error) {
+      setActiveJob({
+        jobId: "",
+        datasetId: dataset.id,
+        status: "failed",
+        currentFile: null,
+        bytesRead: 0,
+        totalBytes: dataset.totalBytes,
+        recordsProcessed: dataset.recordCount,
+        recordsIndexed: dataset.recordCount,
+        invalidRecords: dataset.warningCount,
+        duplicateRecords: 0,
+        message:
+          error instanceof Error ? error.message : "Dataset could not resume",
+      });
+    }
   }
 
   const progress = activeJob?.totalBytes
@@ -228,13 +265,30 @@ export function DatasetsPage() {
                   <small className="font-mono">{dataset.id.slice(0, 8)}</small>
                 </span>
               </div>
-              <span className="status-label" data-status={dataset.status}>
-                {dataset.status === "ready" ? (
-                  <ShieldCheck size={13} />
-                ) : (
-                  <LoaderCircle size={13} />
-                )}
-                {dataset.status}
+              <span className="dataset-status-cell">
+                <span className="status-label" data-status={dataset.status}>
+                  {dataset.status === "ready" ? (
+                    <ShieldCheck size={13} />
+                  ) : dataset.status === "indexing" ||
+                    dataset.status === "queued" ? (
+                    <LoaderCircle className="animate-spin" size={13} />
+                  ) : (
+                    <CircleStop size={13} />
+                  )}
+                  {dataset.status}
+                </span>
+                {["cancelled", "interrupted", "failed"].includes(
+                  dataset.status,
+                ) ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void continueDataset(dataset)}
+                  >
+                    <Play size={13} />
+                    Resume
+                  </Button>
+                ) : null}
               </span>
               <span className="font-mono">
                 {dataset.recordCount.toLocaleString()}
