@@ -83,6 +83,9 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Safely clear index, cache, temporary data, history, or all generated state
 - [x] Add clipboard, inactivity lock, memory, worker, and network policy settings
 - [x] Add path, archive/discovery, line, decompression, query, and regex protections
+- [x] Bound oversized-line draining, record batches, and Tantivy writer memory
+- [x] Commit safe index/checkpoint boundaries during multi-hundred-gigabyte imports
+- [x] Materialize identity groups incrementally without dataset-sized memory
 - [x] Complete responsive, accessibility, keyboard, and reduced-motion review
 - [x] Add performance benchmarks and smoke targets
 - [x] Complete the required documentation set and synthetic screenshots

@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
     fs::{self, File},
     io::{BufRead, BufReader, Read},
+    mem,
     path::Path,
     sync::{Arc, Mutex},
     thread,
@@ -34,6 +34,9 @@ const MAX_JSON_DEPTH: usize = 32;
 const MAX_DECOMPRESSION_RATIO: u64 = 100;
 const MIN_DECOMPRESSION_LIMIT: u64 = 64 * 1024 * 1024;
 const BATCH_RECORDS: usize = 1_000;
+const MIN_BATCH_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
+const INDEX_CHECKPOINT_RECORDS: u64 = 100_000;
 const PARSER_VERSION: &str = "aletheia-parser/1";
 
 #[derive(Clone)]
@@ -60,12 +63,97 @@ struct ProcessedRecord {
     domains: Vec<(NormalizedDomain, Option<NormalizedUrl>)>,
 }
 
+impl ProcessedRecord {
+    fn estimated_memory_bytes(&self) -> usize {
+        let field_bytes = self.fields.iter().fold(0_usize, |total, field| {
+            total.saturating_add(
+                mem::size_of::<ProcessedField>()
+                    .saturating_add(field.name.len())
+                    .saturating_add(field.original.len())
+                    .saturating_add(field.normalized.len()),
+            )
+        });
+        let domain_bytes = self.domains.iter().fold(0_usize, |total, (domain, url)| {
+            let domain_size = domain
+                .hostname
+                .len()
+                .saturating_add(domain.registrable_domain.len())
+                .saturating_add(domain.public_suffix.as_ref().map_or(0, String::len));
+            let url_size = url.as_ref().map_or(0, |url| {
+                url.normalized_url
+                    .len()
+                    .saturating_add(url.scheme.len())
+                    .saturating_add(url.hostname.len())
+                    .saturating_add(url.path.len())
+                    .saturating_add(url.query_keys.iter().map(String::len).sum::<usize>())
+            });
+            total.saturating_add(domain_size).saturating_add(url_size)
+        });
+        mem::size_of::<Self>()
+            .saturating_add(self.id.len())
+            .saturating_add(self.source_location.len())
+            .saturating_add(self.fingerprint.len())
+            .saturating_add(field_bytes)
+            .saturating_add(domain_bytes)
+    }
+}
+
 struct Counters {
     bytes_read: u64,
     records_processed: u64,
     records_indexed: u64,
     invalid_records: u64,
     duplicate_records: u64,
+}
+
+struct CountingReader<R> {
+    inner: R,
+    bytes_read: u64,
+}
+
+impl<R> CountingReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            bytes_read: 0,
+        }
+    }
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buffer)?;
+        self.bytes_read = self.bytes_read.saturating_add(count as u64);
+        Ok(count)
+    }
+}
+
+enum SourceReader {
+    Plain(CountingReader<File>),
+    Gzip(GzDecoder<CountingReader<File>>),
+}
+
+impl SourceReader {
+    fn source_bytes_read(&self) -> u64 {
+        match self {
+            Self::Plain(reader) => reader.bytes_read,
+            Self::Gzip(reader) => reader.get_ref().bytes_read,
+        }
+    }
+}
+
+impl Read for SourceReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(reader) => reader.read(buffer),
+            Self::Gzip(reader) => reader.read(buffer),
+        }
+    }
+}
+
+struct BoundedLineRead {
+    bytes_consumed: u64,
+    exceeded_limit: bool,
 }
 
 #[tauri::command]
@@ -87,7 +175,7 @@ pub async fn start_import(
     }
     let dataset_id = Uuid::new_v4().to_string();
     let job_id = Uuid::new_v4().to_string();
-    let total_bytes = plan.files.iter().map(|file| file.file_size).sum::<u64>();
+    let total_bytes = total_source_bytes(&plan);
     let worker_files = prepare_database_rows(&state.database, &dataset_id, &job_id, &plan)?;
     let control = Arc::new(JobControl::default());
     state
@@ -227,6 +315,12 @@ fn validate_plan(plan: &ImportPlan) -> Result<(), String> {
     Ok(())
 }
 
+fn total_source_bytes(plan: &ImportPlan) -> u64 {
+    plan.files
+        .iter()
+        .fold(0_u64, |total, file| total.saturating_add(file.file_size))
+}
+
 fn import_resource_limits(database: &Arc<Mutex<Connection>>) -> Result<(u32, u32), String> {
     let connection = database
         .lock()
@@ -248,6 +342,44 @@ fn import_resource_limits(database: &Arc<Mutex<Connection>>) -> Result<(u32, u32
     ))
 }
 
+fn persist_checkpoint(
+    database: &Arc<Mutex<Connection>>,
+    job_id: &str,
+    file_id: &str,
+    counters: &Counters,
+) -> Result<(), String> {
+    let checkpoint = serde_json::json!({
+        "sourceFileId": file_id,
+        "sourceBytesRead": counters.bytes_read,
+        "recordsProcessed": counters.records_processed,
+        "recordsIndexed": counters.records_indexed,
+        "parserVersion": PARSER_VERSION,
+    });
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    connection
+        .execute(
+            "UPDATE import_jobs SET current_file_id = ?2, bytes_read = ?3,
+                    records_processed = ?4, records_indexed = ?5,
+                    invalid_records = ?6, duplicate_records = ?7,
+                    checkpoint_json = ?8
+             WHERE id = ?1",
+            params![
+                job_id,
+                file_id,
+                counters.bytes_read as i64,
+                counters.records_processed as i64,
+                counters.records_indexed as i64,
+                counters.invalid_records as i64,
+                counters.duplicate_records as i64,
+                checkpoint.to_string(),
+            ],
+        )
+        .map_err(sanitized)?;
+    Ok(())
+}
+
 fn prepare_database_rows(
     database: &Arc<Mutex<Connection>>,
     dataset_id: &str,
@@ -258,7 +390,7 @@ fn prepare_database_rows(
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
     let transaction = connection.transaction().map_err(sanitized)?;
-    let total_bytes = plan.files.iter().map(|file| file.file_size).sum::<u64>();
+    let total_bytes = total_source_bytes(plan);
     transaction
         .execute(
             "INSERT INTO datasets(
@@ -356,6 +488,7 @@ fn run_import(
     let search = SearchIndex::open_or_create(storage_root)?;
     let writer_memory =
         ((memory_limit_mb as usize * 1024 * 1024) / 4).clamp(15_000_000, 256_000_000);
+    let batch_byte_limit = batch_byte_limit(memory_limit_mb);
     let mut writer = search.writer_with_memory(writer_memory)?;
     let mut counters = Counters {
         bytes_read: 0,
@@ -365,6 +498,7 @@ fn run_import(
         duplicate_records: 0,
     };
     let mut last_emit = Instant::now();
+    let mut last_index_checkpoint = 0_u64;
 
     for file in files {
         if control.is_cancelled() {
@@ -373,9 +507,11 @@ fn run_import(
         }
         mark_file(database, job_id, &file.id, "indexing")?;
         let mut batch = Vec::with_capacity(BATCH_RECORDS);
+        let mut batch_bytes = 0_usize;
         let stream_result = stream_file(&file, plan, control, &mut counters, |record, counters| {
+            batch_bytes = batch_bytes.saturating_add(record.estimated_memory_bytes());
             batch.push(record);
-            if batch.len() >= BATCH_RECORDS {
+            if batch.len() >= BATCH_RECORDS || batch_bytes >= batch_byte_limit {
                 flush_batch(
                     database,
                     &mut writer,
@@ -386,6 +522,16 @@ fn run_import(
                     counters,
                     &mut batch,
                 )?;
+                batch_bytes = 0;
+                if counters
+                    .records_indexed
+                    .saturating_sub(last_index_checkpoint)
+                    >= INDEX_CHECKPOINT_RECORDS
+                {
+                    writer.commit().map_err(sanitized)?;
+                    persist_checkpoint(database, job_id, &file.id, counters)?;
+                    last_index_checkpoint = counters.records_indexed;
+                }
                 if last_emit.elapsed() >= Duration::from_millis(150) {
                     emit_progress(
                         app,
@@ -417,6 +563,9 @@ fn run_import(
             &mut counters,
             &mut batch,
         )?;
+        writer.commit().map_err(sanitized)?;
+        persist_checkpoint(database, job_id, &file.id, &counters)?;
+        last_index_checkpoint = counters.records_indexed;
         mark_file(database, job_id, &file.id, "indexed")?;
     }
 
@@ -425,12 +574,6 @@ fn run_import(
         return finish_cancelled(app, database, job_id, dataset_id, total_bytes, &counters);
     }
     writer.commit().map_err(sanitized)?;
-    if plan.options.group_identities {
-        let connection = database
-            .lock()
-            .map_err(|_| "metadata database is unavailable".to_string())?;
-        materialize_identities(&connection)?;
-    }
     let connection = database
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
@@ -488,34 +631,36 @@ where
 {
     let source = File::open(&file.inspection.absolute_path)
         .map_err(|_| "source file could not be opened read-only".to_string())?;
-    let reader: Box<dyn Read> = if file.inspection.compressed {
-        Box::new(GzDecoder::new(source))
+    let source_reader = if file.inspection.compressed {
+        SourceReader::Gzip(GzDecoder::new(CountingReader::new(source)))
     } else {
-        Box::new(source)
+        SourceReader::Plain(CountingReader::new(source))
     };
-    let mut reader = BufReader::with_capacity(64 * 1024, reader);
+    let mut reader = BufReader::with_capacity(64 * 1024, source_reader);
     let encoding = Encoding::for_label(file.inspection.encoding.as_bytes()).unwrap_or(UTF_8);
-    let decompression_limit =
-        (file.inspection.file_size * MAX_DECOMPRESSION_RATIO).max(MIN_DECOMPRESSION_LIMIT);
+    let decompression_limit = decompression_limit(file.inspection.file_size);
     let mut line = Vec::with_capacity(4096);
     let mut line_number = 0_u64;
     let mut decompressed_bytes = 0_u64;
+    let mut accounted_source_bytes = 0_u64;
     loop {
         wait_if_paused(control)?;
-        line.clear();
-        let count = reader
-            .read_until(b'\n', &mut line)
-            .map_err(|_| "source read failed".to_string())?;
-        if count == 0 {
+        let line_start = decompressed_bytes;
+        let bounded = read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES, control)?;
+        let source_bytes = reader.get_ref().source_bytes_read();
+        counters.bytes_read = counters
+            .bytes_read
+            .saturating_add(source_bytes.saturating_sub(accounted_source_bytes));
+        accounted_source_bytes = source_bytes;
+        if bounded.bytes_consumed == 0 {
             break;
         }
         line_number += 1;
-        decompressed_bytes += count as u64;
-        counters.bytes_read = counters.bytes_read.saturating_add(count as u64);
+        decompressed_bytes = decompressed_bytes.saturating_add(bounded.bytes_consumed);
         if file.inspection.compressed && decompressed_bytes > decompression_limit {
             return Err("compressed source exceeded the safe decompression limit".to_string());
         }
-        if line.len() > MAX_LINE_BYTES {
+        if bounded.exceeded_limit {
             counters.invalid_records += 1;
             if plan.options.stop_on_severe_error {
                 return Err("a source line exceeded the 1 MiB safety limit".to_string());
@@ -546,18 +691,72 @@ where
                 return Err("source record did not match the approved mapping".to_string());
             }
         };
-        let byte_offset = counters.bytes_read.saturating_sub(count as u64);
         let record = process_record(
             values,
             &file.inspection.mappings,
             format!("line {line_number}"),
-            plan.options.store_offsets.then_some(byte_offset),
+            plan.options.store_offsets.then_some(line_start),
             plan.options.extract_domains,
             plan.options.extract_urls,
         )?;
         on_record(record, counters)?;
     }
     Ok(())
+}
+
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut Vec<u8>,
+    limit: usize,
+    control: &JobControl,
+) -> Result<BoundedLineRead, String> {
+    line.clear();
+    let retained_limit = limit.saturating_add(2);
+    let mut bytes_consumed = 0_u64;
+    let mut discarded = false;
+
+    loop {
+        wait_if_paused(control)?;
+        let available = reader
+            .fill_buf()
+            .map_err(|_| "source read failed".to_string())?;
+        if available.is_empty() {
+            break;
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consume = newline.map_or(available.len(), |index| index + 1);
+        bytes_consumed = bytes_consumed.saturating_add(consume as u64);
+
+        if line.len() < retained_limit {
+            let copy = consume.min(retained_limit - line.len());
+            line.extend_from_slice(&available[..copy]);
+            discarded |= copy < consume;
+        } else {
+            discarded = true;
+        }
+        reader.consume(consume);
+        if newline.is_some() {
+            break;
+        }
+    }
+
+    while matches!(line.last(), Some(b'\n' | b'\r')) {
+        line.pop();
+    }
+    Ok(BoundedLineRead {
+        bytes_consumed,
+        exceeded_limit: discarded || line.len() > limit,
+    })
+}
+
+fn decompression_limit(file_size: u64) -> u64 {
+    file_size
+        .saturating_mul(MAX_DECOMPRESSION_RATIO)
+        .max(MIN_DECOMPRESSION_LIMIT)
+}
+
+fn batch_byte_limit(memory_limit_mb: u32) -> usize {
+    ((memory_limit_mb as usize * 1024 * 1024) / 16).clamp(MIN_BATCH_BYTES, MAX_BATCH_BYTES)
 }
 
 fn parse_values(text: &str, inspection: &FileInspection) -> Result<Vec<String>, ()> {
@@ -735,6 +934,15 @@ fn flush_batch(
                     ],
                 )
                 .map_err(sanitized)?;
+            if plan.options.group_identities {
+                store_identity(
+                    &transaction,
+                    &record.id,
+                    &file.id,
+                    field.field_type,
+                    &field.normalized,
+                )?;
+            }
             if !field.field_type.is_secret() && !field.normalized.is_empty() {
                 exact_values.push(field.normalized.clone());
                 exact_values.push(format!(
@@ -767,78 +975,60 @@ fn flush_batch(
     Ok(())
 }
 
-fn materialize_identities(connection: &Connection) -> Result<(), String> {
-    let mut groups: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
-    let mut statement = connection
-        .prepare(
-            "SELECT fv.field_type, fv.normalized_value, r.id, r.source_file_id
-             FROM field_values fv
-             JOIN records r ON r.id = fv.record_id
-             WHERE fv.field_type IN ('email', 'phone', 'user_id')
-               AND fv.normalized_value <> ''",
+fn store_identity(
+    connection: &Connection,
+    record_id: &str,
+    source_file_id: &str,
+    field_type: FieldType,
+    value: &str,
+) -> Result<(), String> {
+    if value.is_empty()
+        || !matches!(
+            field_type,
+            FieldType::Email | FieldType::Phone | FieldType::UserId
+        )
+    {
+        return Ok(());
+    }
+    let field_type_name = field_type.as_str();
+    let key = if field_type == FieldType::UserId {
+        format!("{source_file_id}\u{1f}{value}")
+    } else {
+        value.to_string()
+    };
+    let group_id = stable_id("identity", &format!("{field_type_name}\u{1f}{key}"));
+    let display = match field_type {
+        FieldType::Email => mask_email(value),
+        FieldType::Phone => mask_phone(value),
+        FieldType::UserId => "Service-scoped ID".to_string(),
+        _ => unreachable!(),
+    };
+    connection
+        .execute(
+            "INSERT INTO identity_groups(id, display_label, confidence_level)
+             VALUES (?1, ?2, 'high')
+             ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
+            params![group_id, display],
         )
         .map_err(sanitized)?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
+    let explanation = serde_json::json!({
+        "rule": format!("exact_normalized_{field_type_name}"),
+        "deterministic": true
+    });
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO identity_memberships(
+                identity_group_id, record_id, link_type, confidence_score,
+                explanation_json, user_status
+             ) VALUES (?1, ?2, ?3, 1.0, ?4, 'automatic')",
+            params![
+                group_id,
+                record_id,
+                format!("exact_{field_type_name}"),
+                explanation.to_string()
+            ],
+        )
         .map_err(sanitized)?;
-    for row in rows {
-        let (field_type, value, record_id, source_file_id) = row.map_err(sanitized)?;
-        let key = if field_type == "user_id" {
-            (field_type, format!("{source_file_id}\u{1f}{value}"))
-        } else {
-            (field_type, value)
-        };
-        groups
-            .entry(key)
-            .or_default()
-            .push((record_id, source_file_id));
-    }
-    drop(statement);
-
-    for ((field_type, key), members) in groups {
-        let group_id = stable_id("identity", &format!("{field_type}\u{1f}{key}"));
-        let display = match field_type.as_str() {
-            "email" => mask_email(&key),
-            "phone" => mask_phone(&key),
-            "user_id" => "Service-scoped ID".to_string(),
-            _ => "Deterministic identity".to_string(),
-        };
-        connection
-            .execute(
-                "INSERT INTO identity_groups(id, display_label, confidence_level)
-                 VALUES (?1, ?2, 'high')
-                 ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP",
-                params![group_id, display],
-            )
-            .map_err(sanitized)?;
-        for (record_id, _) in members {
-            let explanation = serde_json::json!({
-                "rule": format!("exact_normalized_{field_type}"),
-                "deterministic": true
-            });
-            connection
-                .execute(
-                    "INSERT OR IGNORE INTO identity_memberships(
-                        identity_group_id, record_id, link_type, confidence_score,
-                        explanation_json, user_status
-                     ) VALUES (?1, ?2, ?3, 1.0, ?4, 'automatic')",
-                    params![
-                        group_id,
-                        record_id,
-                        format!("exact_{field_type}"),
-                        explanation.to_string()
-                    ],
-                )
-                .map_err(sanitized)?;
-        }
-    }
     Ok(())
 }
 
@@ -1103,7 +1293,7 @@ fn sanitized(error: impl std::fmt::Display) -> String {
 mod tests {
     use std::{
         fs::File,
-        io,
+        io::{self, BufReader, Cursor, Read},
         sync::{Arc, Mutex},
     };
 
@@ -1111,7 +1301,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        JobControl, mask_email, normalize_value, prepare_database_rows, process_record, run_import,
+        INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES, batch_byte_limit,
+        decompression_limit, mask_email, normalize_value, prepare_database_rows, process_record,
+        read_bounded_line, run_import,
     };
     use crate::{
         detection::inspect_paths,
@@ -1119,6 +1311,42 @@ mod tests {
         search_index::SearchIndex,
         storage::open_database,
     };
+
+    struct RepeatingRecordReader {
+        pattern: Vec<u8>,
+        pattern_offset: usize,
+        remaining: u64,
+    }
+
+    impl RepeatingRecordReader {
+        fn new(total_bytes: u64) -> Self {
+            let mut pattern = vec![b'a'; 4095];
+            pattern.push(b'\n');
+            Self {
+                pattern,
+                pattern_offset: 0,
+                remaining: total_bytes,
+            }
+        }
+    }
+
+    impl Read for RepeatingRecordReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let requested = buffer.len().min(self.remaining as usize);
+            let mut written = 0;
+            while written < requested {
+                let available = self.pattern.len() - self.pattern_offset;
+                let copy = available.min(requested - written);
+                buffer[written..written + copy].copy_from_slice(
+                    &self.pattern[self.pattern_offset..self.pattern_offset + copy],
+                );
+                written += copy;
+                self.pattern_offset = (self.pattern_offset + copy) % self.pattern.len();
+            }
+            self.remaining = self.remaining.saturating_sub(written as u64);
+            Ok(written)
+        }
+    }
 
     #[test]
     fn secret_values_are_replaced_before_storage_and_indexing() {
@@ -1157,6 +1385,66 @@ mod tests {
     #[test]
     fn labels_are_masked() {
         assert_eq!(mask_email("person@example.com"), "p•••@example.com");
+    }
+
+    #[test]
+    fn oversized_lines_are_discarded_with_bounded_memory() {
+        let mut source = vec![b'x'; MAX_LINE_BYTES * 3];
+        source.extend_from_slice(b"\nnext-record\n");
+        let mut reader = BufReader::with_capacity(64 * 1024, Cursor::new(source));
+        let mut line = Vec::new();
+        let control = JobControl::default();
+
+        let oversized = read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES, &control)
+            .expect("oversized line");
+        assert!(oversized.exceeded_limit);
+        assert!(line.len() <= MAX_LINE_BYTES + 2);
+
+        let next = read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES, &control)
+            .expect("following line");
+        assert!(!next.exceeded_limit);
+        assert_eq!(line, b"next-record");
+    }
+
+    #[test]
+    fn resource_math_supports_hundreds_of_gibibytes_without_overflow() {
+        let three_hundred_gib = 300_u64 * 1024 * 1024 * 1024;
+        assert_eq!(
+            decompression_limit(three_hundred_gib),
+            three_hundred_gib * 100
+        );
+        assert_eq!(batch_byte_limit(256), 16 * 1024 * 1024);
+        assert_eq!(batch_byte_limit(8_192), 32 * 1024 * 1024);
+        assert_eq!(INDEX_CHECKPOINT_RECORDS, 100_000);
+    }
+
+    #[test]
+    #[ignore = "manual generated-stream soak test"]
+    fn generated_gibibyte_stream_stays_bounded() {
+        let gibibytes = std::env::var("ALETHEIA_SOAK_GIB")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1)
+            .clamp(1, 300);
+        let target_bytes = gibibytes * 1024 * 1024 * 1024;
+        let source = RepeatingRecordReader::new(target_bytes);
+        let mut reader = BufReader::with_capacity(64 * 1024, source);
+        let mut line = Vec::new();
+        let control = JobControl::default();
+        let mut consumed = 0_u64;
+        let mut max_retained = 0_usize;
+
+        while consumed < target_bytes {
+            let read = read_bounded_line(&mut reader, &mut line, MAX_LINE_BYTES, &control)
+                .expect("generated line");
+            assert!(!read.exceeded_limit);
+            consumed = consumed.saturating_add(read.bytes_consumed);
+            max_retained = max_retained.max(line.len());
+        }
+
+        assert_eq!(consumed, target_bytes);
+        assert!(max_retained <= 4095);
+        assert!(line.capacity() <= 8192);
     }
 
     #[test]
@@ -1232,6 +1520,12 @@ mod tests {
             )
             .expect("username links");
         assert_eq!(username_links, 0);
+        let identity_links: i64 = connection
+            .query_row("SELECT COUNT(*) FROM identity_memberships", [], |row| {
+                row.get(0)
+            })
+            .expect("identity links");
+        assert!(identity_links > 0);
         drop(connection);
 
         let search = SearchIndex::open_or_create(directory.path()).expect("index");
@@ -1316,7 +1610,7 @@ mod tests {
             .expect("compress fixture");
         encoder.finish().expect("finish gzip");
 
-        let inspection = inspect_paths(&[gzip_path]).expect("inspection");
+        let inspection = inspect_paths(std::slice::from_ref(&gzip_path)).expect("inspection");
         assert!(inspection.files[0].compressed);
         let plan = synthetic_plan(inspection.files);
         let database = Arc::new(Mutex::new(
@@ -1343,6 +1637,19 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM records", [], |row| row.get(0))
             .expect("record count");
         assert_eq!(count, 3);
+        let imported_bytes: i64 = database
+            .lock()
+            .expect("database")
+            .query_row(
+                "SELECT bytes_read FROM import_jobs WHERE id = 'job-gzip'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("source bytes");
+        assert_eq!(
+            imported_bytes as u64,
+            std::fs::metadata(gzip_path).expect("gzip metadata").len()
+        );
     }
 
     fn synthetic_plan(files: Vec<crate::models::FileInspection>) -> ImportPlan {

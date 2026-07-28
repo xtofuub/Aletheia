@@ -337,7 +337,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     metadataBytes: 0,
     indexBytes: 0,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.0",
+    appVersion: "0.1.1",
   };
 }
 

@@ -26,7 +26,7 @@ React renderer
   v
 Rust application state
   |-- commands: validate requests, authorize paths, shape responses
-  |-- jobs: cancellation tokens, pause gates, bounded channels
+  |-- jobs: cancellation tokens, pause gates, configured concurrency
   |-- import: detection, streaming parsers, normalization, fingerprints
   |-- storage: SQLite repositories and migrations
   |-- search: Tantivy writer, reader, query compiler
@@ -68,7 +68,9 @@ read-only file
   -> checkpoint and throttled progress event
 ```
 
-Backpressure is provided by bounded Tokio channels. Jobs expose running, paused, cancelled, completed, and failed states. Cancellation is checked between records and before durable batch commits. Parser errors are counted and sanitized; raw record values are never logged.
+Backpressure is provided by the synchronous parser-to-batch callback: the reader cannot advance while a bounded SQLite/Tantivy batch is being committed. Jobs expose running, paused, cancelled, completed, and failed states. Cancellation is checked between records and every 64 KiB while discarding an oversized record. Parser errors are counted and sanitized; raw record values are never logged.
+
+Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 32 MiB, and Tantivy receives at most 256 MiB. Tantivy and sanitized job checkpoints are committed every 100,000 records and at every file boundary. Identity groups are materialized incrementally inside each batch instead of accumulating the dataset in memory.
 
 Supported MVP inputs are TXT, CSV, TSV, JSONL, NDJSON, and GZIP-wrapped variants. Format detection uses a small byte sample, not the extension alone. The parser enforces maximum sample, line, field, and decompression sizes.
 
