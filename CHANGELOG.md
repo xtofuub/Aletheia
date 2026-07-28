@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 - 2026-07-28
+
+- Rebuilt the overview on the supplied Shadcn Dashboard composition.
+- Added an animated, data-driven Recharts index growth chart.
+- Added animated workspace metrics, richer source summaries, and a detailed dataset table.
+- Refined the light dashboard hierarchy while preserving local-only privacy controls.
+
 ## 0.1.1 - 2026-07-28
 
 - Hardened the streaming importer for multi-hundred-gigabyte sources.
