@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 export type Theme = "dark" | "light" | "system";
 
@@ -31,6 +30,12 @@ export interface UpdateStatus {
   latestVersion: string;
   updateAvailable: boolean;
   releaseUrl: string;
+}
+
+export interface UpdateInstallProgress {
+  state: "checking" | "downloading" | "installing";
+  downloadedBytes: number;
+  totalBytes: number | null;
 }
 
 export interface OnboardingInput {
@@ -201,6 +206,47 @@ export interface SearchResponse {
   hits: SearchHit[];
 }
 
+export interface DirectSearchRequest {
+  paths: string[];
+  query: string;
+  mode: SearchMode;
+  caseSensitive: boolean;
+  includeArchives: boolean;
+  maxResults: number;
+  workerLimit: number;
+}
+
+export interface DirectSearchStart {
+  jobId: string;
+  sourceCount: number;
+  totalBytes: number;
+}
+
+export interface DirectSearchHit {
+  id: string;
+  sourceFile: string;
+  archiveEntry: string | null;
+  sourceLocation: string;
+  excerpt: string;
+  matchReason: string;
+}
+
+export interface DirectSearchProgress {
+  jobId: string;
+  status: "running" | "cancelled" | "completed" | "failed";
+  currentSource: string | null;
+  sourceCount: number;
+  filesScanned: number;
+  totalBytes: number;
+  contentBytesScanned: number;
+  matches: number;
+  elapsedMs: number;
+  bytesPerSecond: number;
+  truncated: boolean;
+  message: string;
+  hits: DirectSearchHit[];
+}
+
 export interface DomainSummary {
   id: string;
   hostname: string;
@@ -265,6 +311,7 @@ export interface IdentityMember {
   sourceFile: string;
   sourceLocation: string;
   userStatus: string;
+  fields: SearchField[];
 }
 
 export interface IdentityMembersResponse {
@@ -334,9 +381,12 @@ export interface SecuritySettingsInput {
 }
 
 const browserSettingsKey = "aletheia.browser.settings";
+const browserEfferdThemeKey = "aletheia.browser.efferd-theme-v1";
+const browserExportsKey = "aletheia.browser.exports";
+const browserSearchHistoryKey = "aletheia.browser.search-history";
 const defaultBrowserSettings: Settings = {
   authorizationConfirmed: false,
-  theme: "light",
+  theme: "dark",
   storageRoot: "C:\\Aletheia Workspace",
   networkDisabled: true,
   clipboardClearSeconds: 60,
@@ -352,12 +402,24 @@ export function isTauriRuntime() {
 
 function readBrowserSettings(): Settings {
   const stored = window.localStorage.getItem(browserSettingsKey);
-  if (!stored) return defaultBrowserSettings;
+  let next = { ...defaultBrowserSettings };
   try {
-    return { ...defaultBrowserSettings, ...(JSON.parse(stored) as Settings) };
+    if (stored) {
+      next = { ...next, ...(JSON.parse(stored) as Settings) };
+    }
   } catch {
-    return defaultBrowserSettings;
+    next = { ...defaultBrowserSettings };
   }
+
+  // Apply the new dark-first visual system once without overriding later choices.
+  if (!window.localStorage.getItem(browserEfferdThemeKey)) {
+    next.theme = "dark";
+    window.localStorage.setItem(browserEfferdThemeKey, "1");
+    window.localStorage.setItem("aletheia.theme", "dark");
+    window.localStorage.setItem(browserSettingsKey, JSON.stringify(next));
+  }
+
+  return next;
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -422,14 +484,59 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
 }
 
 export async function openReleasePage(releaseUrl: string): Promise<void> {
-  if (!releaseUrl.startsWith("https://github.com/xtofuub/Aletheia/releases/")) {
-    throw new Error("Release link is not trusted");
+  const parsed = new URL(releaseUrl);
+  if (parsed.protocol !== "https:" || parsed.hostname !== "github.com") {
+    throw new Error("The update link is not an approved GitHub URL.");
   }
   if (isTauriRuntime()) {
-    await openUrl(releaseUrl);
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(parsed.toString());
     return;
   }
-  window.open(releaseUrl, "_blank", "noopener,noreferrer");
+  window.open(parsed.toString(), "_blank", "noopener,noreferrer");
+}
+
+export async function downloadAndInstallUpdate(
+  onProgress: (progress: UpdateInstallProgress) => void,
+): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  onProgress({
+    state: "checking",
+    downloadedBytes: 0,
+    totalBytes: null,
+  });
+  const { check } = await import("@tauri-apps/plugin-updater");
+  const update = await check({ timeout: 15_000 });
+  if (!update) return false;
+
+  let downloadedBytes = 0;
+  let totalBytes: number | null = null;
+  await update.downloadAndInstall((event) => {
+    if (event.event === "Started") {
+      totalBytes = event.data.contentLength ?? null;
+      onProgress({
+        state: "downloading",
+        downloadedBytes,
+        totalBytes,
+      });
+      return;
+    }
+    if (event.event === "Progress") {
+      downloadedBytes += event.data.chunkLength;
+      onProgress({
+        state: "downloading",
+        downloadedBytes,
+        totalBytes,
+      });
+      return;
+    }
+    onProgress({
+      state: "installing",
+      downloadedBytes,
+      totalBytes,
+    });
+  });
+  return true;
 }
 
 export async function selectStorageFolder(current: string): Promise<string> {
@@ -467,6 +574,46 @@ export async function selectSourceFolder(): Promise<string[]> {
     title: "Choose authorized dataset folder",
   });
   return typeof selected === "string" ? [selected] : [];
+}
+
+export async function selectDirectSearchSources(
+  kind: "files" | "folder",
+): Promise<string[]> {
+  if (!isTauriRuntime()) {
+    return kind === "folder"
+      ? ["C:\\Synthetic\\Authorized corpus"]
+      : ["C:\\Synthetic\\Authorized corpus\\synthetic.zip"];
+  }
+  const selected =
+    kind === "folder"
+      ? await open({
+          directory: true,
+          multiple: false,
+          title: "Choose an authorized folder to scan",
+        })
+      : await open({
+          directory: false,
+          multiple: true,
+          title: "Choose authorized sources to scan",
+          filters: [
+            {
+              name: "Searchable local sources",
+              extensions: [
+                "txt",
+                "csv",
+                "tsv",
+                "jsonl",
+                "ndjson",
+                "log",
+                "gz",
+                "zip",
+                "rar",
+              ],
+            },
+          ],
+        });
+  if (!selected) return [];
+  return Array.isArray(selected) ? selected : [selected];
 }
 
 export async function inspectSources(
@@ -546,10 +693,14 @@ export async function listDatasets(): Promise<DatasetSummary[]> {
 
 export async function getOverviewStats(): Promise<OverviewStats> {
   if (isTauriRuntime()) return invoke<OverviewStats>("get_overview_stats");
-  const [domains, identities] = await Promise.all([
+  const [datasets, domains, identities] = await Promise.all([
+    listDatasets(),
     listDomains("", 0, 1),
     listIdentities(),
   ]);
+  if (!datasets.length) {
+    return { identityGroupCount: 0, parentDomainCount: 0 };
+  }
   return {
     identityGroupCount: identities.length,
     parentDomainCount: domains.total,
@@ -562,6 +713,27 @@ export async function searchRecords(
   if (isTauriRuntime()) {
     return invoke<SearchResponse>("search_records", { request });
   }
+  const storedHistory = window.localStorage.getItem(browserSearchHistoryKey);
+  const history = storedHistory
+    ? (JSON.parse(storedHistory) as Array<{
+        query: string;
+        mode: SearchMode;
+        createdAt: string;
+      }>)
+    : [];
+  window.localStorage.setItem(
+    browserSearchHistoryKey,
+    JSON.stringify(
+      [
+        {
+          query: request.query,
+          mode: request.mode,
+          createdAt: new Date().toISOString(),
+        },
+        ...history,
+      ].slice(0, 200),
+    ),
+  );
   const inlineField = request.query.match(/^([a-z_]+):(.+)$/i);
   const query = (inlineField?.[2] ?? request.query)
     .trim()
@@ -599,6 +771,99 @@ export async function searchRecords(
         )
       : [],
   };
+}
+
+export async function searchIdentityRecords(
+  request: SearchRequest,
+): Promise<SearchResponse> {
+  if (isTauriRuntime()) {
+    return invoke<SearchResponse>("search_identity_records", { request });
+  }
+  const response = await searchRecords(request);
+  return {
+    ...response,
+    hits: response.hits.map((hit) => ({
+      ...hit,
+      fields: hit.fields.map((field) => ({
+        ...field,
+        displayValue:
+          field.fieldType === "email"
+            ? "synthetic@example.test"
+            : field.fieldType === "phone"
+              ? "+12025550142"
+              : field.displayValue,
+      })),
+    })),
+  };
+}
+
+const browserDirectSearchListeners = new Set<
+  (progress: DirectSearchProgress) => void
+>();
+
+export async function listenDirectSearchProgress(
+  callback: (progress: DirectSearchProgress) => void,
+): Promise<UnlistenFn> {
+  if (isTauriRuntime()) {
+    return listen<DirectSearchProgress>("direct-search-progress", (event) =>
+      callback(event.payload),
+    );
+  }
+  browserDirectSearchListeners.add(callback);
+  return () => browserDirectSearchListeners.delete(callback);
+}
+
+export async function startDirectSearch(
+  request: DirectSearchRequest,
+): Promise<DirectSearchStart> {
+  if (isTauriRuntime()) {
+    return invoke<DirectSearchStart>("start_direct_search", { request });
+  }
+  const jobId = crypto.randomUUID();
+  const started = performance.now();
+  const sourceCount = Math.max(1, request.paths.length);
+  const syntheticHit: DirectSearchHit = {
+    id: crypto.randomUUID(),
+    sourceFile: "synthetic-authorized-source.txt",
+    archiveEntry: request.includeArchives ? "records/synthetic.txt" : null,
+    sourceLocation: "line 42",
+    excerpt: "s•••@example.com:[REDACTED]:portal.example.com",
+    matchReason:
+      request.mode === "exact"
+        ? "Exact field match"
+        : request.mode === "prefix"
+          ? "Field prefix match"
+          : "Line contains query",
+  };
+  window.setTimeout(() => {
+    const progress: DirectSearchProgress = {
+      jobId,
+      status: "completed",
+      currentSource: null,
+      sourceCount,
+      filesScanned: sourceCount,
+      totalBytes: 128 * 1024 * 1024,
+      contentBytesScanned: 384 * 1024 * 1024,
+      matches: 1,
+      elapsedMs: Math.max(1, Math.round(performance.now() - started)),
+      bytesPerSecond: 196 * 1024 * 1024,
+      truncated: false,
+      message: "Live search complete",
+      hits: [syntheticHit],
+    };
+    browserDirectSearchListeners.forEach((listener) => listener(progress));
+  }, 220);
+  return {
+    jobId,
+    sourceCount,
+    totalBytes: 128 * 1024 * 1024,
+  };
+}
+
+export async function cancelDirectSearch(jobId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("cancel_direct_search", { jobId });
+  }
 }
 
 const syntheticDomains: DomainSummary[] = [
@@ -704,6 +969,17 @@ export async function getDomainDetails(
           displayValue: "example.co.uk",
           sensitive: false,
         },
+        ...(index === 0
+          ? [
+              {
+                name: "source_url",
+                fieldType: "url" as const,
+                displayValue:
+                  "https://portal.example.co.uk/authorized/synthetic/evidence/records/00000000000000000001",
+                sensitive: false,
+              },
+            ]
+          : []),
         {
           name: "password",
           fieldType: "password",
@@ -747,7 +1023,7 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
     ...manual,
     {
       id: "identity-synthetic",
-      displayLabel: "a•••@example.com",
+      displayLabel: "synthetic@example.test",
       confidenceLevel: "high",
       memberCount: 3,
       linkType: "exact_email",
@@ -756,7 +1032,7 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
     },
     {
       id: "identity-synthetic-phone",
-      displayLabel: "••••••67",
+      displayLabel: "+12025550142",
       confidenceLevel: "high",
       memberCount: 8,
       linkType: "exact_phone",
@@ -765,7 +1041,7 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
     },
     {
       id: "identity-synthetic-service",
-      displayLabel: "Service-scoped ID",
+      displayLabel: "service-user-1001",
       confidenceLevel: "high",
       memberCount: 2,
       linkType: "exact_user_id",
@@ -780,16 +1056,23 @@ export async function rebuildIdentities(): Promise<number> {
   return (await listIdentities()).length;
 }
 
+export async function rebuildDomains(): Promise<number> {
+  if (isTauriRuntime()) return invoke<number>("rebuild_domains");
+  return syntheticDomainGroups.length;
+}
+
 export async function listIdentityMembers(
   groupId: string,
   offset = 0,
   limit = 25,
+  revealValues = false,
 ): Promise<IdentityMembersResponse> {
   if (isTauriRuntime()) {
     return invoke<IdentityMembersResponse>("list_identity_members", {
       groupId,
       offset,
       limit,
+      revealValues,
     });
   }
   const members = [
@@ -799,6 +1082,28 @@ export async function listIdentityMembers(
       sourceFile: "records_valid.csv",
       sourceLocation: "line 2",
       userStatus: "automatic",
+      fields: [
+        {
+          name: "email",
+          fieldType: "email" as const,
+          displayValue: revealValues
+            ? "synthetic@example.test"
+            : "s•••@example.test",
+          sensitive: false,
+        },
+        {
+          name: "domain",
+          fieldType: "domain" as const,
+          displayValue: "example.test",
+          sensitive: false,
+        },
+        {
+          name: "password",
+          fieldType: "password" as const,
+          displayValue: "[REDACTED]",
+          sensitive: true,
+        },
+      ],
     },
     {
       recordId: "record-synthetic-2",
@@ -806,6 +1111,22 @@ export async function listIdentityMembers(
       sourceFile: "records_valid.csv",
       sourceLocation: "line 3",
       userStatus: "automatic",
+      fields: [
+        {
+          name: "email",
+          fieldType: "email" as const,
+          displayValue: revealValues
+            ? "synthetic@example.test"
+            : "s•••@example.test",
+          sensitive: false,
+        },
+        {
+          name: "username",
+          fieldType: "username" as const,
+          displayValue: "synthetic-user",
+          sensitive: false,
+        },
+      ],
     },
   ];
   return {
@@ -902,17 +1223,32 @@ export async function exportRecords(
   if (isTauriRuntime()) {
     return invoke<ExportResult>("export_records", { request });
   }
-  return {
-    exportId: crypto.randomUUID(),
+  const exportId = crypto.randomUUID();
+  const result = {
+    exportId,
     destinationPath: request.destinationPath,
     manifestPath: `${request.destinationPath}.manifest.json`,
     recordCount: request.recordIds.length,
   };
+  const current = await listExports();
+  const history: ExportHistoryItem = {
+    id: exportId,
+    format: request.format,
+    destinationPath: request.destinationPath,
+    recordCount: request.recordIds.length,
+    createdAt: new Date().toISOString(),
+  };
+  window.localStorage.setItem(
+    browserExportsKey,
+    JSON.stringify([history, ...current]),
+  );
+  return result;
 }
 
 export async function listExports(): Promise<ExportHistoryItem[]> {
   if (isTauriRuntime()) return invoke<ExportHistoryItem[]>("list_exports");
-  return [];
+  const stored = window.localStorage.getItem(browserExportsKey);
+  return stored ? (JSON.parse(stored) as ExportHistoryItem[]) : [];
 }
 
 export async function cleanupGenerated(request: CleanupRequest): Promise<void> {
@@ -923,7 +1259,12 @@ export async function cleanupGenerated(request: CleanupRequest): Promise<void> {
   if (request.allGenerated) {
     window.localStorage.removeItem("aletheia.browser.datasets");
     window.localStorage.removeItem("aletheia.browser.saved-searches");
+    window.localStorage.removeItem(browserExportsKey);
+    window.localStorage.removeItem(browserSearchHistoryKey);
+    return;
   }
+  if (request.searchHistory)
+    window.localStorage.removeItem(browserSearchHistoryKey);
 }
 
 export async function updateSecuritySettings(

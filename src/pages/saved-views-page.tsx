@@ -1,60 +1,110 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { ArrowUpRight, BookMarked, Braces, LoaderCircle } from "lucide-react";
+import { ArrowRightIcon, StarIcon } from "lucide-react";
 
-import { PageHeader } from "../components/page-header";
-import { EmptyState } from "../components/ui/empty-state";
-import { listSavedSearches } from "../lib/desktop";
+import { DashboardCard } from "@/components/dashboard-card";
+import { PageHeader } from "@/components/page-header";
+import { Button } from "@/components/ui/button";
+import {
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { listSavedSearches } from "@/lib/desktop";
+import { formatDateTime } from "@/lib/format";
 
 export function SavedViewsPage() {
-  const views = useQuery({
+  const saved = useQuery({
     queryKey: ["saved-searches"],
     queryFn: listSavedSearches,
   });
-
   return (
-    <div className="page">
+    <div>
       <PageHeader
-        title="Saved Views"
-        description="Preserve queries, filters, sort, visible columns, notes, and investigation context."
+        description="Open useful searches again with the same query and filters."
+        title="Saved views"
       />
-      {views.isLoading ? (
-        <div className="loading-line">
-          <LoaderCircle className="animate-spin" size={16} />
-          Reading saved local views
-        </div>
-      ) : views.data?.length ? (
-        <div className="saved-view-grid">
-          {views.data.map((view) => (
-            <article key={view.id}>
-              <header>
-                <BookMarked size={17} />
-                <span>
-                  <strong>{view.name}</strong>
-                  <small>{new Date(view.createdAt).toLocaleDateString()}</small>
-                </span>
-              </header>
-              <code>{view.query}</code>
-              <footer>
-                <span>
-                  <Braces size={13} />
-                  Local filters retained
-                </span>
-                <Link to="/search">
-                  Open search
-                  <ArrowUpRight size={13} />
-                </Link>
-              </footer>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <EmptyState
-          icon={BookMarked}
-          title="No saved investigations"
-          description="Save a useful result view after the first search, then return without rebuilding its filters."
-        />
-      )}
+      <div className="grid grid-cols-1 gap-px bg-border p-px">
+        <DashboardCard className="gap-0">
+          <CardHeader className="border-b">
+            <CardTitle>Search views</CardTitle>
+            <CardDescription>
+              {saved.data?.length ?? 0} saved queries
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-0">
+            {saved.data?.length ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="ps-6">Name</TableHead>
+                    <TableHead>Query</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="pe-6 text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {saved.data.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell className="ps-6 font-medium">
+                        {item.name}
+                      </TableCell>
+                      <TableCell className="max-w-xl font-mono text-xs break-all">
+                        {item.query}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatDateTime(item.createdAt)}
+                      </TableCell>
+                      <TableCell className="pe-6 text-right">
+                        <Button
+                          nativeButton={false}
+                          render={
+                            <a
+                              href={`#/search?q=${encodeURIComponent(item.query)}`}
+                            />
+                          }
+                          size="sm"
+                          variant="ghost"
+                        >
+                          Open
+                          <ArrowRightIcon data-icon="inline-end" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <Empty className="min-h-80 rounded-none border-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <StarIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>No saved views</EmptyTitle>
+                  <EmptyDescription>
+                    Save a useful query from Search.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+          </CardContent>
+        </DashboardCard>
+      </div>
     </div>
   );
 }

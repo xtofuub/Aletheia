@@ -1,322 +1,433 @@
-import { type FormEvent, useDeferredValue, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import {
-  Database,
-  FileSearch,
-  Globe2,
-  LoaderCircle,
-  Network,
-  Search,
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import {
+  AlertCircleIcon,
+  Globe2Icon,
+  LoaderCircleIcon,
+  SearchIcon,
 } from "lucide-react";
 
-import { PageHeader } from "../components/page-header";
-import { Button } from "../components/ui/button";
-import { EmptyState } from "../components/ui/empty-state";
-import { PaginationControls } from "../components/ui/pagination-controls";
+import { DashboardCard } from "@/components/dashboard-card";
+import { PageHeader } from "@/components/page-header";
+import { PaginationControls } from "@/components/pagination-controls";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-  getDomainDetails,
-  listDomains,
-  type DomainGroupSummary,
-} from "../lib/desktop";
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { getDomainDetails, listDomains, rebuildDomains } from "@/lib/desktop";
+import { formatCount } from "@/lib/format";
+
+const pageSize = 25;
 
 export function DomainsPage() {
-  const [draft, setDraft] = useState("");
+  const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
   const [offset, setOffset] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
-  const [selected, setSelected] = useState<DomainGroupSummary | null>(null);
+  const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [hostname, setHostname] = useState<string | null>(null);
-  const [hostnameDraft, setHostnameDraft] = useState("");
-  const deferredHostnameDraft = useDeferredValue(hostnameDraft);
-  const [datasetId, setDatasetId] = useState<string | null>(null);
+  const [hostnameQuery, setHostnameQuery] = useState("");
+  const [datasetId, setDatasetId] = useState("all");
   const [recordOffset, setRecordOffset] = useState(0);
-  const [recordPageSize, setRecordPageSize] = useState(25);
+  const [repairNotice, setRepairNotice] = useState("");
+
+  const domainRepair = useMutation({
+    mutationFn: rebuildDomains,
+    onSuccess: async (count) => {
+      setRepairNotice(`${formatCount(count)} domain groups linked`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["domains"] }),
+        queryClient.invalidateQueries({ queryKey: ["domain-details"] }),
+      ]);
+    },
+    onError: (error) =>
+      setRepairNotice(`Domain rebuild failed: ${String(error)}`),
+  });
+
   const domains = useQuery({
-    queryKey: ["domains", query, offset, pageSize],
-    queryFn: () => listDomains(query, offset, pageSize),
+    queryKey: ["domains", submittedQuery, offset],
+    queryFn: () => listDomains(submittedQuery, offset, pageSize),
     placeholderData: keepPreviousData,
   });
+
+  const activeDomain =
+    selectedDomain ?? domains.data?.groups[0]?.registrableDomain ?? null;
+
   const details = useQuery({
     queryKey: [
       "domain-details",
-      selected?.registrableDomain,
+      activeDomain,
       hostname,
-      deferredHostnameDraft,
+      hostnameQuery,
       datasetId,
       recordOffset,
-      recordPageSize,
     ],
     queryFn: () =>
       getDomainDetails(
-        selected?.registrableDomain ?? "",
+        activeDomain ?? "",
         hostname,
-        deferredHostnameDraft || null,
-        datasetId,
+        hostnameQuery || null,
+        datasetId === "all" ? null : datasetId,
         recordOffset,
-        recordPageSize,
+        pageSize,
       ),
-    enabled: Boolean(selected),
-    staleTime: 30_000,
+    enabled: Boolean(activeDomain),
+    placeholderData: keepPreviousData,
   });
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    setOffset(0);
-    setSelected(null);
-    setHostname(null);
-    setHostnameDraft("");
-    setDatasetId(null);
-    setRecordOffset(0);
-    setQuery(draft.trim());
-  }
-
-  function openDomain(group: DomainGroupSummary) {
-    setSelected(group);
-    setHostname(null);
-    setHostnameDraft("");
-    setDatasetId(null);
-    setRecordOffset(0);
-  }
-
-  function filterDataset(nextDatasetId: string | null) {
-    setDatasetId(nextDatasetId);
-    setRecordOffset(0);
-  }
-
-  function filterHostname(nextHostname: string | null) {
-    setHostname(nextHostname);
-    setDatasetId(null);
-    setRecordOffset(0);
-  }
+  const datasetItems = [
+    { label: "All linked datasets", value: "all" },
+    ...(details.data?.breaches ?? []).map((breach) => ({
+      label: `${breach.datasetName} (${breach.recordCount})`,
+      value: breach.datasetId,
+    })),
+  ];
 
   return (
-    <div className="page">
+    <div>
       <PageHeader
+        actions={
+          <Button
+            disabled={domainRepair.isPending}
+            onClick={() => domainRepair.mutate()}
+            size="sm"
+            variant="outline"
+          >
+            {domainRepair.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : null}
+            {domainRepair.isPending ? "Rebuilding links…" : "Rebuild links"}
+          </Button>
+        }
+        description="Find a domain, filter its subdomains, and inspect every linked source line."
         title="Domains"
-        description="Find a domain, then inspect every linked dataset and source record."
-        meta={`${(domains.data?.total ?? 0).toLocaleString()} PARENTS`}
       />
+      {repairNotice ? (
+        <p className="mb-3 text-xs text-muted-foreground" role="status">
+          {repairNotice}
+        </p>
+      ) : null}
+      <div className="grid grid-cols-1 gap-px bg-border p-px xl:grid-cols-[22rem_1fr]">
+        <DashboardCard className="gap-0">
+          <CardHeader className="border-b">
+            <CardTitle>Domain groups</CardTitle>
+            <CardDescription>
+              {domains.data?.total ?? 0} parent domains
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 p-3">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                setOffset(0);
+                setSelectedDomain(null);
+                setSubmittedQuery(query.trim());
+              }}
+            >
+              <InputGroup>
+                <InputGroupAddon>
+                  <SearchIcon />
+                </InputGroupAddon>
+                <InputGroupInput
+                  aria-label="Search domains"
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search domains"
+                  value={query}
+                />
+              </InputGroup>
+            </form>
+            <div className="flex flex-col gap-1">
+              {(domains.data?.groups ?? []).map((group) => (
+                <Button
+                  className="h-auto w-full justify-between px-3 py-2"
+                  key={group.registrableDomain}
+                  onClick={() => {
+                    const reloadActiveDomain =
+                      activeDomain === group.registrableDomain;
+                    setSelectedDomain(group.registrableDomain);
+                    setHostname(null);
+                    setDatasetId("all");
+                    setRecordOffset(0);
+                    if (reloadActiveDomain) void details.refetch();
+                  }}
+                  variant={
+                    activeDomain === group.registrableDomain
+                      ? "secondary"
+                      : "ghost"
+                  }
+                >
+                  <span className="truncate">{group.registrableDomain}</span>
+                  <Badge variant="outline">
+                    {formatCount(group.recordCount)}
+                  </Badge>
+                </Button>
+              ))}
+            </div>
+          </CardContent>
+          {domains.data ? (
+            <PaginationControls
+              label="domain groups"
+              limit={pageSize}
+              offset={offset}
+              onOffsetChange={setOffset}
+              total={domains.data.total}
+            />
+          ) : null}
+        </DashboardCard>
 
-      <form className="domain-search" onSubmit={submit}>
-        <Search size={17} aria-hidden="true" />
-        <input
-          aria-label="Search domains"
-          placeholder="Search a parent domain or hostname"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          maxLength={253}
-        />
-        <Button size="sm" variant="primary" type="submit">
-          Search
-        </Button>
-      </form>
-
-      {domains.isLoading ? (
-        <div className="loading-line">
-          <LoaderCircle className="animate-spin" size={16} />
-          Searching local domain index
-        </div>
-      ) : domains.data?.groups.length ? (
-        <div className="domain-workspace" data-detail={Boolean(selected)}>
-          <section className="domain-explorer">
-            <header className="domain-explorer__head">
-              <span>Registrable domain</span>
-              <span>Hosts</span>
-              <span>Records</span>
-            </header>
-            {domains.data.groups.map((group) => (
-              <button
-                className="domain-row"
-                data-active={
-                  selected?.registrableDomain === group.registrableDomain
-                }
-                key={group.registrableDomain}
-                onClick={() => openDomain(group)}
-              >
-                <span className="domain-row__name">
-                  <Globe2 size={15} />
-                  <span>
-                    <strong>{group.registrableDomain}</strong>
-                    <small>{group.publicSuffix ?? "private suffix"}</small>
-                  </span>
-                </span>
-                <span className="font-mono">
-                  {group.hostnameCount.toLocaleString()}
-                </span>
-                <span className="font-mono">
-                  {group.recordCount.toLocaleString()}
-                </span>
-              </button>
-            ))}
-            <footer>
-              <PaginationControls
-                label="domains"
-                offset={offset}
-                total={domains.data.total}
-                pageSize={pageSize}
-                busy={domains.isFetching}
-                onOffsetChange={setOffset}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  setOffset(0);
-                }}
-                pageSizes={[25, 50, 100]}
-              />
-            </footer>
-          </section>
-
-          {selected ? (
-            <aside className="domain-detail">
-              <header className="domain-detail__header">
-                <div>
-                  <span className="eyebrow">DOMAIN EVIDENCE</span>
-                  <h2>{selected.registrableDomain}</h2>
-                </div>
-                <Globe2 size={18} />
-              </header>
-              {details.isLoading ? (
-                <div className="loading-line">
-                  <LoaderCircle className="animate-spin" size={15} />
-                  Loading linked evidence
-                </div>
-              ) : details.data ? (
-                <>
-                  <section className="domain-detail__section">
-                    <h3>
-                      <Network size={14} />
-                      Observed hostnames
-                      <small>
-                        {details.data.hostnames.length.toLocaleString()} of{" "}
-                        {selected.hostnameCount.toLocaleString()}
-                      </small>
-                    </h3>
-                    <label className="domain-host-search">
-                      <Search size={13} />
-                      <input
-                        aria-label="Filter observed hostnames"
-                        placeholder="Filter hostnames"
-                        value={hostnameDraft}
-                        onChange={(event) =>
-                          setHostnameDraft(event.target.value.toLowerCase())
-                        }
-                      />
-                    </label>
-                    <div className="domain-hostnames">
-                      <button
-                        data-active={!hostname}
-                        onClick={() => filterHostname(null)}
-                      >
-                        <code>All hostnames</code>
-                        <small>{selected.recordCount.toLocaleString()}</small>
-                      </button>
-                      {details.data.hostnames.map((item) => (
-                        <button
-                          data-active={hostname === item.hostname}
-                          key={item.id}
-                          onClick={() => filterHostname(item.hostname)}
-                        >
-                          <code>{item.hostname}</code>
-                          <small>{item.recordCount.toLocaleString()}</small>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="domain-detail__section">
-                    <h3>
-                      <Database size={14} />
-                      Linked breach datasets
-                      <small>
-                        {details.data.breaches.length.toLocaleString()} datasets
-                      </small>
-                    </h3>
-                    <div className="domain-breaches">
-                      <button
-                        data-active={!datasetId}
-                        onClick={() => filterDataset(null)}
-                      >
-                        <span>All datasets</span>
-                        <strong>
-                          {details.data.totalRecords.toLocaleString()}
-                        </strong>
-                      </button>
-                      {details.data.breaches.map((breach) => (
-                        <button
-                          data-active={datasetId === breach.datasetId}
-                          key={breach.datasetId}
-                          onClick={() => filterDataset(breach.datasetId)}
-                        >
-                          <span>{breach.datasetName}</span>
-                          <strong>{breach.recordCount.toLocaleString()}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="domain-detail__section domain-records">
-                    <h3>
-                      <FileSearch size={14} />
-                      Masked line contents
-                      <small>
-                        {details.data.totalRecords.toLocaleString()}
-                      </small>
-                    </h3>
-                    {details.data.records.map((record) => (
-                      <article key={record.recordId}>
-                        <header>
-                          <span>
-                            <strong>{record.datasetName}</strong>
-                            <small>{record.sourceFile}</small>
-                          </span>
-                          <span className="source-location">
-                            {record.sourceLocation}
-                            <small>{record.parser}</small>
-                          </span>
-                        </header>
-                        <dl>
-                          {record.fields.map((field) => (
-                            <div key={`${record.recordId}-${field.name}`}>
-                              <dt>{field.name}</dt>
-                              <dd
-                                className="font-mono"
-                                data-sensitive={field.sensitive}
-                              >
-                                {field.displayValue || "Not available"}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
-                      </article>
-                    ))}
-                    <footer>
-                      <PaginationControls
-                        label="domain records"
-                        offset={recordOffset}
-                        total={details.data.totalRecords}
-                        pageSize={recordPageSize}
-                        busy={details.isFetching}
-                        onOffsetChange={setRecordOffset}
-                        onPageSizeChange={(size) => {
-                          setRecordPageSize(size);
+        <DashboardCard className="gap-0">
+          <CardHeader className="border-b">
+            <CardTitle>{activeDomain ?? "Domain evidence"}</CardTitle>
+            <CardDescription>
+              {details.isPending
+                ? "Loading linked records…"
+                : details.isError
+                  ? "Linked records could not be loaded."
+                  : details.data
+                    ? `${details.data.totalRecords.toLocaleString()} linked records`
+                    : "Select a domain group."}
+            </CardDescription>
+          </CardHeader>
+          {activeDomain ? (
+            <>
+              <CardContent className="flex flex-col gap-4 border-b p-4">
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-medium text-muted-foreground">
+                    Subdomains
+                  </p>
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <SearchIcon />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      aria-label="Filter subdomains"
+                      onChange={(event) => {
+                        setHostnameQuery(event.target.value);
+                        setHostname(null);
+                        setRecordOffset(0);
+                      }}
+                      placeholder="Filter hostnames"
+                      value={hostnameQuery}
+                    />
+                  </InputGroup>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={() => {
+                        setHostname(null);
+                        setRecordOffset(0);
+                      }}
+                      size="sm"
+                      variant={hostname === null ? "secondary" : "outline"}
+                    >
+                      All hosts
+                    </Button>
+                    {(details.data?.hostnames ?? []).map((item) => (
+                      <Button
+                        key={item.id}
+                        onClick={() => {
+                          setHostname(item.hostname);
                           setRecordOffset(0);
                         }}
-                        pageSizes={[10, 25, 50, 100]}
-                      />
-                    </footer>
-                  </section>
-                </>
+                        size="sm"
+                        variant={
+                          hostname === item.hostname ? "secondary" : "outline"
+                        }
+                      >
+                        {item.hostname}
+                        <Badge variant="outline">{item.recordCount}</Badge>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    {(details.data?.breaches ?? []).map((breach) => (
+                      <Badge key={breach.datasetId} variant="outline">
+                        {breach.datasetName} · {breach.recordCount}
+                      </Badge>
+                    ))}
+                  </div>
+                  <Select
+                    items={datasetItems}
+                    onValueChange={(value) => {
+                      setDatasetId(String(value));
+                      setRecordOffset(0);
+                    }}
+                    value={datasetId}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {datasetItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardContent>
+              <CardContent className="px-0">
+                {details.isPending ? (
+                  <Empty className="min-h-64 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <LoaderCircleIcon className="animate-spin" />
+                      </EmptyMedia>
+                      <EmptyTitle>Loading linked lines</EmptyTitle>
+                      <EmptyDescription>
+                        Reading the selected domain from the local index.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : details.isError ? (
+                  <Empty className="min-h-64 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <AlertCircleIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>Could not load linked lines</EmptyTitle>
+                      <EmptyDescription>
+                        {String(details.error)}
+                      </EmptyDescription>
+                      <Button
+                        onClick={() => void details.refetch()}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Try again
+                      </Button>
+                    </EmptyHeader>
+                  </Empty>
+                ) : details.data?.records.length ? (
+                  <Table className="table-fixed">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-52 ps-6">Source line</TableHead>
+                        <TableHead className="w-44">Dataset</TableHead>
+                        <TableHead>Line contents</TableHead>
+                        <TableHead className="w-44 pe-6">Parser</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {details.data.records.map((record) => (
+                        <TableRow key={record.recordId}>
+                          <TableCell className="min-w-0 ps-6">
+                            <p className="truncate text-xs">
+                              {record.sourceFile}
+                            </p>
+                            <p className="truncate font-mono text-xs text-muted-foreground">
+                              {record.sourceLocation}
+                            </p>
+                          </TableCell>
+                          <TableCell className="min-w-0">
+                            <p className="truncate" title={record.datasetName}>
+                              {record.datasetName}
+                            </p>
+                          </TableCell>
+                          <TableCell className="min-w-0 whitespace-normal">
+                            <div className="flex min-w-0 max-w-full flex-wrap gap-1">
+                              {record.fields.map((field) => (
+                                <Badge
+                                  className="h-auto max-w-full min-w-0 whitespace-normal py-1 text-left leading-snug [overflow-wrap:anywhere]"
+                                  key={`${record.recordId}-${field.name}`}
+                                  title={`${field.name}: ${field.displayValue}`}
+                                  variant={
+                                    field.sensitive ? "secondary" : "outline"
+                                  }
+                                >
+                                  {field.name}: {field.displayValue}
+                                </Badge>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell className="min-w-0 pe-6 font-mono text-xs text-muted-foreground">
+                            <p className="truncate" title={record.parser}>
+                              {record.parser}
+                            </p>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Empty className="min-h-64 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <Globe2Icon />
+                      </EmptyMedia>
+                      <EmptyTitle>No linked lines</EmptyTitle>
+                      <EmptyDescription>
+                        Adjust the hostname or dataset filter.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+              {details.data ? (
+                <PaginationControls
+                  label="domain evidence"
+                  limit={pageSize}
+                  offset={recordOffset}
+                  onOffsetChange={setRecordOffset}
+                  total={details.data.totalRecords}
+                />
               ) : null}
-            </aside>
-          ) : null}
-        </div>
-      ) : (
-        <EmptyState
-          icon={Globe2}
-          title={query ? "No matching domains" : "No normalized domains"}
-          description="Domains extracted during import appear here and stay connected to their datasets and source records."
-          detail="Search is local and prefix-indexed for large workspaces."
-        />
-      )}
+            </>
+          ) : (
+            <Empty className="min-h-96 rounded-none border-0">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <Globe2Icon />
+                </EmptyMedia>
+                <EmptyTitle>Select a domain</EmptyTitle>
+                <EmptyDescription>Linked evidence loads here.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
+        </DashboardCard>
+      </div>
     </div>
   );
 }

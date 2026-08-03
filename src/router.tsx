@@ -1,106 +1,53 @@
-import {
-  createRootRoute,
-  createRoute,
-  createRouter,
-  lazyRouteComponent,
-  RouterProvider,
-  type AnyRouter,
-} from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 
-import { AppShell } from "./components/app-shell";
+export type RouteKey =
+  | "overview"
+  | "search"
+  | "datasets"
+  | "domains"
+  | "identities"
+  | "saved-views"
+  | "exports"
+  | "settings";
 
-const rootRoute = createRootRoute({
-  component: AppShell,
-});
-
-const overviewRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/",
-  component: lazyRouteComponent(
-    () => import("./pages/overview-page"),
-    "OverviewPage",
-  ),
-});
-const searchRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/search",
-  component: lazyRouteComponent(
-    () => import("./pages/search-page"),
-    "SearchPage",
-  ),
-});
-const identitiesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/identities",
-  component: lazyRouteComponent(
-    () => import("./pages/identities-page"),
-    "IdentitiesPage",
-  ),
-});
-const domainsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/domains",
-  component: lazyRouteComponent(
-    () => import("./pages/domains-page"),
-    "DomainsPage",
-  ),
-});
-const datasetsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/datasets",
-  component: lazyRouteComponent(
-    () => import("./pages/datasets-page"),
-    "DatasetsPage",
-  ),
-});
-const savedViewsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/saved-views",
-  component: lazyRouteComponent(
-    () => import("./pages/saved-views-page"),
-    "SavedViewsPage",
-  ),
-});
-const exportsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/exports",
-  component: lazyRouteComponent(
-    () => import("./pages/exports-page"),
-    "ExportsPage",
-  ),
-});
-const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/settings",
-  component: lazyRouteComponent(
-    () => import("./pages/settings-page"),
-    "SettingsPage",
-  ),
-});
-
-const routeTree = rootRoute.addChildren([
-  overviewRoute,
-  searchRoute,
-  identitiesRoute,
-  domainsRoute,
-  datasetsRoute,
-  savedViewsRoute,
-  exportsRoute,
-  settingsRoute,
+const validRoutes = new Set<RouteKey>([
+  "overview",
+  "search",
+  "datasets",
+  "domains",
+  "identities",
+  "saved-views",
+  "exports",
+  "settings",
 ]);
 
-export const router = createRouter({
-  routeTree,
-  defaultPreload: "intent",
-  defaultPreloadStaleTime: 0,
-});
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    router: typeof router;
-  }
+function readHash() {
+  const value = window.location.hash.replace(/^#\/?/, "").split("?")[0];
+  return value === "dashboard" || !validRoutes.has(value as RouteKey)
+    ? "overview"
+    : (value as RouteKey);
 }
 
-export function RouterView({ router }: { router: AnyRouter }) {
-  return <RouterProvider router={router} />;
+export function useAppRoute() {
+  const [hash, setHash] = useState(() => window.location.hash);
+
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    if (!window.location.hash) window.location.hash = "#/overview";
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  const route = readHash();
+  const query = useMemo(() => {
+    const raw = hash.split("?")[1] ?? "";
+    return new URLSearchParams(raw);
+  }, [hash]);
+
+  return { route, query };
+}
+
+export function routeHref(route: RouteKey, query?: URLSearchParams) {
+  const suffix = query?.toString();
+  return `#/${route}${suffix ? `?${suffix}` : ""}`;
 }

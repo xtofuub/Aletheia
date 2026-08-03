@@ -1,379 +1,548 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  CheckCircle2,
-  CircleStop,
-  FilePlus2,
-  Files,
-  LoaderCircle,
-  Pause,
-  Play,
-  ShieldCheck,
+  FilePlus2Icon,
+  FileSearchIcon,
+  FolderOpenIcon,
+  PauseIcon,
+  PlayIcon,
+  RotateCcwIcon,
+  SquareIcon,
+  UploadIcon,
 } from "lucide-react";
 
-import { ImportWizard } from "../components/import-wizard";
-import { PageHeader } from "../components/page-header";
-import { Button } from "../components/ui/button";
-import { EmptyState } from "../components/ui/empty-state";
+import { DashboardCard } from "@/components/dashboard-card";
+import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   cancelImport,
-  isTauriRuntime,
+  inspectSources,
   listDatasets,
   listenImportProgress,
   pauseImport,
   resumeDatasetImport,
   resumeImport,
+  selectSourceFiles,
+  selectSourceFolder,
   startImport,
-  type ImportPlan,
+  type ImportOptions,
   type ImportProgress,
-} from "../lib/desktop";
-import { formatBytes } from "../lib/utils";
+  type InspectionResult,
+} from "@/lib/desktop";
+import {
+  formatBytes,
+  formatCount,
+  formatDateTime,
+  formatRate,
+} from "@/lib/format";
 
-function isTerminalImport(status: ImportProgress["status"]) {
-  return ["completed", "cancelled", "interrupted", "failed"].includes(status);
-}
-
-function formatRate(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return Math.round(value).toLocaleString();
-}
+const defaultOptions: ImportOptions = {
+  skipInvalidRows: true,
+  stopOnSevereError: true,
+  extractUrls: true,
+  extractDomains: true,
+  groupIdentities: true,
+  deduplicate: false,
+  storeOffsets: true,
+};
 
 export function DatasetsPage() {
   const queryClient = useQueryClient();
-  const [showWizard, setShowWizard] = useState(false);
-  const [activeJob, setActiveJob] = useState<ImportProgress | null>(null);
-  const [throughput, setThroughput] = useState({
-    recordsPerSecond: 0,
-    bytesPerSecond: 0,
-  });
-  const progressSample = useRef<{
-    jobId: string;
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [inspection, setInspection] = useState<InspectionResult | null>(null);
+  const [datasetLabel, setDatasetLabel] = useState("");
+  const [authorizationNote, setAuthorizationNote] = useState("");
+  const [options, setOptions] = useState(defaultOptions);
+  const [progress, setProgress] = useState<ImportProgress | null>(null);
+  const [recordsPerSecond, setRecordsPerSecond] = useState(0);
+  const [bytesPerSecond, setBytesPerSecond] = useState(0);
+  const previous = useRef<{
     at: number;
-    bytes: number;
     records: number;
+    bytes: number;
   } | null>(null);
+
   const datasets = useQuery({
     queryKey: ["datasets"],
     queryFn: listDatasets,
-    refetchInterval:
-      activeJob && !isTerminalImport(activeJob.status) ? 1500 : false,
+    refetchInterval: 3_000,
   });
 
   useEffect(() => {
-    let disposed = false;
-    let unlisten: () => void = () => undefined;
-    void listenImportProgress((progress) => {
-      if (disposed) return;
+    let unlisten: (() => void) | undefined;
+    void listenImportProgress((next) => {
       const now = performance.now();
-      const previous = progressSample.current;
-      if (
-        previous &&
-        previous.jobId === progress.jobId &&
-        now - previous.at >= 200
-      ) {
-        const seconds = (now - previous.at) / 1000;
-        const recordsPerSecond = Math.max(
-          0,
-          (progress.recordsIndexed - previous.records) / seconds,
+      if (previous.current && previous.current.at < now) {
+        const seconds = (now - previous.current.at) / 1_000;
+        setRecordsPerSecond(
+          Math.max(
+            0,
+            (next.recordsProcessed - previous.current.records) / seconds,
+          ),
         );
-        const bytesPerSecond = Math.max(
-          0,
-          (progress.bytesRead - previous.bytes) / seconds,
+        setBytesPerSecond(
+          Math.max(0, (next.bytesRead - previous.current.bytes) / seconds),
         );
-        setThroughput((current) => ({
-          recordsPerSecond:
-            current.recordsPerSecond === 0
-              ? recordsPerSecond
-              : current.recordsPerSecond * 0.55 + recordsPerSecond * 0.45,
-          bytesPerSecond:
-            current.bytesPerSecond === 0
-              ? bytesPerSecond
-              : current.bytesPerSecond * 0.55 + bytesPerSecond * 0.45,
-        }));
       }
-      progressSample.current = {
-        jobId: progress.jobId,
+      previous.current = {
         at: now,
-        bytes: progress.bytesRead,
-        records: progress.recordsIndexed,
+        records: next.recordsProcessed,
+        bytes: next.bytesRead,
       };
-      setActiveJob(progress);
-      if (isTerminalImport(progress.status)) {
+      setProgress(next);
+      if (
+        ["completed", "failed", "cancelled", "interrupted"].includes(
+          next.status,
+        )
+      ) {
         void queryClient.invalidateQueries({ queryKey: ["datasets"] });
+        void queryClient.invalidateQueries({ queryKey: ["overview"] });
       }
-    }).then((cleanup) => {
-      if (disposed) cleanup();
-      else unlisten = cleanup;
+    }).then((value) => {
+      unlisten = value;
     });
-    return () => {
-      disposed = true;
-      unlisten();
-    };
+    return () => unlisten?.();
   }, [queryClient]);
 
-  async function beginImport(plan: ImportPlan) {
-    progressSample.current = null;
-    setThroughput({ recordsPerSecond: 0, bytesPerSecond: 0 });
-    const result = await startImport(plan);
-    setActiveJob({
-      ...result,
-      status: isTauriRuntime() ? "queued" : "completed",
-      currentFile: null,
-      bytesRead: 0,
-      totalBytes: plan.files.reduce((sum, file) => sum + file.fileSize, 0),
-      recordsProcessed: 0,
-      recordsIndexed: isTauriRuntime() ? 0 : 3,
-      invalidRecords: 0,
-      duplicateRecords: 0,
-      message: isTauriRuntime() ? "Import queued" : "Index ready",
-    });
-    setShowWizard(false);
-    await queryClient.invalidateQueries({ queryKey: ["datasets"] });
-  }
+  const inspect = useMutation({
+    mutationFn: (kind: "files" | "folder") =>
+      (kind === "files" ? selectSourceFiles() : selectSourceFolder()).then(
+        async (paths) => {
+          if (!paths.length) return null;
+          return inspectSources(paths);
+        },
+      ),
+    onSuccess: (result) => {
+      if (!result) return;
+      setInspection(result);
+      setDatasetLabel(
+        result.files[0]?.fileName.replace(/\.[^.]+$/, "") ??
+          "Authorized dataset",
+      );
+      setDialogOpen(true);
+    },
+  });
 
-  async function pauseActiveJob() {
-    if (!activeJob) return;
-    await pauseImport(activeJob.jobId);
-    setActiveJob((current) =>
-      current
-        ? { ...current, status: "paused", message: "Import paused locally" }
-        : current,
-    );
-  }
-
-  async function resumeActiveJob() {
-    if (!activeJob) return;
-    await resumeImport(activeJob.jobId);
-    setActiveJob((current) =>
-      current
-        ? { ...current, status: "running", message: "Indexing local records" }
-        : current,
-    );
-  }
-
-  async function cancelActiveJob() {
-    if (!activeJob) return;
-    await cancelImport(activeJob.jobId);
-    setActiveJob((current) =>
-      current
-        ? {
-            ...current,
-            status: "cancelling",
-            message: "Cancelling after the current record",
-          }
-        : current,
-    );
-  }
-
-  async function continueDataset(
-    dataset: Awaited<ReturnType<typeof listDatasets>>[number],
-  ) {
-    try {
-      progressSample.current = null;
-      setThroughput({ recordsPerSecond: 0, bytesPerSecond: 0 });
-      const result = await resumeDatasetImport(dataset.id);
-      setActiveJob({
-        ...result,
+  const start = useMutation({
+    mutationFn: async () => {
+      if (!inspection) throw new Error("Choose a source first.");
+      return startImport({
+        datasetLabel: datasetLabel.trim(),
+        authorizationNote: authorizationNote.trim(),
+        files: inspection.files.filter((file) => file.eligible),
+        options,
+      });
+    },
+    onSuccess: async (result) => {
+      setProgress({
+        jobId: result.jobId,
+        datasetId: result.datasetId,
         status: "queued",
         currentFile: null,
         bytesRead: 0,
-        totalBytes: dataset.totalBytes,
-        recordsProcessed: dataset.recordCount,
-        recordsIndexed: dataset.recordCount,
-        invalidRecords: dataset.warningCount,
+        totalBytes: inspection?.totalBytes ?? 0,
+        recordsProcessed: 0,
+        recordsIndexed: 0,
+        invalidRecords: 0,
         duplicateRecords: 0,
-        message: "Resume queued from the last stored record",
+        message: "Import queued",
       });
+      setDialogOpen(false);
+      setInspection(null);
       await queryClient.invalidateQueries({ queryKey: ["datasets"] });
-    } catch (error) {
-      setActiveJob({
-        jobId: "",
-        datasetId: dataset.id,
-        status: "failed",
-        currentFile: null,
-        bytesRead: 0,
-        totalBytes: dataset.totalBytes,
-        recordsProcessed: dataset.recordCount,
-        recordsIndexed: dataset.recordCount,
-        invalidRecords: dataset.warningCount,
-        duplicateRecords: 0,
-        message:
-          error instanceof Error ? error.message : "Dataset could not resume",
-      });
-    }
-  }
+    },
+  });
 
-  const progress = activeJob?.totalBytes
-    ? Math.min(100, (activeJob.bytesRead / activeJob.totalBytes) * 100)
+  const active =
+    progress &&
+    ["queued", "running", "paused", "cancelling"].includes(progress.status);
+  const percent = progress?.totalBytes
+    ? Math.min(100, (progress.bytesRead / progress.totalBytes) * 100)
     : 0;
-  const terminal = activeJob && isTerminalImport(activeJob.status);
-
-  if (showWizard) {
-    return (
-      <ImportWizard
-        onClose={() => setShowWizard(false)}
-        onStart={beginImport}
-      />
-    );
-  }
 
   return (
-    <div className="page">
+    <div>
       <PageHeader
-        title="Datasets"
-        description="Manage local source references, mappings, import reports, and generated indexes."
-        action={
-          <Button variant="primary" onClick={() => setShowWizard(true)}>
-            <FilePlus2 size={16} aria-hidden="true" />
-            Add source
-          </Button>
+        actions={
+          <>
+            <Button
+              disabled={inspect.isPending}
+              onClick={() => inspect.mutate("folder")}
+              size="sm"
+              variant="outline"
+            >
+              <FolderOpenIcon data-icon="inline-start" />
+              Add folder
+            </Button>
+            <Button
+              disabled={inspect.isPending}
+              onClick={() => inspect.mutate("files")}
+              size="sm"
+            >
+              <FilePlus2Icon data-icon="inline-start" />
+              Add files
+            </Button>
+          </>
         }
+        description="Add local sources for fast, repeatable search. Original files stay unchanged."
+        title="Datasets"
       />
 
-      {activeJob ? (
-        <section className="job-panel" aria-live="polite">
-          <div className="job-panel__lead">
-            {activeJob.status === "completed" ? (
-              <CheckCircle2 size={18} aria-hidden="true" />
+      <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-4">
+        {progress ? (
+          <DashboardCard className="lg:col-span-4">
+            <CardHeader>
+              <CardTitle>Indexing telemetry</CardTitle>
+              <CardDescription>{progress.message}</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <Progress value={percent}>
+                <ProgressLabel>
+                  {progress.currentFile ?? progress.status}
+                </ProgressLabel>
+                <ProgressValue>{() => `${percent.toFixed(0)}%`}</ProgressValue>
+              </Progress>
+              <div className="grid grid-cols-2 gap-px bg-border p-px sm:grid-cols-4">
+                {[
+                  ["Indexed", formatCount(progress.recordsIndexed)],
+                  ["Record speed", formatRate(recordsPerSecond)],
+                  ["Read speed", `${formatBytes(bytesPerSecond)}/s`],
+                  ["Invalid", formatCount(progress.invalidRecords)],
+                ].map(([label, value]) => (
+                  <div className="bg-background p-3" key={label}>
+                    <p className="text-xs text-muted-foreground">{label}</p>
+                    <p className="mt-1 font-mono text-sm tabular-nums">
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+            {active ? (
+              <CardFooter className="justify-end gap-2 rounded-none bg-background">
+                {progress.status === "paused" ? (
+                  <Button
+                    onClick={() => void resumeImport(progress.jobId)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <PlayIcon data-icon="inline-start" />
+                    Continue
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => void pauseImport(progress.jobId)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <PauseIcon data-icon="inline-start" />
+                    Pause
+                  </Button>
+                )}
+                <Button
+                  onClick={() => void cancelImport(progress.jobId)}
+                  size="sm"
+                  variant="outline"
+                >
+                  <SquareIcon data-icon="inline-start" />
+                  Cancel
+                </Button>
+              </CardFooter>
+            ) : null}
+          </DashboardCard>
+        ) : null}
+
+        <DashboardCard className="gap-0 lg:col-span-4">
+          <CardHeader className="border-b">
+            <CardTitle>Local datasets</CardTitle>
+            <CardDescription>
+              {datasets.data?.length ?? 0} sources registered in this workspace.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-0">
+            {datasets.data?.length ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="ps-6">Dataset</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Files</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Records</TableHead>
+                    <TableHead>Last indexed</TableHead>
+                    <TableHead className="pe-6 text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {datasets.data.map((dataset) => {
+                    const resumable = [
+                      "cancelled",
+                      "interrupted",
+                      "failed",
+                      "paused",
+                    ].includes(dataset.status);
+                    return (
+                      <TableRow key={dataset.id}>
+                        <TableCell className="max-w-72 truncate ps-6 font-medium">
+                          {dataset.name}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{dataset.status}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {dataset.fileCount}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {formatBytes(dataset.totalBytes)}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs tabular-nums">
+                          {formatCount(dataset.recordCount)}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {formatDateTime(dataset.lastIndexedAt)}
+                        </TableCell>
+                        <TableCell className="pe-6 text-right">
+                          {resumable ? (
+                            <Button
+                              onClick={() =>
+                                void resumeDatasetImport(dataset.id).then(
+                                  (result) =>
+                                    setProgress({
+                                      jobId: result.jobId,
+                                      datasetId: result.datasetId,
+                                      status: "queued",
+                                      currentFile: null,
+                                      bytesRead: 0,
+                                      totalBytes: dataset.totalBytes,
+                                      recordsProcessed: dataset.recordCount,
+                                      recordsIndexed: dataset.recordCount,
+                                      invalidRecords: 0,
+                                      duplicateRecords: 0,
+                                      message: "Resume queued",
+                                    }),
+                                )
+                              }
+                              size="sm"
+                              variant="outline"
+                            >
+                              <RotateCcwIcon data-icon="inline-start" />
+                              Resume
+                            </Button>
+                          ) : (
+                            <Button
+                              nativeButton={false}
+                              render={
+                                <a
+                                  href={`#/search?dataset=${encodeURIComponent(dataset.id)}`}
+                                />
+                              }
+                              size="sm"
+                              variant="ghost"
+                            >
+                              Search
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             ) : (
-              <LoaderCircle
-                className={terminal ? "" : "animate-spin"}
-                size={18}
-                aria-hidden="true"
-              />
+              <Empty className="min-h-80 rounded-none border-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <UploadIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>No datasets</EmptyTitle>
+                  <EmptyDescription>
+                    Index a source for fast repeated lookup, or scan files once
+                    without adding them.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button onClick={() => inspect.mutate("files")} size="sm">
+                    <FilePlus2Icon data-icon="inline-start" />
+                    Choose files
+                  </Button>
+                  <Button
+                    nativeButton={false}
+                    render={<a href="#/search?surface=direct" />}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <FileSearchIcon data-icon="inline-start" />
+                    Scan without indexing
+                  </Button>
+                </EmptyContent>
+              </Empty>
             )}
-            <div>
-              <strong>{activeJob.message}</strong>
-              <span>
-                {activeJob.currentFile ?? activeJob.status} ·{" "}
-                {activeJob.recordsIndexed.toLocaleString()} indexed ·{" "}
-                {activeJob.invalidRecords.toLocaleString()} invalid
-              </span>
-              {!terminal && activeJob.status !== "paused" ? (
-                <span className="job-panel__speed font-mono">
-                  {formatRate(throughput.recordsPerSecond)} records/s ·{" "}
-                  {formatBytes(throughput.bytesPerSecond)}/s
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <div
-            className="job-progress"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(progress)}
-          >
-            <span style={{ width: `${progress}%` }} />
-          </div>
-          {!terminal ? (
-            <div className="job-panel__actions">
-              {activeJob.status === "paused" ? (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void resumeActiveJob()}
-                >
-                  <Play size={14} />
-                  Resume
-                </Button>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => void pauseActiveJob()}
-                >
-                  <Pause size={14} />
-                  Pause
-                </Button>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void cancelActiveJob()}
-              >
-                <CircleStop size={14} />
-                Cancel
-              </Button>
+          </CardContent>
+        </DashboardCard>
+      </div>
+
+      <Dialog onOpenChange={setDialogOpen} open={dialogOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Review import</DialogTitle>
+            <DialogDescription>
+              Detection previews are masked before reaching this screen.
+            </DialogDescription>
+          </DialogHeader>
+          {inspection ? (
+            <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="dataset-label">Dataset name</FieldLabel>
+                  <Input
+                    id="dataset-label"
+                    onChange={(event) => setDatasetLabel(event.target.value)}
+                    value={datasetLabel}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="authorization-note">
+                    Authorization note
+                  </FieldLabel>
+                  <Input
+                    id="authorization-note"
+                    onChange={(event) =>
+                      setAuthorizationNote(event.target.value)
+                    }
+                    placeholder="Optional local audit note"
+                    value={authorizationNote}
+                  />
+                  <FieldDescription>
+                    This note stays in local metadata.
+                  </FieldDescription>
+                </Field>
+              </FieldGroup>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>File</TableHead>
+                    <TableHead>Format</TableHead>
+                    <TableHead>Encoding</TableHead>
+                    <TableHead>Columns</TableHead>
+                    <TableHead>Size</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {inspection.files.map((file) => (
+                    <TableRow key={file.absolutePath}>
+                      <TableCell className="max-w-72 truncate">
+                        {file.fileName}
+                      </TableCell>
+                      <TableCell>{file.format}</TableCell>
+                      <TableCell>{file.encoding}</TableCell>
+                      <TableCell>{file.columnCount}</TableCell>
+                      <TableCell>{formatBytes(file.fileSize)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <FieldGroup>
+                {(
+                  [
+                    [
+                      "extractDomains",
+                      "Group domains",
+                      "Normalize domains and subdomains for lookup.",
+                    ],
+                    [
+                      "groupIdentities",
+                      "Build identities",
+                      "Create automatic exact-identifier groups.",
+                    ],
+                    [
+                      "deduplicate",
+                      "Deduplicate records",
+                      "Spend more time to reduce exact duplicates.",
+                    ],
+                    [
+                      "storeOffsets",
+                      "Store source offsets",
+                      "Keep fast source-location traceability.",
+                    ],
+                  ] as const
+                ).map(([key, title, description]) => (
+                  <Field key={key} orientation="horizontal">
+                    <div>
+                      <p className="text-sm font-medium">{title}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {description}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={Boolean(options[key as keyof ImportOptions])}
+                      onCheckedChange={(checked) =>
+                        setOptions((current) => ({
+                          ...current,
+                          [key]: checked,
+                        }))
+                      }
+                    />
+                  </Field>
+                ))}
+              </FieldGroup>
             </div>
           ) : null}
-        </section>
-      ) : null}
-
-      {datasets.isLoading ? (
-        <div className="loading-line">
-          <LoaderCircle className="animate-spin" size={16} />
-          Reading local metadata
-        </div>
-      ) : datasets.data?.length ? (
-        <div className="data-list" aria-label="Local datasets">
-          <div className="data-list__head">
-            <span>Dataset</span>
-            <span>Status</span>
-            <span>Records</span>
-            <span>Sources</span>
-            <span>Size</span>
-            <span>Action</span>
-          </div>
-          {datasets.data.map((dataset) => (
-            <article className="data-list__row" key={dataset.id}>
-              <div className="data-list__identity">
-                <Files size={16} aria-hidden="true" />
-                <span>
-                  <strong>{dataset.name}</strong>
-                  <small className="font-mono">{dataset.id.slice(0, 8)}</small>
-                </span>
-              </div>
-              <span className="status-label" data-status={dataset.status}>
-                {dataset.status === "ready" ? (
-                  <ShieldCheck size={13} />
-                ) : dataset.status === "indexing" ||
-                  dataset.status === "queued" ? (
-                  <LoaderCircle className="animate-spin" size={13} />
-                ) : (
-                  <CircleStop size={13} />
-                )}
-                {dataset.status}
-              </span>
-              <span className="font-mono">
-                {dataset.recordCount.toLocaleString()}
-              </span>
-              <span className="font-mono">{dataset.fileCount}</span>
-              <span className="font-mono">
-                {formatBytes(dataset.totalBytes)}
-              </span>
-              <span className="dataset-actions">
-                {["cancelled", "interrupted", "failed"].includes(
-                  dataset.status,
-                ) ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void continueDataset(dataset)}
-                  >
-                    <Play size={13} />
-                    Resume
-                  </Button>
-                ) : null}
-              </span>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <EmptyState
-          icon={FilePlus2}
-          title="No datasets have been added"
-          description="Choose a local file or folder to create the first searchable index. The source remains unchanged and is never uploaded."
-          detail="Detection previews are masked before they reach the interface."
-          action={
-            <Button variant="primary" onClick={() => setShowWizard(true)}>
-              <FilePlus2 size={16} />
-              Add authorized source
+          <DialogFooter>
+            <Button
+              disabled={!datasetLabel.trim() || start.isPending}
+              onClick={() => start.mutate()}
+            >
+              <UploadIcon data-icon="inline-start" />
+              Start import
             </Button>
-          }
-        />
-      )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

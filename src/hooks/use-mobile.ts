@@ -1,15 +1,15 @@
-import * as React from "react";
+import { useSyncExternalStore } from "react";
 
 const MOBILE_BREAKPOINT = 768;
 
 export function useIsMobile() {
-  return React.useSyncExternalStore(
+  return useSyncExternalStore(
     (onStoreChange) => {
-      const query = window.matchMedia(
+      const mediaQuery = window.matchMedia(
         `(max-width: ${MOBILE_BREAKPOINT - 1}px)`,
       );
-      query.addEventListener("change", onStoreChange);
-      return () => query.removeEventListener("change", onStoreChange);
+      mediaQuery.addEventListener("change", onStoreChange);
+      return () => mediaQuery.removeEventListener("change", onStoreChange);
     },
     () => window.innerWidth < MOBILE_BREAKPOINT,
     () => false,

@@ -1,589 +1,692 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import {
-  BadgeCheck,
-  GitMerge,
-  IdCard,
-  LoaderCircle,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  ShieldCheck,
-  Users,
-  XCircle,
+  CheckIcon,
+  FingerprintIcon,
+  LinkIcon,
+  ListChecksIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  UserRoundCheckIcon,
+  UsersIcon,
+  XIcon,
+  type LucideIcon,
 } from "lucide-react";
 
-import { PageHeader } from "../components/page-header";
-import { Button } from "../components/ui/button";
+import { DashboardCard } from "@/components/dashboard-card";
+import { PageHeader } from "@/components/page-header";
+import { PaginationControls } from "@/components/pagination-controls";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-  Card,
   CardAction,
   CardContent,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
-} from "../components/ui/card";
-import { EmptyState } from "../components/ui/empty-state";
-import { Input } from "../components/ui/input";
-import { PaginationControls } from "../components/ui/pagination-controls";
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   applyIdentityAction,
   createManualIdentity,
   listIdentities,
   listIdentityMembers,
   rebuildIdentities,
-  searchRecords,
-  type IdentityActionInput,
-  type SearchHit,
-} from "../lib/desktop";
+  searchIdentityRecords,
+} from "@/lib/desktop";
+import { formatCount } from "@/lib/format";
 
-const builderPageSize = 25;
-const memberPageSize = 25;
+const memberLimit = 25;
 
 export function IdentitiesPage() {
   const queryClient = useQueryClient();
-  const [builderDraft, setBuilderDraft] = useState("");
-  const [builderQuery, setBuilderQuery] = useState("");
-  const [builderOffset, setBuilderOffset] = useState(0);
-  const [identityName, setIdentityName] = useState("");
-  const [selectedRecords, setSelectedRecords] = useState<Set<string>>(
+  const automaticRebuildStarted = useRef(false);
+  const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
+  const [identityFilter, setIdentityFilter] = useState("");
+  const [memberOffset, setMemberOffset] = useState(0);
+  const [manualQuery, setManualQuery] = useState("");
+  const [submittedManualQuery, setSubmittedManualQuery] = useState("");
+  const [manualOffset, setManualOffset] = useState(0);
+  const [manualName, setManualName] = useState("");
+  const [manualSelection, setManualSelection] = useState<Set<string>>(
     new Set(),
   );
-  const [mergeSource, setMergeSource] = useState<string | null>(null);
-  const [mergeTarget, setMergeTarget] = useState("");
-  const [lastEvent, setLastEvent] = useState("");
-  const [openGroup, setOpenGroup] = useState<string | null>(null);
-  const [memberOffset, setMemberOffset] = useState(0);
   const [notice, setNotice] = useState("");
 
   const identities = useQuery({
     queryKey: ["identities"],
     queryFn: listIdentities,
   });
-  const builderResults = useQuery({
-    queryKey: ["identity-builder", builderQuery, builderOffset],
+  const identityList = useMemo(() => identities.data ?? [], [identities.data]);
+  const filteredIdentities = useMemo(() => {
+    const needle = identityFilter.trim().toLowerCase();
+    if (!needle) return identityList;
+    return identityList.filter((identity) =>
+      [
+        identity.displayLabel,
+        identity.linkType,
+        identity.userStatus,
+        identity.confidenceLevel,
+      ].some((value) => value.toLowerCase().includes(needle)),
+    );
+  }, [identityFilter, identityList]);
+  const activeIdentity = selectedIdentity ?? identityList[0]?.id ?? null;
+
+  const members = useQuery({
+    queryKey: ["identity-members", activeIdentity, memberOffset],
     queryFn: () =>
-      searchRecords({
-        query: builderQuery,
+      listIdentityMembers(
+        activeIdentity ?? "",
+        memberOffset,
+        memberLimit,
+        true,
+      ),
+    enabled: Boolean(activeIdentity),
+  });
+
+  const manualResults = useQuery({
+    queryKey: ["identity-builder-search", submittedManualQuery, manualOffset],
+    queryFn: () =>
+      searchIdentityRecords({
+        query: submittedManualQuery,
         mode: "contains",
         datasetId: null,
         fieldType: null,
-        offset: builderOffset,
-        limit: builderPageSize,
+        offset: manualOffset,
+        limit: memberLimit,
       }),
-    enabled: builderQuery.length >= 2,
-    placeholderData: keepPreviousData,
+    enabled: Boolean(submittedManualQuery),
   });
-  const members = useQuery({
-    queryKey: ["identity-members", openGroup, memberOffset],
-    queryFn: () =>
-      listIdentityMembers(openGroup ?? "", memberOffset, memberPageSize),
-    enabled: Boolean(openGroup),
-    placeholderData: keepPreviousData,
-  });
-  const action = useMutation({
-    mutationFn: (input: IdentityActionInput) => applyIdentityAction(input),
-    onSuccess: async (eventId) => {
-      setLastEvent(eventId);
-      setMergeSource(null);
-      setMergeTarget("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["identities"] }),
-        queryClient.invalidateQueries({ queryKey: ["identity-members"] }),
-      ]);
-    },
-    onError: (error) =>
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Identity review could not be applied",
-      ),
-  });
-  const createIdentity = useMutation({
-    mutationFn: createManualIdentity,
-    onSuccess: async () => {
-      setNotice(
-        `${selectedRecords.size.toLocaleString()} records bundled as ${identityName.trim()}`,
-      );
-      setIdentityName("");
-      setSelectedRecords(new Set());
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["identities"] }),
-        queryClient.invalidateQueries({ queryKey: ["overview-stats"] }),
-      ]);
-    },
-    onError: (error) =>
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Manual identity could not be created",
-      ),
-  });
+
   const rebuild = useMutation({
     mutationFn: rebuildIdentities,
     onSuccess: async (count) => {
-      setNotice(
-        `${count.toLocaleString()} matching automatic identities are ready`,
-      );
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["identities"] }),
-        queryClient.invalidateQueries({ queryKey: ["overview-stats"] }),
-      ]);
+      setNotice(`Rebuilt ${formatCount(count)} automatic groups`);
+      await queryClient.invalidateQueries({ queryKey: ["identities"] });
     },
-    onError: (error) =>
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "Automatic identities could not be rebuilt",
-      ),
+    onError: (error) => setNotice(`Identity analysis failed: ${String(error)}`),
+  });
+  const create = useMutation({
+    mutationFn: () =>
+      createManualIdentity({
+        name: manualName.trim(),
+        recordIds: [...manualSelection],
+      }),
+    onSuccess: async (id) => {
+      setNotice("Manual identity created");
+      setManualName("");
+      setManualSelection(new Set());
+      setSelectedIdentity(id);
+      await queryClient.invalidateQueries({ queryKey: ["identities"] });
+    },
   });
 
-  function submitBuilder(event: FormEvent) {
-    event.preventDefault();
-    const query = builderDraft.trim();
-    if (query.length < 2) return;
-    setBuilderOffset(0);
-    setBuilderQuery(query);
-    setSelectedRecords(new Set());
-  }
+  const rebuildGroups = rebuild.mutate;
+  useEffect(() => {
+    if (
+      !identities.isSuccess ||
+      identityList.length > 0 ||
+      automaticRebuildStarted.current
+    ) {
+      return;
+    }
+    automaticRebuildStarted.current = true;
+    rebuildGroups();
+  }, [identities.isSuccess, identityList.length, rebuildGroups]);
 
-  function toggleRecord(recordId: string) {
-    setSelectedRecords((current) => {
-      const next = new Set(current);
-      if (next.has(recordId)) next.delete(recordId);
-      else next.add(recordId);
-      return next;
-    });
-  }
+  const selectedSummary = identityList.find(
+    (item) => item.id === activeIdentity,
+  );
+  const totalMembers = identityList.reduce(
+    (total, identity) => total + identity.memberCount,
+    0,
+  );
+  const confirmedCount = identityList.filter(
+    (identity) => identity.userStatus === "confirmed",
+  ).length;
+  const reviewCount = identityList.filter(
+    (identity) => identity.userStatus !== "confirmed",
+  ).length;
+  const identityStats: Array<{
+    icon: LucideIcon;
+    label: string;
+    value: string;
+  }> = [
+    {
+      label: "Groups",
+      value: formatCount(identityList.length),
+      icon: FingerprintIcon,
+    },
+    {
+      label: "Linked records",
+      value: formatCount(totalMembers),
+      icon: LinkIcon,
+    },
+    {
+      label: "Confirmed",
+      value: formatCount(confirmedCount),
+      icon: UserRoundCheckIcon,
+    },
+    {
+      label: "Needs review",
+      value: formatCount(reviewCount),
+      icon: ListChecksIcon,
+    },
+  ];
 
-  function apply(
-    actionName: IdentityActionInput["action"],
-    groupId: string,
-    targetGroupId: string | null = null,
-  ) {
-    action.mutate({
-      action: actionName,
-      groupId,
+  async function applyAction(action: "confirm" | "reject") {
+    if (!selectedSummary) return;
+    await applyIdentityAction({
+      action,
+      groupId: selectedSummary.id,
       recordIds: [],
-      targetGroupId,
+      targetGroupId: null,
     });
-  }
-
-  function openMembers(groupId: string) {
-    setOpenGroup((current) => (current === groupId ? null : groupId));
-    setMemberOffset(0);
-  }
-
-  function createBundle() {
-    const name = identityName.trim();
-    if (!name || selectedRecords.size < 2) return;
-    createIdentity.mutate({
-      name,
-      recordIds: [...selectedRecords],
-    });
+    setNotice(
+      action === "confirm" ? "Identity confirmed" : "Identity rejected",
+    );
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["identities"] }),
+      queryClient.invalidateQueries({
+        queryKey: ["identity-members", selectedSummary.id],
+      }),
+    ]);
   }
 
   return (
-    <div className="page page--identities">
+    <div>
       <PageHeader
-        title="Identities"
-        description="Bundle related records automatically or build a reviewed identity yourself."
-        meta="LOCAL + REVIEWABLE"
-        action={
-          <div className="identity-page-actions">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={rebuild.isPending}
-              onClick={() => rebuild.mutate()}
-            >
-              {rebuild.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <RefreshCw />
-              )}
-              {rebuild.isPending ? "Finding matches" : "Find automatic matches"}
-            </Button>
-            {lastEvent ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={action.isPending}
-                onClick={() => apply("undo", lastEvent)}
-              >
-                <RotateCcw />
-                Undo review
-              </Button>
-            ) : null}
-          </div>
+        actions={
+          <Button
+            disabled={rebuild.isPending}
+            onClick={() => rebuild.mutate()}
+            size="sm"
+            variant="outline"
+          >
+            {rebuild.isPending ? (
+              <Spinner data-icon="inline-start" />
+            ) : (
+              <RefreshCwIcon data-icon="inline-start" />
+            )}
+            {rebuild.isPending ? "Analyzing…" : "Rebuild groups"}
+          </Button>
         }
+        description="Review automatic groups or create an identity from selected evidence."
+        title="Identities"
       />
 
-      {notice ? <p className="notice-line">{notice}</p> : null}
+      <Tabs defaultValue="groups">
+        <TabsList variant="line">
+          <TabsTrigger value="groups">Collection</TabsTrigger>
+          <TabsTrigger value="builder">Build identity</TabsTrigger>
+        </TabsList>
 
-      <Card className="identity-builder" size="sm">
-        <CardHeader className="border-b">
-          <CardTitle>Build an identity</CardTitle>
-          <CardDescription>
-            Search any identifier, select matching records, then give the bundle
-            a clear name.
-          </CardDescription>
-          <CardAction>
-            <span className="identity-builder__privacy">
-              <ShieldCheck />
-              Local only
-            </span>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="identity-builder__content">
-          <form className="identity-builder__search" onSubmit={submitBuilder}>
-            <Search aria-hidden="true" />
-            <Input
-              aria-label="Find records for an identity"
-              placeholder="Search an email, username, phone, domain, or other identifier"
-              value={builderDraft}
-              maxLength={512}
-              onChange={(event) => setBuilderDraft(event.target.value)}
-            />
-            <Button type="submit" variant="primary">
-              Search records
-            </Button>
-          </form>
+        <TabsContent value="groups">
+          <div className="grid grid-cols-2 gap-px bg-border p-px lg:grid-cols-4">
+            {identityStats.map(({ icon: Icon, label, value }) => (
+              <DashboardCard key={label}>
+                <CardHeader>
+                  <CardDescription>{label}</CardDescription>
+                  <CardTitle className="font-mono text-2xl tabular-nums">
+                    {value}
+                  </CardTitle>
+                  <CardAction>
+                    <Icon />
+                  </CardAction>
+                </CardHeader>
+              </DashboardCard>
+            ))}
+          </div>
 
-          {builderResults.isError ? (
-            <p className="import-error" role="alert">
-              {String(builderResults.error)}
-            </p>
-          ) : builderQuery ? (
-            <div className="identity-builder__results">
-              <div className="identity-builder__bundle">
-                <div>
-                  <strong>
-                    {builderResults.data?.total.toLocaleString() ?? "0"} matches
-                  </strong>
-                  <span>
-                    {selectedRecords.size.toLocaleString()} selected across
-                    pages
-                  </span>
-                </div>
-                <Input
-                  aria-label="Identity name"
-                  placeholder="Identity name"
-                  value={identityName}
-                  maxLength={120}
-                  onChange={(event) => setIdentityName(event.target.value)}
-                />
-                <Button
-                  variant="primary"
-                  disabled={
-                    selectedRecords.size < 2 ||
-                    !identityName.trim() ||
-                    createIdentity.isPending
-                  }
-                  onClick={createBundle}
-                >
-                  {createIdentity.isPending ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <Users />
-                  )}
-                  Bundle {selectedRecords.size || ""}
-                </Button>
-              </div>
-              {builderResults.isLoading ? (
-                <div className="loading-line">
-                  <LoaderCircle className="animate-spin" />
-                  Searching indexed records
-                </div>
-              ) : builderResults.data?.hits.length ? (
-                <>
-                  <div className="identity-builder__table">
-                    {builderResults.data.hits.map((hit) => (
-                      <IdentitySearchRow
-                        key={hit.recordId}
-                        hit={hit}
-                        checked={selectedRecords.has(hit.recordId)}
-                        onChange={() => toggleRecord(hit.recordId)}
-                      />
-                    ))}
-                  </div>
-                  <PaginationControls
-                    label="identity search results"
-                    offset={builderOffset}
-                    total={builderResults.data.total}
-                    pageSize={builderPageSize}
-                    busy={builderResults.isFetching}
-                    onOffsetChange={setBuilderOffset}
+          <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-[19rem_1fr]">
+            <DashboardCard className="gap-0">
+              <CardHeader className="border-b">
+                <CardTitle>Identity collection</CardTitle>
+                <CardDescription>
+                  {formatCount(filteredIdentities.length)} visible groups
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="border-b p-3">
+                <InputGroup>
+                  <InputGroupAddon>
+                    <SearchIcon />
+                  </InputGroupAddon>
+                  <InputGroupInput
+                    aria-label="Filter identities"
+                    onChange={(event) => setIdentityFilter(event.target.value)}
+                    placeholder="Filter groups"
+                    value={identityFilter}
                   />
-                </>
-              ) : (
-                <p className="identity-builder__empty">
-                  No records contain this value.
-                </p>
-              )}
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <section className="identity-collection">
-        <header>
-          <div>
-            <h2>Identity bundles</h2>
-            <p>
-              Automatic cards require at least two exact matching records.
-              Manual cards contain only records you selected.
-            </p>
-          </div>
-          <span className="font-mono">
-            {(identities.data?.length ?? 0).toLocaleString()} identities
-          </span>
-        </header>
-
-        {identities.isLoading ? (
-          <div className="loading-line">
-            <LoaderCircle className="animate-spin" />
-            Loading identities
-          </div>
-        ) : identities.data?.length ? (
-          <div className="identity-bento">
-            {identities.data.map((identity) => {
-              const manual = identity.linkType === "manual_bundle";
-              return (
-                <Card
-                  className="identity-card"
-                  data-manual={manual}
-                  key={identity.id}
-                  size="sm"
-                >
-                  <CardHeader>
-                    <CardTitle>
-                      <IdCard />
-                      <span>{identity.displayLabel}</span>
-                    </CardTitle>
-                    <CardDescription className="font-mono">
-                      {identity.id.slice(0, 12)}
-                    </CardDescription>
-                    <CardAction>
-                      <span className="identity-card__type">
-                        {manual ? "Manual" : "Automatic"}
-                      </span>
-                    </CardAction>
-                  </CardHeader>
-                  <CardContent className="identity-card__body">
-                    <div>
-                      <strong className="font-mono">
-                        {identity.memberCount.toLocaleString()}
-                      </strong>
-                      <span>linked records</span>
+                </InputGroup>
+              </CardContent>
+              <CardContent className="px-0">
+                {filteredIdentities.length ? (
+                  <ScrollArea className="h-[31rem]">
+                    <div className="flex flex-col">
+                      {filteredIdentities.map((identity) => (
+                        <Button
+                          className="h-auto w-full justify-start rounded-none px-4 py-3"
+                          key={identity.id}
+                          onClick={() => {
+                            setSelectedIdentity(identity.id);
+                            setMemberOffset(0);
+                          }}
+                          variant={
+                            identity.id === activeIdentity
+                              ? "secondary"
+                              : "ghost"
+                          }
+                        >
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block truncate font-medium">
+                              {identity.displayLabel}
+                            </span>
+                            <span className="mt-1 block truncate text-xs text-muted-foreground">
+                              {identity.linkType.replaceAll("_", " ")} ·{" "}
+                              {formatCount(identity.memberCount)} records
+                            </span>
+                          </span>
+                          <Badge variant="outline">{identity.userStatus}</Badge>
+                        </Button>
+                      ))}
                     </div>
-                    <dl>
-                      <div>
-                        <dt>Confidence</dt>
-                        <dd>{identity.confidenceLevel}</dd>
-                      </div>
-                      <div>
-                        <dt>Status</dt>
-                        <dd>{identity.userStatus}</dd>
-                      </div>
-                      <div>
-                        <dt>Rule</dt>
-                        <dd>{identity.explanation.replaceAll("_", " ")}</dd>
-                      </div>
-                    </dl>
-                  </CardContent>
-                  {mergeSource === identity.id ? (
-                    <div className="identity-card__merge">
-                      <select
-                        aria-label="Merge target"
-                        value={mergeTarget}
-                        onChange={(event) => setMergeTarget(event.target.value)}
-                      >
-                        <option value="">Choose target identity</option>
-                        {identities.data
-                          .filter((candidate) => candidate.id !== identity.id)
-                          .map((candidate) => (
-                            <option key={candidate.id} value={candidate.id}>
-                              {candidate.displayLabel}
-                            </option>
-                          ))}
-                      </select>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        disabled={!mergeTarget || action.isPending}
-                        onClick={() =>
-                          apply("merge", identity.id, mergeTarget || null)
+                  </ScrollArea>
+                ) : (
+                  <Empty className="min-h-72 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <FingerprintIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>No matching groups</EmptyTitle>
+                      <EmptyDescription>
+                        Rebuild automatic groups or change the filter.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+            </DashboardCard>
+
+            {selectedSummary ? (
+              <DashboardCard className="gap-0">
+                <CardHeader className="border-b">
+                  <CardTitle>{selectedSummary.displayLabel}</CardTitle>
+                  <CardDescription>
+                    {selectedSummary.explanation.replaceAll("_", " ")}
+                  </CardDescription>
+                  <CardAction>
+                    <div className="flex gap-2">
+                      <Badge variant="outline">
+                        {selectedSummary.confidenceLevel}
+                      </Badge>
+                      <Badge
+                        variant={
+                          selectedSummary.userStatus === "confirmed"
+                            ? "secondary"
+                            : "outline"
                         }
                       >
-                        Merge
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setMergeSource(null)}
-                      >
-                        Cancel
-                      </Button>
+                        {selectedSummary.userStatus}
+                      </Badge>
                     </div>
-                  ) : null}
-                  <CardFooter className="identity-card__actions">
-                    {!manual ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={action.isPending}
-                          onClick={() => apply("confirm", identity.id)}
-                        >
-                          <BadgeCheck />
-                          Confirm
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={action.isPending}
-                          onClick={() => apply("reject", identity.id)}
-                        >
-                          <XCircle />
-                          Reject
-                        </Button>
-                      </>
-                    ) : null}
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="grid grid-cols-3 gap-px bg-border p-px">
+                  {[
+                    [
+                      "Linked evidence",
+                      formatCount(
+                        members.data?.total ?? selectedSummary.memberCount,
+                      ),
+                    ],
+                    [
+                      "Link type",
+                      selectedSummary.linkType.replaceAll("_", " "),
+                    ],
+                    ["Review state", notice || selectedSummary.userStatus],
+                  ].map(([label, value]) => (
+                    <div className="bg-background p-4" key={label}>
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                      <p className="mt-1 truncate font-mono text-sm">{value}</p>
+                    </div>
+                  ))}
+                </CardContent>
+                <CardContent className="px-0">
+                  <Table className="table-fixed">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-3/5 ps-6">
+                          Record values
+                        </TableHead>
+                        <TableHead className="pe-6">Context</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(members.data?.members ?? []).map((member) => {
+                        const values = member.fields
+                          .filter(
+                            (field) =>
+                              !["password", "password_hash", "salt"].includes(
+                                field.fieldType,
+                              ),
+                          )
+                          .map((field) => field.displayValue);
+                        return (
+                          <TableRow key={member.recordId}>
+                            <TableCell className="whitespace-normal ps-6">
+                              <p className="font-mono text-xs break-all">
+                                {values.join(" | ") || "No displayable values"}
+                              </p>
+                            </TableCell>
+                            <TableCell className="whitespace-normal pe-6">
+                              <p className="truncate text-xs font-medium">
+                                {member.datasetName}
+                              </p>
+                              <p className="truncate text-xs text-muted-foreground">
+                                {member.sourceFile}
+                              </p>
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                <span className="font-mono text-xs text-muted-foreground">
+                                  {member.sourceLocation}
+                                </span>
+                                <Badge variant="outline">
+                                  {member.userStatus}
+                                </Badge>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+                {members.data ? (
+                  <PaginationControls
+                    label="identity members"
+                    limit={memberLimit}
+                    offset={memberOffset}
+                    onOffsetChange={setMemberOffset}
+                    total={members.data.total}
+                  />
+                ) : null}
+                <CardFooter className="justify-between gap-2 rounded-none bg-background">
+                  <p className="text-xs text-muted-foreground">
+                    Confirm only after reviewing linked source rows.
+                  </p>
+                  <div className="flex gap-2">
                     <Button
+                      onClick={() => void applyAction("reject")}
                       size="sm"
-                      variant="ghost"
-                      disabled={action.isPending}
-                      onClick={() => setMergeSource(identity.id)}
+                      variant="outline"
                     >
-                      <GitMerge />
-                      Merge
+                      <XIcon data-icon="inline-start" />
+                      Reject
                     </Button>
                     <Button
+                      onClick={() => void applyAction("confirm")}
                       size="sm"
-                      variant="ghost"
-                      disabled={action.isPending}
-                      onClick={() => openMembers(identity.id)}
                     >
-                      <Users />
-                      {openGroup === identity.id ? "Hide" : "Members"}
+                      <CheckIcon data-icon="inline-start" />
+                      Confirm
                     </Button>
-                  </CardFooter>
-                </Card>
-              );
-            })}
-          </div>
-        ) : (
-          <EmptyState
-            icon={IdCard}
-            title="No matching identities yet"
-            description="Use the builder above, or scan indexed records for repeated exact emails, phones, and service-scoped IDs."
-            detail="Automatic grouping never guesses from similar names or usernames."
-            action={
-              <Button
-                variant="primary"
-                disabled={rebuild.isPending}
-                onClick={() => rebuild.mutate()}
-              >
-                <RefreshCw />
-                Find automatic matches
-              </Button>
-            }
-          />
-        )}
-      </section>
-
-      {openGroup ? (
-        <Card className="identity-members-panel" size="sm">
-          <CardHeader className="border-b">
-            <CardTitle>Identity members</CardTitle>
-            <CardDescription>
-              Every row keeps its original dataset and source line.
-            </CardDescription>
-            <CardAction>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setOpenGroup(null)}
-              >
-                Close
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            {members.isLoading ? (
-              <div className="loading-line">
-                <LoaderCircle className="animate-spin" />
-                Loading members
-              </div>
-            ) : members.data?.members.length ? (
-              <div className="identity-members-table">
-                {members.data.members.map((member) => (
-                  <article key={member.recordId}>
-                    <span>
-                      <strong>{member.datasetName}</strong>
-                      <small>{member.sourceFile}</small>
-                    </span>
-                    <span className="source-location">
-                      {member.sourceLocation}
-                    </span>
-                    <em>{member.userStatus}</em>
-                  </article>
-                ))}
-              </div>
+                  </div>
+                </CardFooter>
+              </DashboardCard>
             ) : (
-              <p className="identity-builder__empty">No linked records.</p>
+              <DashboardCard>
+                <Empty className="min-h-[31rem] rounded-none border-0">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <FingerprintIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>
+                      {rebuild.isPending
+                        ? "Analyzing identifiers"
+                        : "No repeated identities yet"}
+                    </EmptyTitle>
+                    <EmptyDescription>
+                      {rebuild.isPending
+                        ? "Emails and phone numbers are being grouped in the background. You can keep using the app."
+                        : "Automatic identities require the same email, phone number, or service ID in at least two records."}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              </DashboardCard>
             )}
-          </CardContent>
-          {members.data ? (
-            <CardFooter>
-              <PaginationControls
-                label="identity members"
-                offset={memberOffset}
-                total={members.data.total}
-                pageSize={memberPageSize}
-                busy={members.isFetching}
-                onOffsetChange={setMemberOffset}
-              />
-            </CardFooter>
-          ) : null}
-        </Card>
-      ) : null}
-    </div>
-  );
-}
+          </div>
+        </TabsContent>
 
-function IdentitySearchRow({
-  hit,
-  checked,
-  onChange,
-}: {
-  hit: SearchHit;
-  checked: boolean;
-  onChange: () => void;
-}) {
-  const primary =
-    hit.fields.find((field) => field.fieldType === "email") ??
-    hit.fields.find((field) => !field.sensitive) ??
-    hit.fields[0];
-  return (
-    <label>
-      <input type="checkbox" checked={checked} onChange={onChange} />
-      <span>
-        <strong className="font-mono">
-          {primary?.displayValue || "Masked record"}
-        </strong>
-        <small>
-          {hit.datasetName} · {hit.sourceFile}
-        </small>
-      </span>
-      <span className="source-location">{hit.sourceLocation}</span>
-    </label>
+        <TabsContent value="builder">
+          <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-[1fr_20rem]">
+            <DashboardCard className="gap-0">
+              <CardHeader className="border-b">
+                <CardTitle>Find evidence</CardTitle>
+                <CardDescription>
+                  Search the index and select only reviewed rows.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="border-b p-4">
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setManualOffset(0);
+                    setSubmittedManualQuery(manualQuery.trim());
+                  }}
+                >
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <SearchIcon />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      aria-label="Find identity evidence"
+                      onChange={(event) => setManualQuery(event.target.value)}
+                      placeholder="Email, username, phone, or account ID"
+                      value={manualQuery}
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <Button
+                        disabled={manualResults.isFetching}
+                        size="sm"
+                        type="submit"
+                      >
+                        {manualResults.isFetching ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : null}
+                        {manualResults.isFetching ? "Searching…" : "Search"}
+                      </Button>
+                    </InputGroupAddon>
+                  </InputGroup>
+                </form>
+              </CardContent>
+              <CardContent className="px-0">
+                {manualResults.data?.hits.length ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10 ps-4" />
+                        <TableHead>Evidence</TableHead>
+                        <TableHead className="pe-6">Context</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {manualResults.data.hits.map((hit) => (
+                        <TableRow key={hit.recordId}>
+                          <TableCell className="ps-4">
+                            <Checkbox
+                              aria-label={`Select ${hit.recordId}`}
+                              checked={manualSelection.has(hit.recordId)}
+                              onCheckedChange={(checked) =>
+                                setManualSelection((current) => {
+                                  const next = new Set(current);
+                                  if (checked) next.add(hit.recordId);
+                                  else next.delete(hit.recordId);
+                                  return next;
+                                })
+                              }
+                            />
+                          </TableCell>
+                          <TableCell className="max-w-2xl">
+                            <p className="font-mono text-xs break-all">
+                              {hit.fields
+                                .filter(
+                                  (field) =>
+                                    ![
+                                      "password",
+                                      "password_hash",
+                                      "salt",
+                                    ].includes(field.fieldType),
+                                )
+                                .slice(0, 8)
+                                .map((field) => field.displayValue)
+                                .join(" | ") || "No displayable values"}
+                            </p>
+                          </TableCell>
+                          <TableCell className="whitespace-normal pe-6">
+                            <p className="truncate text-xs font-medium">
+                              {hit.datasetName}
+                            </p>
+                            <p className="font-mono text-xs text-muted-foreground">
+                              {hit.sourceLocation}
+                            </p>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Empty className="min-h-80 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        {manualResults.isFetching ? (
+                          <Spinner />
+                        ) : (
+                          <SearchIcon />
+                        )}
+                      </EmptyMedia>
+                      <EmptyTitle>
+                        {manualResults.isFetching
+                          ? "Searching identity evidence"
+                          : "Find a person or account"}
+                      </EmptyTitle>
+                      <EmptyDescription>
+                        {manualResults.isFetching
+                          ? "Checking the local index for matching records."
+                          : "Search, review the matching rows, then select the evidence to bundle."}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+              {manualResults.data ? (
+                <PaginationControls
+                  label="identity builder results"
+                  limit={memberLimit}
+                  offset={manualOffset}
+                  onOffsetChange={setManualOffset}
+                  total={manualResults.data.total}
+                />
+              ) : null}
+            </DashboardCard>
+
+            <DashboardCard className="gap-0">
+              <CardHeader>
+                <CardTitle>Identity bundle</CardTitle>
+                <CardDescription>
+                  {formatCount(manualSelection.size)} selected records
+                </CardDescription>
+                <CardAction>
+                  <UsersIcon />
+                </CardAction>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col gap-4">
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="identity-name">
+                      Identity name
+                    </FieldLabel>
+                    <Input
+                      id="identity-name"
+                      onChange={(event) => setManualName(event.target.value)}
+                      placeholder="Reviewed identity"
+                      value={manualName}
+                    />
+                    <FieldDescription>
+                      The name stays local and does not change source data.
+                    </FieldDescription>
+                  </Field>
+                </FieldGroup>
+
+                <Empty className="min-h-48 flex-1 rounded-none border-0">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <FingerprintIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>
+                      {manualSelection.size
+                        ? `${formatCount(manualSelection.size)} records ready`
+                        : "No evidence selected"}
+                    </EmptyTitle>
+                    <EmptyDescription>
+                      {manualSelection.size
+                        ? "Name the bundle, then create the reviewed identity."
+                        : "Select reviewed evidence from the search results to build this identity."}
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              </CardContent>
+              <CardFooter className="mt-auto rounded-none bg-background">
+                <Button
+                  className="w-full"
+                  disabled={
+                    !manualName.trim() ||
+                    !manualSelection.size ||
+                    create.isPending
+                  }
+                  onClick={() => create.mutate()}
+                >
+                  {create.isPending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <UsersIcon data-icon="inline-start" />
+                  )}
+                  {create.isPending ? "Creating…" : "Create identity"}
+                </Button>
+              </CardFooter>
+            </DashboardCard>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }

@@ -1,426 +1,1006 @@
-import { useMemo, useRef, useState, type FormEvent } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookmarkPlus,
-  Download,
-  FileSearch,
-  LoaderCircle,
-  LockKeyhole,
-  Search,
-  ShieldCheck,
+  ArchiveIcon,
+  ChevronDownIcon,
+  DatabaseIcon,
+  FileSearchIcon,
+  FolderOpenIcon,
+  SaveIcon,
+  SearchIcon,
+  SlidersHorizontalIcon,
+  SquareIcon,
 } from "lucide-react";
 
-import { PageHeader } from "../components/page-header";
-import { Button } from "../components/ui/button";
-import { EmptyState } from "../components/ui/empty-state";
-import { PaginationControls } from "../components/ui/pagination-controls";
+import { DashboardCard } from "@/components/dashboard-card";
+import { PageHeader } from "@/components/page-header";
+import { PaginationControls } from "@/components/pagination-controls";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
+  CardContent,
+  CardAction,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldTitle,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  cancelDirectSearch,
   exportRecords,
   listDatasets,
+  listenDirectSearchProgress,
   saveSearch,
   searchRecords,
+  selectDirectSearchSources,
   selectExportDestination,
-  type SearchHit,
-  type ExportFormat,
+  startDirectSearch,
+  type DirectSearchProgress,
   type FieldType,
   type SearchMode,
-} from "../lib/desktop";
+} from "@/lib/desktop";
+import { formatBytes } from "@/lib/format";
 
-const modes: Array<{ value: SearchMode; label: string }> = [
-  { value: "exact", label: "Exact" },
-  { value: "contains", label: "Contains" },
-  { value: "prefix", label: "Prefix" },
+const modeItems = [
+  { label: "Contains", value: "contains" },
+  { label: "Exact", value: "exact" },
+  { label: "Prefix", value: "prefix" },
 ];
+const fieldItems: Array<{ label: string; value: string }> = [
+  { label: "Any safe field", value: "all" },
+  { label: "Email", value: "email" },
+  { label: "Domain", value: "domain" },
+  { label: "URL", value: "url" },
+  { label: "Username", value: "username" },
+  { label: "Phone", value: "phone" },
+  { label: "IP address", value: "ip_address" },
+  { label: "User ID", value: "user_id" },
+];
+const pageItems = [25, 50, 100, 200].map((value) => ({
+  label: `${value} per page`,
+  value: String(value),
+}));
+const workerItems = [1, 2, 4, 8].map((value) => ({
+  label: `${value} ${value === 1 ? "worker" : "workers"}`,
+  value: String(value),
+}));
+const resultCapItems = [500, 2_000, 5_000, 10_000].map((value) => ({
+  label: `${value.toLocaleString()} matches`,
+  value: String(value),
+}));
 
-export function SearchPage() {
-  const [draft, setDraft] = useState("");
-  const [query, setQuery] = useState("");
+function detectQueryKind(value: string) {
+  const query = value.trim();
+  if (!query) return null;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(query)) return "Email";
+  if (/^(?:https?:\/\/|www\.)/i.test(query)) return "URL";
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(query)) return "IP address";
+  if (/^\+?[\d\s().-]{7,}$/.test(query)) return "Phone";
+  if (/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(query)) {
+    return "Domain";
+  }
+  if (/^@[a-z0-9_.-]+$/i.test(query)) return "Username";
+  return "Text";
+}
+
+export function SearchPage({
+  initialQuery = "",
+  initialDatasetId = "all",
+  initialSurface = "index",
+}: {
+  initialQuery?: string;
+  initialDatasetId?: string;
+  initialSurface?: "index" | "direct";
+}) {
+  const [surface, setSurface] = useState<"index" | "direct">(initialSurface);
+  const [query, setQuery] = useState(initialQuery);
+  const [submittedQuery, setSubmittedQuery] = useState(initialQuery);
   const [mode, setMode] = useState<SearchMode>("contains");
-  const [datasetId, setDatasetId] = useState<string | null>(null);
-  const [fieldType, setFieldType] = useState<FieldType | null>(null);
-  const [sort, setSort] = useState<"relevance" | "source" | "dataset">(
-    "relevance",
-  );
+  const [field, setField] = useState("all");
+  const [datasetId, setDatasetId] = useState(initialDatasetId);
   const [offset, setOffset] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  const [limit, setLimit] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [detail, setDetail] = useState<SearchHit | null>(null);
   const [saveName, setSaveName] = useState("");
-  const [showSave, setShowSave] = useState(false);
   const [notice, setNotice] = useState("");
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
+  const [sourcePaths, setSourcePaths] = useState<string[]>([]);
+  const [directQuery, setDirectQuery] = useState("");
+  const [directMode, setDirectMode] = useState<SearchMode>("contains");
+  const [includeArchives, setIncludeArchives] = useState(true);
+  const [directWorkerLimit, setDirectWorkerLimit] = useState(2);
+  const [directMaxResults, setDirectMaxResults] = useState(2_000);
+  const [directProgress, setDirectProgress] =
+    useState<DirectSearchProgress | null>(null);
+  const queryClient = useQueryClient();
+
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
-  const results = useQuery({
-    queryKey: ["search", query, mode, datasetId, fieldType, offset, pageSize],
+  const indexed = useQuery({
+    queryKey: ["search", submittedQuery, mode, field, datasetId, offset, limit],
     queryFn: () =>
       searchRecords({
-        query,
+        query: submittedQuery,
         mode,
-        datasetId,
-        fieldType,
+        datasetId: datasetId === "all" ? null : datasetId,
+        fieldType: field === "all" ? null : (field as FieldType),
         offset,
-        limit: pageSize,
+        limit,
       }),
-    enabled: query.length > 0,
-    placeholderData: keepPreviousData,
+    enabled: submittedQuery.trim().length > 0,
   });
-  const displayedHits = useMemo(() => {
-    const hits = [...(results.data?.hits ?? [])];
-    if (sort === "source") {
-      hits.sort((left, right) =>
-        `${left.sourceFile}\u{1f}${left.sourceLocation}`.localeCompare(
-          `${right.sourceFile}\u{1f}${right.sourceLocation}`,
-        ),
-      );
-    } else if (sort === "dataset") {
-      hits.sort((left, right) =>
-        left.datasetName.localeCompare(right.datasetName),
-      );
-    }
-    return hits;
-  }, [results.data?.hits, sort]);
-  const scrollRef = useRef<HTMLDivElement>(null);
 
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    const next = draft.trim();
-    if (!next) return;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenDirectSearchProgress(setDirectProgress).then((value) => {
+      unlisten = value;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  const directSearch = useMutation({
+    mutationFn: () =>
+      startDirectSearch({
+        paths: sourcePaths,
+        query: directQuery.trim(),
+        mode: directMode,
+        caseSensitive: false,
+        includeArchives,
+        maxResults: directMaxResults,
+        workerLimit: directWorkerLimit,
+      }),
+    onSuccess: (result) => {
+      setDirectProgress({
+        jobId: result.jobId,
+        status: "running",
+        currentSource: null,
+        sourceCount: result.sourceCount,
+        filesScanned: 0,
+        totalBytes: result.totalBytes,
+        contentBytesScanned: 0,
+        matches: 0,
+        elapsedMs: 0,
+        bytesPerSecond: 0,
+        truncated: false,
+        message: "Scanning local sources",
+        hits: [],
+      });
+    },
+  });
+
+  const datasetItems = useMemo(
+    () => [
+      { label: "All datasets", value: "all" },
+      ...(datasets.data ?? []).map((dataset) => ({
+        label: dataset.name,
+        value: dataset.id,
+      })),
+    ],
+    [datasets.data],
+  );
+
+  function submitSearch() {
+    const value = query.trim();
+    if (!value) return;
     setOffset(0);
     setSelected(new Set());
-    setDetail(null);
-    setQuery(next);
+    setSubmittedQuery(value);
   }
 
-  function toggleSelection(recordId: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(recordId)) next.delete(recordId);
-      else next.add(recordId);
-      return next;
-    });
-  }
-
-  async function createSavedSearch() {
-    if (!saveName.trim() || !query) return;
-    await saveSearch(
-      saveName.trim(),
-      query,
-      JSON.stringify({ mode, datasetId, fieldType, sort }),
-    );
-    setShowSave(false);
-    setSaveName("");
-    setNotice("Search saved locally");
-  }
-
-  async function exportSelection() {
+  async function exportSelected() {
     if (!selected.size) return;
-    const destinationPath = await selectExportDestination(exportFormat);
+    const destinationPath = await selectExportDestination("csv");
     if (!destinationPath) return;
-    const exported = await exportRecords({
+    const result = await exportRecords({
       destinationPath,
-      format: exportFormat,
+      format: "csv",
       recordIds: [...selected],
       maskEmailLocalPart: true,
     });
-    setNotice(
-      `${exported.recordCount.toLocaleString()} redacted record${exported.recordCount === 1 ? "" : "s"} exported`,
-    );
+    setNotice(`Exported ${result.recordCount} redacted records.`);
+    await queryClient.invalidateQueries({ queryKey: ["exports"] });
   }
 
-  function movePage(nextOffset: number) {
-    setOffset(Math.max(0, nextOffset));
-    scrollRef.current?.scrollTo({ top: 0 });
-  }
+  const hits = indexed.data?.hits ?? [];
+  const allVisibleSelected =
+    hits.length > 0 && hits.every((hit) => selected.has(hit.recordId));
+  const directPercent = directProgress?.totalBytes
+    ? Math.min(
+        100,
+        (directProgress.contentBytesScanned / directProgress.totalBytes) * 100,
+      )
+    : 0;
+  const indexedQueryKind = detectQueryKind(query);
+  const directQueryKind = detectQueryKind(directQuery);
 
   return (
-    <div className="page page--search">
+    <div>
       <PageHeader
+        description="Choose fast indexed lookup or a one-time scan of local files and archives."
         title="Search"
-        description="Query normalized identifiers and keep every match tied to its local source."
-        meta="LOCAL INDEX"
-        action={
-          query ? (
-            <div className="search-actions">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setShowSave((value) => !value)}
-              >
-                <BookmarkPlus size={14} />
-                Save view
-              </Button>
-              <select
-                aria-label="Export format"
-                value={exportFormat}
-                onChange={(event) =>
-                  setExportFormat(event.target.value as ExportFormat)
-                }
-              >
-                <option value="csv">CSV</option>
-                <option value="json">JSON</option>
-                <option value="jsonl">JSONL</option>
-                <option value="markdown">Markdown</option>
-              </select>
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={!selected.size}
-                onClick={() => void exportSelection()}
-              >
-                <Download size={14} />
-                Export {selected.size || ""}
-              </Button>
-            </div>
-          ) : undefined
-        }
       />
-      <form className="search-composer" onSubmit={submit}>
-        <Search size={19} strokeWidth={1.6} aria-hidden="true" />
-        <input
-          aria-label="Search local index"
-          placeholder="Search email, domain, username, phone, IP, or URL"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          maxLength={512}
-        />
-        <kbd>Enter</kbd>
-      </form>
-
-      <details className="search-advanced">
-        <summary>
-          Search options
-          <span>
-            {modes.find((item) => item.value === mode)?.label} ·{" "}
-            {datasetId ? "1 dataset" : "All datasets"} ·{" "}
-            {fieldType ?? "Any field"}
-          </span>
-        </summary>
-        <div className="search-controls">
-          <div className="segmented-control segmented-control--compact">
-            {modes.map((item) => (
-              <button
-                type="button"
-                key={item.value}
-                data-active={mode === item.value}
-                onClick={() => {
-                  setMode(item.value);
-                  setOffset(0);
-                }}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <label>
-            <span>Dataset</span>
-            <select
-              aria-label="Dataset"
-              value={datasetId ?? ""}
-              onChange={(event) => {
-                setDatasetId(event.target.value || null);
-                setOffset(0);
-              }}
-            >
-              <option value="">All local datasets</option>
-              {datasets.data?.map((dataset) => (
-                <option key={dataset.id} value={dataset.id}>
-                  {dataset.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Field</span>
-            <select
-              aria-label="Field"
-              value={fieldType ?? ""}
-              onChange={(event) => {
-                setFieldType((event.target.value || null) as FieldType | null);
-                setOffset(0);
-              }}
-            >
-              <option value="">Any field</option>
-              <option value="email">Email</option>
-              <option value="phone">Phone</option>
-              <option value="domain">Domain</option>
-              <option value="url">URL</option>
-              <option value="ip_address">IP address</option>
-              <option value="username">Username</option>
-              <option value="user_id">Service user ID</option>
-            </select>
-          </label>
-          <label>
-            <span>Sort</span>
-            <select
-              aria-label="Sort"
-              value={sort}
-              onChange={(event) =>
-                setSort(
-                  event.target.value as "relevance" | "source" | "dataset",
-                )
-              }
-            >
-              <option value="relevance">Relevance</option>
-              <option value="source">Source location</option>
-              <option value="dataset">Dataset</option>
-            </select>
-          </label>
-          <span className="privacy-inline">
-            <LockKeyhole size={13} />
-            Secrets excluded
-          </span>
-        </div>
-      </details>
-
-      {showSave ? (
-        <div className="inline-save">
-          <input
-            aria-label="Saved view name"
-            placeholder="Investigation view name"
-            value={saveName}
-            maxLength={120}
-            onChange={(event) => setSaveName(event.target.value)}
-          />
-          <Button
-            size="sm"
-            variant="primary"
-            disabled={!saveName.trim()}
-            onClick={() => void createSavedSearch()}
+      <Tabs
+        onValueChange={(value) => setSurface(value as "index" | "direct")}
+        value={surface}
+      >
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-px rounded-none bg-border p-px group-data-horizontal/tabs:h-auto sm:grid-cols-2">
+          <TabsTrigger
+            className="h-auto min-w-0 items-start justify-start rounded-none bg-background p-4 text-left whitespace-normal data-active:bg-card"
+            value="index"
           >
-            Save locally
-          </Button>
-        </div>
-      ) : null}
-
-      {notice ? <p className="notice-line">{notice}</p> : null}
-
-      {!query ? (
-        <EmptyState
-          icon={Search}
-          title="Search the local evidence index"
-          description="Type any email, domain, username, phone, IP address, or URL. Results stay masked until deliberately exported."
-          detail="Secret fields are never added to the general Tantivy index."
-        />
-      ) : results.isLoading ? (
-        <div className="loading-line">
-          <LoaderCircle className="animate-spin" size={16} />
-          Searching the local index
-        </div>
-      ) : results.isError ? (
-        <EmptyState
-          icon={Search}
-          title="Search could not complete"
-          description={String(results.error)}
-          detail="The local index was not changed."
-          action={
-            <Button variant="primary" onClick={() => void results.refetch()}>
-              Try again
-            </Button>
-          }
-        />
-      ) : results.data?.hits.length ? (
-        <div className="result-workspace" data-detail={Boolean(detail)}>
-          <section className="result-list">
-            <header className="result-list__head">
-              <span>{results.data.total.toLocaleString()} matches</span>
-              <span>
-                {results.isFetching ? "Updating page" : "Masked locally"}
+            <DatabaseIcon />
+            <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+              <span>Indexed search</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                Fast, repeatable lookup across datasets you added.
               </span>
-            </header>
-            <div className="result-scroll" ref={scrollRef}>
-              <div className="result-table">
-                {displayedHits.map((hit) => {
-                  const primary = hit.fields.find(
-                    (field) => field.fieldType !== "password",
-                  );
-                  return (
-                    <article
-                      className="result-row"
-                      data-active={detail?.recordId === hit.recordId}
-                      key={hit.recordId}
+            </span>
+            <Badge variant="outline">Fast</Badge>
+          </TabsTrigger>
+          <TabsTrigger
+            className="h-auto min-w-0 items-start justify-start rounded-none bg-background p-4 text-left whitespace-normal data-active:bg-card"
+            value="direct"
+          >
+            <FileSearchIcon />
+            <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+              <span>Direct file scan</span>
+              <span className="text-xs font-normal text-muted-foreground">
+                One-time scan with no import or archive extraction.
+              </span>
+            </span>
+            <Badge variant="outline">No index</Badge>
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="index">
+          <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-4">
+            <DashboardCard className="lg:col-span-4">
+              <CardHeader>
+                <CardTitle>Indexed search</CardTitle>
+                <CardDescription>
+                  Searches the persistent local index. Best for repeated lookup.
+                </CardDescription>
+                <CardAction>
+                  <Badge variant="outline">Fast repeat lookup</Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <form
+                  className="flex flex-col gap-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitSearch();
+                  }}
+                >
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <SearchIcon />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      aria-label="Search query"
+                      autoFocus
+                      onChange={(event) => setQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          submitSearch();
+                        }
+                      }}
+                      placeholder="Email, domain, username, phone, IP address, or URL"
+                      value={query}
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <Button
+                        disabled={indexed.isFetching}
+                        size="sm"
+                        type="submit"
+                      >
+                        {indexed.isFetching ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : null}
+                        {indexed.isFetching ? "Searching…" : "Search"}
+                      </Button>
+                    </InputGroupAddon>
+                  </InputGroup>
+                  <div className="flex flex-wrap gap-2">
+                    <Select
+                      items={modeItems}
+                      onValueChange={(value) => setMode(value as SearchMode)}
+                      value={mode}
                     >
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${hit.recordId}`}
-                        checked={selected.has(hit.recordId)}
-                        onChange={() => toggleSelection(hit.recordId)}
-                      />
-                      <button onClick={() => setDetail(hit)}>
-                        <span className="result-row__main">
-                          <strong>
-                            {primary?.displayValue ?? "Masked record"}
-                          </strong>
-                          <small>
-                            {hit.datasetName} · {hit.sourceFile}
-                          </small>
-                        </span>
-                        <span className="source-location">
-                          {hit.sourceLocation}
-                        </span>
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-            </div>
-            <footer>
-              <PaginationControls
-                label="search results"
-                offset={offset}
-                total={results.data.total}
-                pageSize={pageSize}
-                busy={results.isFetching}
-                onOffsetChange={movePage}
-                onPageSizeChange={(size) => {
-                  setPageSize(size);
-                  movePage(0);
-                }}
-              />
-            </footer>
-          </section>
-          {detail ? (
-            <aside className="record-detail">
-              <header>
-                <div>
-                  <span className="eyebrow">RECORD DETAIL</span>
-                  <h2>Masked fields</h2>
-                </div>
-                <ShieldCheck size={18} />
-              </header>
-              <dl>
-                {detail.fields.map((field) => (
-                  <div key={field.name}>
-                    <dt>
-                      {field.name}
-                      {field.sensitive ? <LockKeyhole size={11} /> : null}
-                    </dt>
-                    <dd className="font-mono">{field.displayValue}</dd>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {modeItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      items={fieldItems}
+                      onValueChange={(value) => setField(String(value))}
+                      value={field}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {fieldItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      items={datasetItems}
+                      onValueChange={(value) => setDatasetId(String(value))}
+                      value={datasetId}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {datasetItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Select
+                      items={pageItems}
+                      onValueChange={(value) => {
+                        setLimit(Number(value));
+                        setOffset(0);
+                      }}
+                      value={String(limit)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {pageItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
                   </div>
-                ))}
-              </dl>
-              <div className="traceability">
-                <FileSearch size={15} />
-                <span>
-                  <strong>{detail.sourceFile}</strong>
-                  <small>
-                    <span className="source-location">
-                      {detail.sourceLocation}
-                    </span>{" "}
-                    · {detail.parser}
-                  </small>
-                </span>
-              </div>
-            </aside>
-          ) : null}
-        </div>
-      ) : (
-        <EmptyState
-          icon={Search}
-          title="No local matches"
-          description="Try a different safe query mode or remove the dataset filter."
-          detail="The query stayed on this computer."
-        />
-      )}
+                  {indexedQueryKind ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary">
+                        Detected: {indexedQueryKind}
+                      </Badge>
+                      <p className="text-xs text-muted-foreground">
+                        Any safe field is enough. Narrow the field only when you
+                        need fewer matches.
+                      </p>
+                    </div>
+                  ) : null}
+                </form>
+              </CardContent>
+            </DashboardCard>
+
+            <DashboardCard className="gap-0 lg:col-span-4">
+              <CardHeader className="border-b">
+                <CardTitle>Results</CardTitle>
+                <CardDescription>
+                  {indexed.data
+                    ? `${indexed.data.total.toLocaleString()} matches`
+                    : "Search to load masked evidence."}
+                </CardDescription>
+                {indexed.isFetching ? (
+                  <CardAction>
+                    <Badge variant="outline">
+                      <Spinner />
+                      Searching local index
+                    </Badge>
+                  </CardAction>
+                ) : null}
+              </CardHeader>
+              <CardContent className="px-0">
+                {hits.length ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-10 ps-4">
+                          <Checkbox
+                            aria-label="Select visible results"
+                            checked={allVisibleSelected}
+                            onCheckedChange={(checked) => {
+                              setSelected((current) => {
+                                const next = new Set(current);
+                                hits.forEach((hit) =>
+                                  checked
+                                    ? next.add(hit.recordId)
+                                    : next.delete(hit.recordId),
+                                );
+                                return next;
+                              });
+                            }}
+                          />
+                        </TableHead>
+                        <TableHead>Evidence</TableHead>
+                        <TableHead>Dataset</TableHead>
+                        <TableHead>Source</TableHead>
+                        <TableHead className="pe-4">Match</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {hits.map((hit) => (
+                        <TableRow key={hit.recordId}>
+                          <TableCell className="ps-4">
+                            <Checkbox
+                              aria-label={`Select ${hit.recordId}`}
+                              checked={selected.has(hit.recordId)}
+                              onCheckedChange={(checked) =>
+                                setSelected((current) => {
+                                  const next = new Set(current);
+                                  if (checked) next.add(hit.recordId);
+                                  else next.delete(hit.recordId);
+                                  return next;
+                                })
+                              }
+                            />
+                          </TableCell>
+                          <TableCell className="max-w-xl">
+                            <div className="flex flex-wrap gap-1">
+                              {hit.fields.slice(0, 6).map((item) => (
+                                <Badge
+                                  key={`${hit.recordId}-${item.name}`}
+                                  variant={
+                                    item.sensitive ? "secondary" : "outline"
+                                  }
+                                >
+                                  {item.name}: {item.displayValue}
+                                </Badge>
+                              ))}
+                            </div>
+                          </TableCell>
+                          <TableCell className="max-w-44 truncate">
+                            {hit.datasetName}
+                          </TableCell>
+                          <TableCell>
+                            <p className="max-w-48 truncate text-xs">
+                              {hit.sourceFile}
+                            </p>
+                            <p className="font-mono text-xs text-muted-foreground">
+                              {hit.sourceLocation}
+                            </p>
+                          </TableCell>
+                          <TableCell className="pe-4 text-xs text-muted-foreground">
+                            {hit.matchReason}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Empty className="min-h-72 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        {indexed.isFetching ? <Spinner /> : <SearchIcon />}
+                      </EmptyMedia>
+                      <EmptyTitle>
+                        {indexed.isFetching
+                          ? "Searching"
+                          : submittedQuery
+                            ? "No matches"
+                            : "Search the index"}
+                      </EmptyTitle>
+                      <EmptyDescription>
+                        Results remain masked in the interface.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+              {indexed.data ? (
+                <PaginationControls
+                  label="search results"
+                  limit={limit}
+                  offset={offset}
+                  onOffsetChange={setOffset}
+                  total={indexed.data.total}
+                />
+              ) : null}
+              <CardFooter className="justify-between gap-2 rounded-none bg-background">
+                <p className="text-xs text-muted-foreground">
+                  {notice || `${selected.size} selected`}
+                </p>
+                <div className="flex gap-2">
+                  <Dialog>
+                    <DialogTrigger
+                      render={
+                        <Button
+                          disabled={!submittedQuery}
+                          size="sm"
+                          variant="outline"
+                        />
+                      }
+                    >
+                      <SaveIcon data-icon="inline-start" />
+                      Save view
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Save search view</DialogTitle>
+                        <DialogDescription>
+                          Store this query and its current filters locally.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel htmlFor="saved-search-name">
+                            Name
+                          </FieldLabel>
+                          <Input
+                            id="saved-search-name"
+                            onChange={(event) =>
+                              setSaveName(event.target.value)
+                            }
+                            value={saveName}
+                          />
+                        </Field>
+                      </FieldGroup>
+                      <DialogFooter>
+                        <Button
+                          disabled={!saveName.trim()}
+                          onClick={() =>
+                            void saveSearch(
+                              saveName.trim(),
+                              submittedQuery,
+                              JSON.stringify({ mode, field, datasetId }),
+                            ).then(() => {
+                              setNotice("Saved view created.");
+                              setSaveName("");
+                              void queryClient.invalidateQueries({
+                                queryKey: ["saved-searches"],
+                              });
+                            })
+                          }
+                        >
+                          Save
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                  <Button
+                    disabled={!selected.size}
+                    onClick={() => void exportSelected()}
+                    size="sm"
+                  >
+                    Export selected
+                  </Button>
+                </div>
+              </CardFooter>
+            </DashboardCard>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="direct">
+          <div className="flex flex-col gap-px bg-border p-px">
+            <DashboardCard className="gap-0">
+              <CardHeader className="border-b">
+                <CardTitle>Direct file scan</CardTitle>
+                <CardDescription>
+                  Read files and compressed archives once without adding a
+                  dataset.
+                </CardDescription>
+                <CardAction>
+                  <Badge variant="outline">
+                    {directProgress?.status === "running"
+                      ? `${directPercent.toFixed(0)}% scanned`
+                      : "No index created"}
+                  </Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
+                <div className="flex flex-col gap-3 bg-background p-4">
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel>1. Choose files or a folder</FieldLabel>
+                      <div className="min-h-24 border bg-card p-3">
+                        {sourcePaths.length ? (
+                          <div className="flex flex-col gap-2">
+                            {sourcePaths.map((path) => (
+                              <div
+                                className="flex items-center gap-2"
+                                key={path}
+                              >
+                                <FileSearchIcon />
+                                <span className="min-w-0 truncate font-mono text-xs">
+                                  {path}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex min-h-16 items-center justify-center text-xs text-muted-foreground">
+                            Choose files or a folder to define the scan scope.
+                          </div>
+                        )}
+                      </div>
+                    </Field>
+                  </FieldGroup>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={() =>
+                        void selectDirectSearchSources("files").then(
+                          setSourcePaths,
+                        )
+                      }
+                      size="sm"
+                      variant="outline"
+                    >
+                      <ArchiveIcon data-icon="inline-start" />
+                      Choose files
+                    </Button>
+                    <Button
+                      onClick={() =>
+                        void selectDirectSearchSources("folder").then(
+                          setSourcePaths,
+                        )
+                      }
+                      size="sm"
+                      variant="outline"
+                    >
+                      <FolderOpenIcon data-icon="inline-start" />
+                      Choose folder
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-4 bg-background p-4">
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel htmlFor="direct-scan-query">
+                        2. Enter a value
+                      </FieldLabel>
+                      <InputGroup>
+                        <InputGroupAddon>
+                          <SearchIcon />
+                        </InputGroupAddon>
+                        <InputGroupInput
+                          aria-label="Direct scan query"
+                          id="direct-scan-query"
+                          onChange={(event) =>
+                            setDirectQuery(event.target.value)
+                          }
+                          placeholder="Email, domain, username, phone, IP, or URL"
+                          value={directQuery}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <Select
+                            items={modeItems}
+                            onValueChange={(value) =>
+                              setDirectMode(value as SearchMode)
+                            }
+                            value={directMode}
+                          >
+                            <SelectTrigger size="sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {modeItems.map((item) => (
+                                  <SelectItem
+                                    key={item.value}
+                                    value={item.value}
+                                  >
+                                    {item.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </InputGroupAddon>
+                      </InputGroup>
+                    </Field>
+                  </FieldGroup>
+                  {directQueryKind ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary">
+                        Detected: {directQueryKind}
+                      </Badge>
+                      <p className="text-xs text-muted-foreground">
+                        Contains matching works best for unknown source formats.
+                      </p>
+                    </div>
+                  ) : null}
+                  <Collapsible>
+                    <CollapsibleTrigger
+                      render={<Button size="sm" variant="ghost" />}
+                    >
+                      <SlidersHorizontalIcon data-icon="inline-start" />
+                      Scan options
+                      <ChevronDownIcon data-icon="inline-end" />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-3">
+                      <FieldGroup>
+                        <Field orientation="horizontal">
+                          <FieldContent>
+                            <FieldTitle>Include archive entries</FieldTitle>
+                            <FieldDescription>
+                              Stream ZIP, RAR, and GZIP content without
+                              extracting it to disk.
+                            </FieldDescription>
+                          </FieldContent>
+                          <Switch
+                            checked={includeArchives}
+                            onCheckedChange={setIncludeArchives}
+                          />
+                        </Field>
+                        <Field orientation="horizontal">
+                          <FieldContent>
+                            <FieldTitle>Worker limit</FieldTitle>
+                            <FieldDescription>
+                              More workers can scan faster and use more CPU.
+                            </FieldDescription>
+                          </FieldContent>
+                          <Select
+                            items={workerItems}
+                            onValueChange={(value) =>
+                              setDirectWorkerLimit(Number(value))
+                            }
+                            value={String(directWorkerLimit)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {workerItems.map((item) => (
+                                  <SelectItem
+                                    key={item.value}
+                                    value={item.value}
+                                  >
+                                    {item.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Field orientation="horizontal">
+                          <FieldContent>
+                            <FieldTitle>Result cap</FieldTitle>
+                            <FieldDescription>
+                              Stop collecting rows after this many matches.
+                            </FieldDescription>
+                          </FieldContent>
+                          <Select
+                            items={resultCapItems}
+                            onValueChange={(value) =>
+                              setDirectMaxResults(Number(value))
+                            }
+                            value={String(directMaxResults)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {resultCapItems.map((item) => (
+                                  <SelectItem
+                                    key={item.value}
+                                    value={item.value}
+                                  >
+                                    {item.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      </FieldGroup>
+                    </CollapsibleContent>
+                  </Collapsible>
+                  {directProgress ? (
+                    <Progress value={directPercent}>
+                      <ProgressLabel>{directProgress.message}</ProgressLabel>
+                      <ProgressValue>
+                        {() => `${directPercent.toFixed(0)}%`}
+                      </ProgressValue>
+                    </Progress>
+                  ) : null}
+                  <div className="flex justify-end gap-2">
+                    {directProgress?.status === "running" ? (
+                      <Button
+                        onClick={() =>
+                          void cancelDirectSearch(directProgress.jobId)
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        <SquareIcon data-icon="inline-start" />
+                        Cancel
+                      </Button>
+                    ) : null}
+                    <Button
+                      disabled={
+                        !sourcePaths.length ||
+                        !directQuery.trim() ||
+                        directProgress?.status === "running" ||
+                        directSearch.isPending
+                      }
+                      onClick={() => directSearch.mutate()}
+                      size="sm"
+                    >
+                      {directSearch.isPending ? (
+                        <Spinner data-icon="inline-start" />
+                      ) : (
+                        <SearchIcon data-icon="inline-start" />
+                      )}
+                      {directSearch.isPending ? "Starting…" : "Start scan"}
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </DashboardCard>
+
+            <div className="grid grid-cols-2 gap-px sm:grid-cols-4">
+              {[
+                [
+                  "Content scanned",
+                  formatBytes(directProgress?.contentBytesScanned ?? 0),
+                ],
+                [
+                  "Throughput",
+                  `${formatBytes(directProgress?.bytesPerSecond ?? 0)}/s`,
+                ],
+                ["Files visited", String(directProgress?.filesScanned ?? 0)],
+                ["Matches", String(directProgress?.matches ?? 0)],
+              ].map(([label, value]) => (
+                <DashboardCard key={label}>
+                  <CardHeader>
+                    <CardDescription>{label}</CardDescription>
+                    <CardTitle className="font-mono text-xl tabular-nums">
+                      {value}
+                    </CardTitle>
+                  </CardHeader>
+                </DashboardCard>
+              ))}
+            </div>
+
+            <DashboardCard className="gap-0">
+              <CardHeader className="border-b">
+                <CardTitle>Direct scan results</CardTitle>
+                <CardDescription>
+                  Masked source lines and archive entries. Nothing is added to
+                  the permanent index.
+                </CardDescription>
+                <CardAction>
+                  <Badge variant="outline">
+                    {directProgress?.hits.length ?? 0} shown
+                  </Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent className="px-0">
+                {directProgress?.hits.length ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="ps-6">Source</TableHead>
+                        <TableHead>Location</TableHead>
+                        <TableHead>Excerpt</TableHead>
+                        <TableHead className="pe-6">Reason</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {directProgress.hits.map((hit) => (
+                        <TableRow key={hit.id}>
+                          <TableCell className="max-w-64 ps-6">
+                            <p className="truncate">
+                              {hit.archiveEntry ?? hit.sourceFile}
+                            </p>
+                            {hit.archiveEntry ? (
+                              <p className="truncate text-xs text-muted-foreground">
+                                {hit.sourceFile}
+                              </p>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {hit.sourceLocation}
+                          </TableCell>
+                          <TableCell className="max-w-xl font-mono text-xs break-all">
+                            {hit.excerpt}
+                          </TableCell>
+                          <TableCell className="pe-6 text-xs text-muted-foreground">
+                            {hit.matchReason}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Empty className="min-h-56 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <FileSearchIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>No direct scan results</EmptyTitle>
+                      <EmptyDescription>
+                        Choose a source, enter a value, then start the scan.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+            </DashboardCard>
+          </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
