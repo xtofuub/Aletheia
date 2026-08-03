@@ -1,9 +1,9 @@
 import { RefreshCwIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { Dashboard } from "@/components/dashboard";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
+import { EfferdDashboard2 } from "@/components/ui/efferd-dashboard-2";
 
 export function OverviewPage() {
   const queryClient = useQueryClient();
@@ -25,7 +25,7 @@ export function OverviewPage() {
         description="A precise view of local indexing, grouped evidence, and storage health."
         title="Overview"
       />
-      <Dashboard />
+      <EfferdDashboard2 />
     </div>
   );
 }
