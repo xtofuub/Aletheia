@@ -63,9 +63,9 @@ export function AppSidebar({ activeRoute }: { activeRoute: RouteKey }) {
     >
       <SidebarHeader className="min-h-14 justify-center gap-1.5 border-b px-2 py-2 group-data-[collapsible=icon]:h-14 group-data-[collapsible=icon]:py-1">
         <SidebarMenuButton render={<a href="#/overview" />}>
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white shadow-xs">
+          <div className="flex size-6 shrink-0 items-center justify-center rounded-md bg-zinc-950 text-white shadow-xs">
             <LogoIcon className="size-4.5" variant={logoVariant} />
-          </span>
+          </div>
           <span className="font-medium text-foreground!">Aletheia</span>
         </SidebarMenuButton>
         <div
