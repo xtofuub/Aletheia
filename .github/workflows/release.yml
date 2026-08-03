@@ -18,11 +18,16 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - name: Use stable Rust
         shell: pwsh
@@ -31,28 +36,28 @@ jobs:
           rustup default stable
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Verify release version
-        run: npm run verify:release-version
+        run: pnpm verify:release-version
 
       - name: Check frontend formatting
-        run: npm run format:check
+        run: pnpm format:check
 
       - name: Lint frontend
-        run: npm run lint
+        run: pnpm lint
 
       - name: Type-check frontend
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Test frontend
-        run: npm run test
+        run: pnpm test
 
       - name: Build frontend
-        run: npm run build
+        run: pnpm build
 
       - name: Check repository data safety
-        run: npm run safety
+        run: pnpm safety
 
       - name: Check Rust formatting
         working-directory: src-tauri
@@ -67,7 +72,10 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Build Windows installers
-        run: npm run dist:windows
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm dist:windows
 
       - name: Preserve release artifacts
         uses: actions/upload-artifact@v4

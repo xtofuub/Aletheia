@@ -64,15 +64,34 @@ pub async fn search_records(
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
     let database = state.database.clone();
-    tauri::async_runtime::spawn_blocking(move || search_records_inner(request, database, &root))
-        .await
-        .map_err(|_| "search task failed".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        search_records_inner(request, database, &root, false)
+    })
+    .await
+    .map_err(|_| "search task failed".to_string())?
+}
+
+#[tauri::command]
+pub async fn search_identity_records(
+    request: SearchRequest,
+    state: State<'_, AppState>,
+) -> Result<SearchResponse, String> {
+    let root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        search_records_inner(request, database, &root, true)
+    })
+    .await
+    .map_err(|_| "identity search task failed".to_string())?
 }
 
 fn search_records_inner(
     request: SearchRequest,
     database: Arc<Mutex<Connection>>,
     root: &Path,
+    reveal_non_secret: bool,
 ) -> Result<SearchResponse, String> {
     if request
         .field_type
@@ -124,7 +143,7 @@ fn search_records_inner(
     let connection = database
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
-    let hits = load_search_hits(&connection, &record_ids)?;
+    let hits = load_search_hits(&connection, &record_ids, reveal_non_secret)?;
     connection
         .execute(
             "INSERT INTO search_history(id, query, mode) VALUES (?1, ?2, ?3)",
@@ -443,7 +462,7 @@ fn load_domain_details(
         .iter()
         .map(|record| record.record_id.clone())
         .collect::<Vec<_>>();
-    let mut display_fields = load_display_fields_batch(connection, &record_ids, 16)?;
+    let mut display_fields = load_display_fields_batch(connection, &record_ids, 16, false)?;
     for record in &mut records {
         record.fields = display_fields.remove(&record.record_id).unwrap_or_default();
     }
@@ -649,6 +668,7 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
                FROM identity_memberships
                GROUP BY identity_group_id
                HAVING COUNT(*) >= 2
+                   OR SUM(link_type IN ('manual_bundle', 'user_split', 'user_merge')) > 0
              )
              SELECT ig.id, ig.display_label, ig.confidence_level,
                     ms.member_count, ms.link_type, ms.explanation_json,
@@ -690,6 +710,7 @@ pub async fn list_identity_members(
     group_id: String,
     offset: usize,
     limit: usize,
+    reveal_values: bool,
     state: State<'_, AppState>,
 ) -> Result<IdentityMembersResponse, String> {
     let database = state.database.clone();
@@ -697,7 +718,7 @@ pub async fn list_identity_members(
         let connection = database
             .lock()
             .map_err(|_| "metadata database is unavailable".to_string())?;
-        load_identity_members(&connection, &group_id, offset, limit)
+        load_identity_members(&connection, &group_id, offset, limit, reveal_values)
     })
     .await
     .map_err(|_| "identity members task failed".to_string())?
@@ -708,6 +729,7 @@ fn load_identity_members(
     group_id: &str,
     offset: usize,
     limit: usize,
+    reveal_values: bool,
 ) -> Result<IdentityMembersResponse, String> {
     let total = connection
         .query_row(
@@ -743,11 +765,23 @@ fn load_identity_members(
                     source_file: row.get(2)?,
                     source_location: row.get(3)?,
                     user_status: row.get(4)?,
+                    fields: Vec::new(),
                 })
             },
         )
         .map_err(sanitized)?;
-    let members = rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)?;
+    let mut members = rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)?;
+    let record_ids = members
+        .iter()
+        .map(|member| member.record_id.clone())
+        .collect::<Vec<_>>();
+    let mut fields_by_record =
+        load_display_fields_batch(connection, &record_ids, 32, reveal_values)?;
+    for member in &mut members {
+        member.fields = fields_by_record
+            .remove(&member.record_id)
+            .unwrap_or_default();
+    }
     Ok(IdentityMembersResponse {
         total: total.max(0) as u64,
         offset,
@@ -1045,6 +1079,7 @@ pub fn list_saved_searches(state: State<'_, AppState>) -> Result<Vec<SavedSearch
 fn load_search_hits(
     connection: &Connection,
     record_ids: &[String],
+    reveal_non_secret: bool,
 ) -> Result<Vec<SearchHit>, String> {
     if record_ids.is_empty() {
         return Ok(Vec::new());
@@ -1092,7 +1127,11 @@ fn load_search_hits(
         hit.fields.push(SearchField {
             name,
             field_type,
-            display_value: mask_for_display(field_type, sensitive, &original, &normalized),
+            display_value: if reveal_non_secret && !field_type.is_secret() {
+                original
+            } else {
+                mask_for_display(field_type, sensitive, &original, &normalized)
+            },
             sensitive,
         });
     }
@@ -1106,6 +1145,7 @@ fn load_display_fields_batch(
     connection: &Connection,
     record_ids: &[String],
     per_record_limit: usize,
+    reveal_non_sensitive: bool,
 ) -> Result<HashMap<String, Vec<SearchField>>, String> {
     if record_ids.is_empty() {
         return Ok(HashMap::new());
@@ -1136,10 +1176,15 @@ fn load_display_fields_batch(
         let normalized: String = row.get(4).map_err(sanitized)?;
         let sensitive: bool = row.get(5).map_err(sanitized)?;
         let field_type = parse_field_type(&field_type_name);
+        let display_value = if reveal_non_sensitive && !field_type.is_secret() {
+            original
+        } else {
+            mask_for_display(field_type, sensitive, &original, &normalized)
+        };
         values.push(SearchField {
             name: row.get(1).map_err(sanitized)?,
             field_type,
-            display_value: mask_for_display(field_type, sensitive, &original, &normalized),
+            display_value,
             sensitive,
         });
     }
@@ -1387,11 +1432,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        create_manual_identity_inner, ensure_url_domain_links, exact_domain_query,
-        list_identities_inner, load_domain_details, load_identity_members, mask_for_display,
-        search_domain_groups, search_domain_record_ids,
+        apply_identity_action_inner, create_manual_identity_inner, ensure_url_domain_links,
+        exact_domain_query, list_identities_inner, load_domain_details, load_identity_members,
+        mask_for_display, search_domain_groups, search_domain_record_ids,
     };
-    use crate::models::{FieldType, ManualIdentityInput, SearchMode, SearchRequest};
+    use crate::models::{
+        FieldType, IdentityActionInput, ManualIdentityInput, SearchMode, SearchRequest,
+    };
     use crate::storage::open_database;
 
     #[test]
@@ -1533,7 +1580,15 @@ mod tests {
                     record_fingerprint, parser
                  ) VALUES
                     ('manual-a', 'dataset-manual', 'file-manual', 'line 2', 'manual-fp-a', 'test'),
-                    ('manual-b', 'dataset-manual', 'file-manual', 'line 3', 'manual-fp-b', 'test');",
+                    ('manual-b', 'dataset-manual', 'file-manual', 'line 3', 'manual-fp-b', 'test');
+                 INSERT INTO field_values(
+                    record_id, field_name, field_type, original_value,
+                    normalized_value, is_sensitive, confidence
+                 ) VALUES
+                    ('manual-a', 'email', 'email', 'synthetic@example.test',
+                     'synthetic@example.test', 0, 1.0),
+                    ('manual-a', 'password', 'password', '[REDACTED]',
+                     'blake3:synthetic', 1, 1.0);",
             )
             .expect("synthetic manual identity data");
         let database = Arc::new(Mutex::new(connection));
@@ -1554,8 +1609,57 @@ mod tests {
 
         let connection = database.lock().expect("database lock");
         let members =
-            load_identity_members(&connection, &group_id, 0, 25).expect("identity members");
+            load_identity_members(&connection, &group_id, 0, 25, false).expect("identity members");
         assert_eq!(members.total, 2);
         assert_eq!(members.members.len(), 2);
+        let masked = &members.members[0].fields;
+        assert_eq!(masked[0].display_value, "s•••@example.test");
+        assert_eq!(masked[1].display_value, "[REDACTED]");
+        let revealed = load_identity_members(&connection, &group_id, 0, 25, true)
+            .expect("revealed identity members");
+        assert_eq!(
+            revealed.members[0].fields[0].display_value,
+            "synthetic@example.test"
+        );
+        assert_eq!(revealed.members[0].fields[1].display_value, "[REDACTED]");
+        drop(connection);
+
+        let event_id = apply_identity_action_inner(
+            IdentityActionInput {
+                action: "split".to_string(),
+                group_id: group_id.clone(),
+                record_ids: vec!["manual-a".to_string()],
+                target_group_id: None,
+            },
+            database.clone(),
+        )
+        .expect("split identity");
+        let split_identities = list_identities_inner(database.clone()).expect("split list");
+        assert_eq!(split_identities.len(), 2);
+        assert!(
+            split_identities
+                .iter()
+                .any(|identity| identity.link_type == "user_split")
+        );
+
+        apply_identity_action_inner(
+            IdentityActionInput {
+                action: "undo".to_string(),
+                group_id: event_id,
+                record_ids: Vec::new(),
+                target_group_id: None,
+            },
+            database.clone(),
+        )
+        .expect("undo split");
+        let restored = list_identities_inner(database.clone()).expect("restored identity list");
+        assert_eq!(restored.len(), 1);
+        let connection = database.lock().expect("database lock");
+        assert_eq!(
+            load_identity_members(&connection, &group_id, 0, 25, false)
+                .expect("restored members")
+                .total,
+            2
+        );
     }
 }

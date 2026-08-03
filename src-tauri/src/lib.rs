@@ -1,4 +1,5 @@
 pub mod detection;
+mod direct_scan;
 pub mod domain_analysis;
 mod export_cleanup;
 mod importer;
@@ -13,6 +14,7 @@ use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -35,15 +37,19 @@ pub fn run() {
             settings::get_system_status,
             updater::check_for_updates,
             detection::inspect_sources,
+            direct_scan::start_direct_search,
+            direct_scan::cancel_direct_search,
             importer::start_import,
             importer::resume_dataset_import,
             importer::rebuild_identities,
+            importer::rebuild_domains,
             importer::pause_import,
             importer::resume_import,
             importer::cancel_import,
             importer::list_datasets,
             investigation::get_overview_stats,
             investigation::search_records,
+            investigation::search_identity_records,
             investigation::list_domains,
             investigation::get_domain_details,
             investigation::list_identities,

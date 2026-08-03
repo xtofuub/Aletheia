@@ -15,7 +15,7 @@ const blockedExtensions = new Set([
 ]);
 const suspiciousNames = /(^|[\\/])(848|e_848)\.txt$/i;
 const likelyCredentialPair =
-  /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\s*[:|;,]\s*[^\s:|;,]{4,}/i;
+  /[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,63})\s*[:|;,]\s*[^\s:|;,]{4,}/gi;
 const emailPattern = /[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,63})/gi;
 const reservedFixtureDomain =
   /^(?:[A-Z0-9-]+\.)*(?:example\.(?:com|net|org)|test)$/i;
@@ -81,8 +81,10 @@ for (const file of stagedFiles()) {
     continue;
   }
 
-  if (likelyCredentialPair.test(content)) {
-    fail(`${file} contains an email plus credential-like delimiter pattern.`);
+  for (const match of content.matchAll(likelyCredentialPair)) {
+    if (!reservedFixtureDomain.test(match[1] ?? "")) {
+      fail(`${file} contains an email plus credential-like delimiter pattern.`);
+    }
   }
 }
 

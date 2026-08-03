@@ -153,6 +153,14 @@ pub fn cleanup_generated(
     request: CleanupRequest,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    if !state
+        .jobs
+        .lock()
+        .map_err(|_| "import job registry is unavailable".to_string())?
+        .is_empty()
+    {
+        return Err("cancel active indexing or live search before cleanup".to_string());
+    }
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
@@ -396,13 +404,15 @@ fn remove_generated_directory(root: &Path, name: &str) -> Result<(), String> {
     if !matches!(name, "search-index" | "cache" | "temp") {
         return Err("cleanup target is not permitted".to_string());
     }
-    let target = root.join(name);
+    let canonical_root =
+        fs::canonicalize(root).map_err(|_| "cleanup root could not be verified".to_string())?;
+    let target = canonical_root.join(name);
     if !target.exists() {
         return Ok(());
     }
     let canonical_target = fs::canonicalize(&target)
         .map_err(|_| "cleanup target could not be verified".to_string())?;
-    if canonical_target.parent() != Some(root) {
+    if canonical_target.parent() != Some(canonical_root.as_path()) {
         return Err("cleanup target escaped the generated storage root".to_string());
     }
     fs::remove_dir_all(canonical_target)
@@ -435,9 +445,9 @@ fn sanitized(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, fs};
 
-    use super::{ExportRecord, render_export};
+    use super::{ExportRecord, remove_generated_directory, render_export};
 
     #[test]
     fn csv_and_jsonl_render_without_raw_record_blobs() {
@@ -454,5 +464,21 @@ mod tests {
             assert!(text.contains("p•••@example.com"));
             assert!(!text.contains("password"));
         }
+    }
+
+    #[test]
+    fn cleanup_is_limited_to_named_generated_children() {
+        let workspace = tempfile::tempdir().expect("synthetic workspace");
+        let index = workspace.path().join("search-index");
+        let source = workspace.path().join("authorized-source.txt");
+        fs::create_dir(&index).expect("index directory");
+        fs::write(index.join("segment"), b"generated").expect("generated segment");
+        fs::write(&source, b"synthetic source").expect("synthetic source");
+
+        remove_generated_directory(workspace.path(), "search-index").expect("cleanup index");
+
+        assert!(!index.exists());
+        assert!(source.exists());
+        assert!(remove_generated_directory(workspace.path(), "authorized-source.txt").is_err());
     }
 }

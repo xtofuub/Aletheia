@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     mem,
@@ -10,6 +11,8 @@ use std::{
 
 use encoding_rs::{Encoding, UTF_8};
 use flate2::read::GzDecoder;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Emitter, State};
@@ -40,6 +43,17 @@ const MIN_WRITER_BYTES: usize = 64 * 1024 * 1024;
 const MAX_WRITER_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const INDEX_CHECKPOINT_RECORDS: u64 = 1_000_000;
 const PARSER_VERSION: &str = "aletheia-parser/1";
+
+static EMBEDDED_EMAIL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)(?:^|[^a-z0-9.!#$%&'*+/=?^_`{|}~-])([a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+)",
+    )
+    .expect("embedded email regex")
+});
+static EMBEDDED_DOMAIN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})\b")
+        .expect("embedded domain regex")
+});
 
 #[derive(Clone)]
 struct WorkerFile {
@@ -139,7 +153,7 @@ impl<R: Read> Read for CountingReader<R> {
 
 enum SourceReader {
     Plain(CountingReader<File>),
-    Gzip(GzDecoder<CountingReader<File>>),
+    Gzip(Box<GzDecoder<CountingReader<File>>>),
 }
 
 impl SourceReader {
@@ -382,32 +396,31 @@ pub async fn rebuild_identities(state: State<'_, AppState>) -> Result<u64, Strin
     .map_err(|_| "identity rebuild task failed".to_string())?
 }
 
-fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
-    connection
-        .execute_batch(
-            "DELETE FROM identity_memberships
-             WHERE user_status = 'automatic'
-               AND link_type IN ('exact_email', 'exact_phone', 'exact_user_id');
-             DELETE FROM identity_groups
-             WHERE NOT EXISTS (
-               SELECT 1 FROM identity_memberships im
-               WHERE im.identity_group_id = identity_groups.id
-             );
-             DELETE FROM identity_candidates;",
-        )
-        .map_err(sanitized)?;
+#[tauri::command]
+pub async fn rebuild_domains(state: State<'_, AppState>) -> Result<u64, String> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut connection = database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?;
+        rebuild_domain_groups(&mut connection)
+    })
+    .await
+    .map_err(|_| "domain rebuild task failed".to_string())?
+}
+
+fn rebuild_domain_groups(connection: &mut Connection) -> Result<u64, String> {
     let mut cursor = 0_i64;
     loop {
         let rows = {
             let mut statement = connection
                 .prepare(
-                    "SELECT fv.id, fv.record_id, r.source_file_id,
-                            fv.field_type, fv.normalized_value
+                    "SELECT fv.id, fv.record_id, r.dataset_id, fv.field_type,
+                            fv.original_value
                      FROM field_values fv
                      JOIN records r ON r.id = fv.record_id
                      WHERE fv.id > ?1
-                       AND fv.field_type IN ('email', 'phone', 'user_id')
-                       AND fv.normalized_value <> ''
+                       AND fv.field_type IN ('domain', 'url', 'email', 'unknown')
                      ORDER BY fv.id
                      LIMIT 10000",
                 )
@@ -431,14 +444,121 @@ fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
         }
         cursor = rows.last().map(|row| row.0).unwrap_or(cursor);
         let transaction = connection.transaction().map_err(sanitized)?;
-        for (_, record_id, source_file_id, field_type, normalized_value) in rows {
-            store_identity(
-                &transaction,
-                &record_id,
-                &source_file_id,
-                parse_stored_field_type(&field_type),
-                &normalized_value,
-            )?;
+        for (_, record_id, dataset_id, field_type, original) in &rows {
+            let mut seen = HashSet::new();
+            if field_type == "url"
+                && let Some(url) = normalize_url(original)
+                && seen.insert(url.domain.hostname.clone())
+            {
+                store_domain(&transaction, record_id, dataset_id, &url.domain, Some(&url))
+                    .map_err(sanitized)?;
+            }
+            if field_type == "domain"
+                && let Some(domain) = normalize_domain(original)
+                && seen.insert(domain.hostname.clone())
+            {
+                store_domain(&transaction, record_id, dataset_id, &domain, None)
+                    .map_err(sanitized)?;
+            }
+            for domain in extract_embedded_domains(original) {
+                if seen.insert(domain.hostname.clone()) {
+                    store_domain(&transaction, record_id, dataset_id, &domain, None)
+                        .map_err(sanitized)?;
+                }
+            }
+        }
+        transaction.commit().map_err(sanitized)?;
+        if rows.len() < 10_000 {
+            break;
+        }
+    }
+    connection
+        .execute("DELETE FROM domain_link_repairs", [])
+        .map_err(sanitized)?;
+    connection
+        .query_row(
+            "SELECT COUNT(DISTINCT registrable_domain) FROM domains",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count.max(0) as u64)
+        .map_err(sanitized)
+}
+
+fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
+    connection
+        .execute_batch(
+            "DELETE FROM identity_memberships
+             WHERE user_status = 'automatic'
+               AND link_type IN ('exact_email', 'exact_phone', 'exact_user_id');
+             DELETE FROM identity_groups
+             WHERE NOT EXISTS (
+               SELECT 1 FROM identity_memberships im
+               WHERE im.identity_group_id = identity_groups.id
+             );
+             DELETE FROM identity_candidates;",
+        )
+        .map_err(sanitized)?;
+    let mut cursor = 0_i64;
+    loop {
+        let rows = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT fv.id, fv.record_id, r.source_file_id,
+                            fv.field_type, fv.normalized_value, fv.original_value
+                     FROM field_values fv
+                     JOIN records r ON r.id = fv.record_id
+                     WHERE fv.id > ?1
+                       AND fv.field_type IN ('email', 'phone', 'user_id', 'unknown', 'url')
+                     ORDER BY fv.id
+                     LIMIT 10000",
+                )
+                .map_err(sanitized)?;
+            statement
+                .query_map([cursor], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })
+                .map_err(sanitized)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sanitized)?
+        };
+        if rows.is_empty() {
+            break;
+        }
+        cursor = rows.last().map(|row| row.0).unwrap_or(cursor);
+        let transaction = connection.transaction().map_err(sanitized)?;
+        for (_, record_id, source_file_id, field_type, normalized_value, original_value) in rows {
+            let stored_type = parse_stored_field_type(&field_type);
+            if matches!(
+                stored_type,
+                FieldType::Email | FieldType::Phone | FieldType::UserId
+            ) {
+                store_identity(
+                    &transaction,
+                    &record_id,
+                    &source_file_id,
+                    stored_type,
+                    &normalized_value,
+                )?;
+            } else {
+                for (detected_type, detected_value) in extract_embedded_identifiers(&original_value)
+                {
+                    store_identity(
+                        &transaction,
+                        &record_id,
+                        &source_file_id,
+                        detected_type,
+                        &detected_value,
+                    )?;
+                }
+            }
         }
         transaction.commit().map_err(sanitized)?;
     }
@@ -1169,7 +1289,7 @@ where
             .map_err(|_| "source resume position is unavailable".to_string())?;
     }
     let source_reader = if file.inspection.compressed {
-        SourceReader::Gzip(GzDecoder::new(CountingReader::new(source)))
+        SourceReader::Gzip(Box::new(GzDecoder::new(CountingReader::new(source))))
     } else {
         SourceReader::Plain(CountingReader::with_bytes_read(source, file.resume_offset))
     };
@@ -1381,6 +1501,9 @@ fn process_record(
 ) -> Result<ProcessedRecord, String> {
     let mut fields = Vec::with_capacity(mappings.len());
     let mut domains = Vec::new();
+    let mut seen_domains = HashSet::new();
+    let mut detected_identifiers = Vec::new();
+    let mut seen_identifiers = HashSet::new();
     let mut fingerprint = blake3::Hasher::new();
     for (index, mapping) in mappings.iter().enumerate() {
         let original = values.get(index).cloned().unwrap_or_default();
@@ -1396,14 +1519,32 @@ fn process_record(
         if extract_urls && mapping.field_type == FieldType::Url {
             if let Some(url) = normalize_url(&original) {
                 normalized = url.normalized_url.clone();
-                domains.push((url.domain.clone(), Some(url)));
+                if seen_domains.insert(url.domain.hostname.clone()) {
+                    domains.push((url.domain.clone(), Some(url)));
+                }
             }
         } else if extract_domains
             && mapping.field_type == FieldType::Domain
             && let Some(domain) = normalize_domain(&original)
         {
             normalized = domain.hostname.clone();
-            domains.push((domain, None));
+            if seen_domains.insert(domain.hostname.clone()) {
+                domains.push((domain, None));
+            }
+        }
+        if matches!(mapping.field_type, FieldType::Unknown | FieldType::Url) {
+            for (field_type, value) in extract_embedded_identifiers(&original) {
+                if seen_identifiers.insert((field_type, value.clone())) {
+                    detected_identifiers.push((field_type, value));
+                }
+            }
+            if extract_domains {
+                for domain in extract_embedded_domains(&original) {
+                    if seen_domains.insert(domain.hostname.clone()) {
+                        domains.push((domain, None));
+                    }
+                }
+            }
         }
         fields.push(ProcessedField {
             name: mapping.source_name.clone(),
@@ -1418,6 +1559,16 @@ fn process_record(
             confidence: mapping.confidence,
         });
     }
+    for (index, (field_type, value)) in detected_identifiers.into_iter().enumerate() {
+        fields.push(ProcessedField {
+            name: format!("detected_{}_{}", field_type.as_str(), index + 1),
+            field_type,
+            original: value.clone(),
+            normalized: value,
+            sensitive: field_type.is_sensitive(),
+            confidence: 0.9,
+        });
+    }
     Ok(ProcessedRecord {
         id: Uuid::new_v4().to_string(),
         source_location,
@@ -1426,6 +1577,54 @@ fn process_record(
         fields,
         domains,
     })
+}
+
+fn extract_embedded_identifiers(value: &str) -> Vec<(FieldType, String)> {
+    let mut identifiers = Vec::new();
+    let mut seen = HashSet::new();
+    for captures in EMBEDDED_EMAIL.captures_iter(value) {
+        let Some(email) = captures.get(1) else {
+            continue;
+        };
+        let normalized = normalize_value(FieldType::Email, email.as_str());
+        if !normalized.is_empty() && seen.insert((FieldType::Email, normalized.clone())) {
+            identifiers.push((FieldType::Email, normalized));
+        }
+    }
+    for candidate in value.split(['\t', '|', ';', ',', ':']) {
+        let candidate = candidate.trim();
+        if candidate.len() < 7
+            || candidate.len() > 32
+            || !candidate.chars().all(|character| {
+                character.is_ascii_digit() || matches!(character, '+' | ' ' | '(' | ')' | '-')
+            })
+        {
+            continue;
+        }
+        let normalized = normalize_value(FieldType::Phone, candidate);
+        let digit_count = normalized.chars().filter(char::is_ascii_digit).count();
+        if (7..=15).contains(&digit_count) && seen.insert((FieldType::Phone, normalized.clone())) {
+            identifiers.push((FieldType::Phone, normalized));
+        }
+    }
+    identifiers
+}
+
+fn extract_embedded_domains(value: &str) -> Vec<NormalizedDomain> {
+    let mut domains = Vec::new();
+    let mut seen = HashSet::new();
+    for captures in EMBEDDED_DOMAIN.captures_iter(value) {
+        let Some(candidate) = captures.get(1) else {
+            continue;
+        };
+        let Some(domain) = normalize_domain(candidate.as_str()) else {
+            continue;
+        };
+        if seen.insert(domain.hostname.clone()) {
+            domains.push(domain);
+        }
+    }
+    domains
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1446,15 +1645,38 @@ fn flush_batch(
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
     let transaction = connection.transaction().map_err(sanitized)?;
-    for record in batch.drain(..) {
-        if plan.options.deduplicate {
-            let exists = transaction
+    let mut duplicate_statement = if plan.options.deduplicate {
+        Some(
+            transaction
                 .prepare_cached(
                     "SELECT EXISTS(
                         SELECT 1 FROM records WHERE dataset_id = ?1 AND record_fingerprint = ?2
                      )",
                 )
-                .map_err(sanitized)?
+                .map_err(sanitized)?,
+        )
+    } else {
+        None
+    };
+    let mut record_statement = transaction
+        .prepare_cached(
+            "INSERT INTO records(
+                id, dataset_id, source_file_id, source_location, byte_offset,
+                record_fingerprint, parser
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .map_err(sanitized)?;
+    let mut field_statement = transaction
+        .prepare_cached(
+            "INSERT INTO field_values(
+                record_id, field_name, field_type, original_value, normalized_value,
+                is_sensitive, confidence
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .map_err(sanitized)?;
+    for record in batch.drain(..) {
+        if let Some(statement) = duplicate_statement.as_mut() {
+            let exists = statement
                 .query_row(params![dataset_id, record.fingerprint], |row| {
                     row.get::<_, bool>(0)
                 })
@@ -1464,14 +1686,7 @@ fn flush_batch(
                 continue;
             }
         }
-        transaction
-            .prepare_cached(
-                "INSERT INTO records(
-                    id, dataset_id, source_file_id, source_location, byte_offset,
-                    record_fingerprint, parser
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            )
-            .map_err(sanitized)?
+        record_statement
             .execute(params![
                 record.id,
                 dataset_id,
@@ -1484,14 +1699,7 @@ fn flush_batch(
             .map_err(sanitized)?;
         let mut exact_values = Vec::new();
         for field in &record.fields {
-            transaction
-                .prepare_cached(
-                    "INSERT INTO field_values(
-                        record_id, field_name, field_type, original_value, normalized_value,
-                        is_sensitive, confidence
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                )
-                .map_err(sanitized)?
+            field_statement
                 .execute(params![
                     record.id,
                     field.name,
@@ -1544,6 +1752,9 @@ fn flush_batch(
             .map_err(sanitized)?;
         counters.records_indexed += 1;
     }
+    drop(field_statement);
+    drop(record_statement);
+    drop(duplicate_statement);
     transaction.commit().map_err(sanitized)?;
     connection
         .execute(
@@ -1587,12 +1798,7 @@ fn store_identity(
         "identity-candidate",
         &format!("{field_type_name}\u{1f}{key}"),
     );
-    let display = match field_type {
-        FieldType::Email => mask_email(value),
-        FieldType::Phone => mask_phone(value),
-        FieldType::UserId => "Service-scoped ID".to_string(),
-        _ => unreachable!(),
-    };
+    let display = value.to_string();
     let candidate = connection
         .prepare_cached(
             "SELECT first_record_id, member_count
@@ -1915,26 +2121,6 @@ fn mark_failed(database: &Arc<Mutex<Connection>>, job_id: &str, dataset_id: &str
     let _ = update_dataset_status(database, dataset_id, "failed");
 }
 
-fn mask_email(value: &str) -> String {
-    let Some((local, domain)) = value.split_once('@') else {
-        return "masked email".to_string();
-    };
-    let first = local.chars().next().unwrap_or('•');
-    format!("{first}•••@{domain}")
-}
-
-fn mask_phone(value: &str) -> String {
-    let suffix: String = value
-        .chars()
-        .rev()
-        .take(2)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("••••••{suffix}")
-}
-
 fn stable_id(namespace: &str, value: &str) -> String {
     let hash = blake3::hash(format!("{namespace}\u{1f}{value}").as_bytes());
     format!("{namespace}-{}", &hash.to_hex()[..24])
@@ -1959,9 +2145,10 @@ mod tests {
 
     use super::{
         BATCH_RECORDS, Counters, INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES,
-        batch_byte_limit, decompression_limit, finish_cancelled, flush_batch, load_resume_plan,
-        mask_email, normalize_value, prepare_database_rows, prepare_import_database,
-        prepare_resume_files, process_record, read_bounded_line, rebuild_identity_groups,
+        batch_byte_limit, decompression_limit, extract_embedded_domains,
+        extract_embedded_identifiers, finish_cancelled, flush_batch, load_resume_plan,
+        normalize_value, prepare_database_rows, prepare_import_database, prepare_resume_files,
+        process_record, read_bounded_line, rebuild_domain_groups, rebuild_identity_groups,
         run_import, store_identity, stream_file, writer_memory_budget,
     };
     use crate::{
@@ -2042,8 +2229,26 @@ mod tests {
     }
 
     #[test]
-    fn labels_are_masked() {
-        assert_eq!(mask_email("person@example.com"), "p•••@example.com");
+    fn extracts_domains_from_unstructured_combo_text() {
+        let domains = extract_embedded_domains(
+            "https://portal.example.co.uk/login:person@example.test:synthetic-secret",
+        );
+        let hostnames = domains
+            .iter()
+            .map(|domain| domain.hostname.as_str())
+            .collect::<Vec<_>>();
+        assert!(hostnames.contains(&"portal.example.co.uk"));
+        assert!(hostnames.contains(&"example.test"));
+    }
+
+    #[test]
+    fn extracts_identifiers_from_combo_text_without_treating_ports_as_phones() {
+        let identifiers = extract_embedded_identifiers(
+            "https://portal.example.test:8443/login:Person@Example.test:+1 (202) 555-0142:secret",
+        );
+        assert!(identifiers.contains(&(FieldType::Email, "person@example.test".to_string())));
+        assert!(identifiers.contains(&(FieldType::Phone, "+12025550142".to_string())));
+        assert!(!identifiers.iter().any(|(_, value)| value == "8443"));
     }
 
     #[test]
@@ -2114,6 +2319,12 @@ mod tests {
             )
             .expect("automatic identity");
         assert_eq!(before, (1, 2, 2));
+        let display_label: String = connection
+            .query_row("SELECT display_label FROM identity_groups", [], |row| {
+                row.get(0)
+            })
+            .expect("identity label");
+        assert_eq!(display_label, "same@example.test");
 
         let rebuilt = rebuild_identity_groups(&mut connection).expect("rebuild identities");
         let after_members: i64 = connection
@@ -2123,6 +2334,96 @@ mod tests {
             .expect("rebuilt members");
         assert_eq!(rebuilt, 1);
         assert_eq!(after_members, 2);
+    }
+
+    #[test]
+    fn rebuild_domains_links_unstructured_records_from_multiple_datasets() {
+        let workspace = tempdir().expect("temporary workspace");
+        let mut connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(
+                "INSERT INTO datasets(
+                   id, name, parser_version, status, record_count, file_count
+                 ) VALUES
+                   ('dataset-a', 'Synthetic A', 'test', 'ready', 1, 1),
+                   ('dataset-b', 'Synthetic B', 'test', 'ready', 1, 1);
+                 INSERT INTO source_files(
+                   id, dataset_id, absolute_path, relative_path, file_size, format
+                 ) VALUES
+                   ('file-a', 'dataset-a', 'C:\\Synthetic\\a.txt', 'a.txt', 64, 'text'),
+                   ('file-b', 'dataset-b', 'C:\\Synthetic\\b.txt', 'b.txt', 64, 'text');
+                 INSERT INTO records(
+                   id, dataset_id, source_file_id, source_location,
+                   record_fingerprint, parser
+                 ) VALUES
+                   ('record-a', 'dataset-a', 'file-a', 'line 1', 'fp-a', 'test'),
+                   ('record-b', 'dataset-b', 'file-b', 'line 1', 'fp-b', 'test');
+                 INSERT INTO field_values(
+                   record_id, field_name, field_type, original_value,
+                   normalized_value, is_sensitive, confidence
+                 ) VALUES
+                   ('record-a', 'line', 'unknown',
+                    'https://portal.example.test/a:user@example.test', 'opaque-a', 0, 0.4),
+                   ('record-b', 'line', 'unknown',
+                    'https://api.example.test/b:user@example.test', 'opaque-b', 0, 0.4);",
+            )
+            .expect("synthetic domain records");
+
+        let groups = rebuild_domain_groups(&mut connection).expect("domain rebuild");
+        let linked_datasets: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM domain_dataset_counts
+                 WHERE registrable_domain = 'example.test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("linked datasets");
+        assert_eq!(groups, 1);
+        assert_eq!(linked_datasets, 2);
+    }
+
+    #[test]
+    fn rebuild_finds_repeated_emails_inside_combo_text() {
+        let workspace = tempdir().expect("temporary workspace");
+        let mut connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(
+                "INSERT INTO datasets(
+                   id, name, parser_version, status, record_count, file_count
+                 ) VALUES ('dataset-id', 'Synthetic combo rows', 'test', 'ready', 2, 1);
+                 INSERT INTO source_files(
+                   id, dataset_id, absolute_path, relative_path, file_size, format
+                 ) VALUES (
+                   'file-id', 'dataset-id', 'C:\\Synthetic\\combo.txt',
+                   'combo.txt', 128, 'text'
+                 );
+                 INSERT INTO records(
+                   id, dataset_id, source_file_id, source_location,
+                   record_fingerprint, parser
+                 ) VALUES
+                   ('record-a', 'dataset-id', 'file-id', 'line 1', 'fp-a', 'test'),
+                   ('record-b', 'dataset-id', 'file-id', 'line 2', 'fp-b', 'test');
+                 INSERT INTO field_values(
+                   record_id, field_name, field_type, original_value,
+                   normalized_value, is_sensitive, confidence
+                 ) VALUES
+                   ('record-a', 'line', 'url',
+                    'https://one.example:shared@example.test:first-secret',
+                    'https://one.example/', 0, 1.0),
+                   ('record-b', 'line', 'unknown',
+                    'https://two.example:shared@example.test:second-secret',
+                    'opaque', 0, 0.4);",
+            )
+            .expect("synthetic combo records");
+
+        let rebuilt = rebuild_identity_groups(&mut connection).expect("combo identity rebuild");
+        let memberships: i64 = connection
+            .query_row("SELECT COUNT(*) FROM identity_memberships", [], |row| {
+                row.get(0)
+            })
+            .expect("identity memberships");
+        assert_eq!(rebuilt, 1);
+        assert_eq!(memberships, 2);
     }
 
     #[test]

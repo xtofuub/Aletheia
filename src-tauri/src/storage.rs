@@ -266,7 +266,7 @@ fn recover_interrupted_imports(connection: &Connection) -> Result<(), StorageErr
 fn seed_defaults(connection: &Connection) -> Result<(), StorageError> {
     let defaults = [
         ("authorization_confirmed", "false"),
-        ("theme", "\"light\""),
+        ("theme", "\"dark\""),
         ("network_disabled", "true"),
         ("clipboard_clear_seconds", "60"),
         ("inactivity_lock_minutes", "15"),
@@ -347,7 +347,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("theme setting");
-        assert_eq!(theme, "\"light\"");
+        assert_eq!(theme, "\"dark\"");
     }
 
     #[test]

@@ -99,7 +99,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     Ok(Settings {
         authorization_confirmed: read_json(&connection, "authorization_confirmed")?
             .unwrap_or(false),
-        theme: read_json(&connection, "theme")?.unwrap_or_else(|| "light".to_string()),
+        theme: read_json(&connection, "theme")?.unwrap_or_else(|| "dark".to_string()),
         storage_root: storage_root.to_string_lossy().into_owned(),
         network_disabled: read_json(&connection, "network_disabled")?.unwrap_or(true),
         clipboard_clear_seconds: clipboard_clear_seconds.clamp(15, 600),

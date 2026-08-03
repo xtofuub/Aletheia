@@ -10,7 +10,10 @@
     "opener:allow-open-path",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/xtofuub/Aletheia/releases/*" }]
+      "allow": [
+        { "url": "https://github.com/xtofuub/Aletheia" },
+        { "url": "https://github.com/xtofuub/Aletheia/releases/*" }
+      ]
     }
   ]
 }

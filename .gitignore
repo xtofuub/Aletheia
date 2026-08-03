@@ -26,6 +26,9 @@ quarantine/
 *.jsonl.gz
 *.ndjson.gz
 *.txt.gz
+*.rar
+*.zip
+*.7z
 848.txt
 E_848.txt
 
@@ -47,6 +50,7 @@ storage/
 # Exports, temporary extraction, cache, and logs
 exports/
 tmp/
+.tmp/
 temp/
 cache/
 extracted/

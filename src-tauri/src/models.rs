@@ -325,6 +325,7 @@ pub struct IdentityMember {
     pub source_file: String,
     pub source_location: String,
     pub user_status: String,
+    pub fields: Vec<SearchField>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
