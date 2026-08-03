@@ -20,16 +20,16 @@ Install Node.js 24+, Rust stable, WebView2, and Visual Studio 2022 Build Tools w
 ## Common commands
 
 ```powershell
-npm install
-npm run dev
-npm run tauri dev
-npm run lint
-npm run typecheck
-npm run test
-npm run test:e2e
-npm run build
-npm run tauri build
-npm run safety
+pnpm install
+pnpm dev
+pnpm tauri dev
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:e2e
+pnpm build
+pnpm tauri build
+pnpm safety
 ```
 
 Rust:

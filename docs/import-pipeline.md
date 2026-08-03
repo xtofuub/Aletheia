@@ -24,6 +24,15 @@ Cancellation is checked between records and while paused. Completed batches rema
 
 The background importer uses its own SQLite WAL connection. Dashboard reads therefore do not wait behind a long import transaction, and completed or failed jobs stop their high-frequency UI polling automatically.
 
+## Index profiles
+
+- **Fast index** is the default for smaller databases that need repeated search. It indexes approved safe fields and stores traceable source offsets, but skips deduplication, URL/domain grouping, and automatic identity grouping.
+- **Deep analysis** enables exact-record deduplication, normalized URL/domain links, and deterministic identity groups. Choose it when those investigation views justify the extra write and CPU cost.
+
+Profile options remain visible and can be changed before the job starts. SQLite record, field, and duplicate statements are prepared once per batch instead of once per record.
+
+For a one-off query over a very large folder or archive, use **Search > Live files**. That path does not create SQLite rows or a Tantivy index.
+
 ## Very large datasets
 
 Input size is tracked with 64-bit counters, including multi-terabyte sources. Plain and GZIP sources are read through a 64 KiB buffer, never loaded as a whole. A record may contain at most 1 MiB; an oversized record is drained in chunks so even a malformed file with no newline cannot grow the process heap without bound. Cancellation and pause checks continue while that record is drained.

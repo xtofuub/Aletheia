@@ -1,6 +1,19 @@
-# Search syntax
+# Search
 
-## Modes
+## Automatic mode
+
+Automatic mode is the default. Enter a value normally; no field prefix is required. Aletheia recognizes email addresses, domains, URLs, IP addresses, phone numbers, and service IDs, then chooses a safe field and match strategy. Other input is treated as text or a username.
+
+Indexed searches try normalized exact matching first for identifiers and fall back to literal containment when needed. Live domain searches use containment because a domain may be embedded in an email address, URL, or subdomain. Search still starts only when the user presses Enter or the Search/Scan button, so selecting a terabyte-scale folder never triggers an accidental scan on each keystroke.
+
+## Search scopes
+
+- **Indexed** searches an existing Tantivy index. Use it for fast repeated queries, paging, saved views, redacted export, domain analysis, and identity grouping.
+- **Live files** scans selected TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR sources directly. Archives are streamed in memory and are never extracted beside the source. Results appear while the scan is running and remain masked.
+
+Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, and cancellation. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker.
+
+## Advanced mode
 
 - **Exact** matches a complete normalized field value. A bare domain or
   `domain:` query also matches hostnames extracted from URLs and their
@@ -8,8 +21,7 @@
 - **Contains** performs a bounded literal substring match over complete safe indexed values and requires at least two characters.
 - **Prefix** matches safe indexed values beginning with the query.
 
-Queries are limited to 512 characters. Plain searches start in **Contains**
-mode. Choose 25, 50, 100, or 200 records per page; the result range, editable
+Queries are limited to 512 characters. Choose 25, 50, 100, or 200 records per page; the result range, editable
 page number, and first/previous/next/last navigation remain visible below the
 result table.
 
@@ -18,7 +30,7 @@ The field selector applies the same structured prefix internally, so choosing
 
 ## Structured fields
 
-Use `field:value`:
+Advanced indexed searches may also use `field:value`:
 
 ```text
 email:analyst@example.com
@@ -35,3 +47,5 @@ Password, password-hash, and salt fields cannot be searched. Regex and fuzzy sec
 ## Results
 
 Every result includes dataset, source file, consistently formatted source location, parser, match reason, and masked fields. Search failures are shown instead of being presented as empty results. Select explicit records to export them through the strict redaction pipeline. Saved views keep the query and filters only in local SQLite.
+
+Opening a saved view restores its Automatic/Advanced mode, match mode, dataset, safe field, and sort order. Ready datasets also link directly to Advanced search with that dataset already selected.

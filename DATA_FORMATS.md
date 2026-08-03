@@ -29,6 +29,12 @@ This conclusion is intentionally conservative. Aletheia must let the user overri
 | JSONL / NDJSON | one JSON object per non-empty line | streaming JSON object parser                  |
 | GZIP           | magic bytes `1f 8b`                | bounded decompression into a supported parser |
 
+## Direct live search
+
+The Search page can scan supported text files without importing them. It also streams `.gz`, `.zip`, and `.rar` sources read-only. ZIP and RAR members are filtered to supported text extensions and decoded directly into bounded line readers; no member is written to disk.
+
+Live archive protections include a 100,000-entry ceiling, a bounded decompression ratio, a 1 MiB line limit, a 5,000-result cap, cancellation, path validation, and rejection of encrypted RAR text entries. Split or unsupported RAR variants fail with a sanitized message. Re-running a live query scans the chosen sources again; build a Fast index when repeated searches justify the storage cost.
+
 Extensions are hints only. Content detection wins when they disagree.
 
 ## Detection limits

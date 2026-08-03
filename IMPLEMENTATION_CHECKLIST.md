@@ -122,3 +122,17 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Rebuild Settings with performance presets and persistent save feedback
 - [x] Deepen and normalize the dark theme across all investigation routes
 - [x] Add frontend, Rust, and end-to-end regression coverage
+
+## Unified search and archive pass
+
+- [x] Adapt the approved Efferd grid language to the unified Search workflow
+- [x] Add Automatic query-shape detection and explicit Advanced controls
+- [x] Add Indexed and Live files scopes behind one command deck
+- [x] Stream TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR read-only
+- [x] Keep ZIP and RAR members in memory without extracting to disk
+- [x] Add result caps, cancellation, worker limits, throughput, and source progress
+- [x] Add archive entry, path, line, encryption, and decompression protections
+- [x] Add Fast index and optional Deep analysis import profiles
+- [x] Precompile direct literal matching and reuse SQLite batch statements
+- [x] Add synthetic ZIP/RAR, profile, automatic-domain, and end-to-end coverage
+- [x] Pass formatting, lint, type checking, frontend tests, Rust tests, Clippy, benchmarks, browser flows, screenshots, and data safety checks

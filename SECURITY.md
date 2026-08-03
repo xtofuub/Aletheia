@@ -2,7 +2,7 @@
 
 ## Trust boundary
 
-Aletheia is a local desktop application. Dataset contents, paths, queries, indexes, identity links, notes, and exports are processed on the user's computer. Core data workflows contain no outbound network client or credential-testing capability. The optional update checker is restricted to the official Aletheia GitHub Releases endpoint and sends no workspace information.
+Aletheia is a local desktop application. Dataset contents, paths, queries, indexes, identity links, notes, and exports are processed on the user's computer. Core data workflows contain no outbound network client or credential-testing capability. The optional updater is restricted to the official signed Aletheia release endpoint, verifies the installer signature before installation, and sends no workspace information.
 
 ## Source protection
 
@@ -11,6 +11,8 @@ Aletheia is a local desktop application. Dataset contents, paths, queries, index
 - An import is rejected when a source changes between inspection and indexing.
 - Cleanup accepts only fixed generated directory names directly below the canonical storage root.
 - Cleanup never traverses or deletes a source-file path stored in SQLite.
+- Live search streams ZIP and RAR entries to bounded readers and never writes extracted members to disk.
+- Encrypted RAR text entries, unsafe ZIP paths, excessive archive entry counts, and excessive declared decompression are rejected.
 
 ## Resource limits
 
@@ -21,7 +23,10 @@ Aletheia is a local desktop application. Dataset contents, paths, queries, index
 - fields per record: 256;
 - discovered files: 10,000;
 - directory depth: 32;
-- decompression: at most 100× the compressed size, with a 64 MiB minimum ceiling;
+- indexed GZIP decompression: at most 100x the compressed size, with a 64 MiB minimum ceiling;
+- live ZIP/RAR declared decompression: at most 250x compressed size, with an 8 GiB minimum ceiling;
+- live archive entries: 100,000 maximum;
+- live result cap: 5,000;
 - query: 512 characters;
 - result page: at most 200 records;
 - exported selection: at most 100,000 records.

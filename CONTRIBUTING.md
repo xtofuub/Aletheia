@@ -11,13 +11,13 @@
 Before committing:
 
 ```powershell
-npm run format:check
-npm run lint
-npm run typecheck
-npm run test
-npm run test:e2e
-npm run build
-npm run safety
+pnpm format:check
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:e2e
+pnpm build
+pnpm safety
 ```
 
 Then run Rust formatting, tests, and Clippy from `src-tauri`.

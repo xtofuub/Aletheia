@@ -11,18 +11,18 @@ Usernames, similar names, shared domains, and fuzzy text never cause an automati
 When **Identity grouping** is enabled in the import options, Aletheia tracks
 exact candidates as records are indexed. A visible automatic group is created
 only when the same deterministic identifier appears in at least two records.
-This avoids creating singleton groups for every unique value. “Automatic”
+This avoids creating singleton groups for every unique value. "Automatic"
 describes the strict rule that created the link; it is not a confidence guess
 and it does not contact an external service.
 
 The **Rebuild groups** action applies the same rules to already indexed records. It is idempotent, processes local fields in bounded batches, preserves existing review states, and removes empty groups left by prior merge or split actions.
 
-Each membership records a link type, confidence score, machine-readable explanation, and user review status. The interface shows the masked group label, reason, member count, and confidence.
+Each membership records a link type, confidence score, machine-readable explanation, and user review status. Member evidence is shown as a compact delimited row instead of separate field badges. The identity detail switch can reveal complete non-secret identifiers for local review; passwords, tokens, cookies, API keys, and other reusable secrets remain excluded.
 
 The manual builder accepts a normal local search. Users select two or more
 matching records, name the bundle, and create a confirmed identity containing
 only those selected records. Member lists are paginated.
 
-Users can confirm or reject automatic memberships and merge complete groups.
+Users can confirm or reject automatic memberships, merge complete groups, or select individual member rows and split them into a new reviewed identity. Every action can be undone from the identity workspace.
 Every change appends an audit event. Undo appends another event and restores the
 prior membership state; audit history is never rewritten.

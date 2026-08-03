@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+- Replaced identity source-only rows and field badges with readable delimited record values, plus an intentional full-identifier view that never exposes passwords, tokens, cookies, or API keys.
+- Separated Indexed Search from Direct File Scan with clear mode cards, independent queries, automatic query-type hints, and advanced scan controls for workers, archives, and result limits.
+- Standardized action footers across Search, Datasets, Identities, Exports, and Settings to the square Efferd treatment without rounded gray corners.
+- Simplified page descriptions and empty-state instructions across the investigation and library workflows.
+- Filled the identity builder side pane with a clear selection state and a square Efferd footer, removing the empty gray column below the bundle controls.
+- Removed the rounded gray footer treatment from Settings storage and update cards so they match the square Efferd grid.
+- Replaced every shield glyph with context-specific icons and added a persistent Documentation link to the Aletheia GitHub repository in the sidebar footer.
+- Restored the canonical Efferd Dashboard 2 stat-card footer treatment on Overview and removed the redundant Offline pill from the application header.
+- Consolidated Settings into one dense Efferd page, rebuilt Identities as a searchable master-detail workspace, and replaced Live Files with a focused Direct Scan workflow.
+- Reset the frontend and rebuilt every application route from the official Efferd Dashboard 2 registry block while preserving the native Rust backend and local data engine.
+- Replaced the legacy Overview page completely with the literal Efferd Dashboard 2 grid and adapted its original stats, bar chart, line chart, table, health, and activity sections to real Aletheia data.
+- Installed the complete Efferd Dashboard 2 registry block with `npx shadcn@latest add @efferd/dashboard-2`, then adapted its real shell, sidebar, breadcrumbs, cards, charts, tables, empty states, Geist fonts, and Lucide icon system to Aletheia.
+- Rebuilt Overview around the real Efferd Dashboard 2 composition: four compact KPI cards, paired operational charts, a recent-datasets table, workspace health, and activity panels in the original four-column one-pixel grid.
+- Made the official `@efferd/dashboard-2` registry block the canonical component base and migrated overview, search, datasets, domains, identities, saved views, exports, settings, and empty states onto its square DashboardCard and one-pixel grid composition.
+- Rebuilt the complete application shell around Efferd Dashboard 2: edge-to-edge workbench layout, dark-first near-black palette, compact route bar, square data panels, restrained green signals, and one consistent density across every page.
+- Reworked the sidebar into a compact operational rail with a dedicated local-privacy boundary and made the Efferd theme the default for new workspaces and existing browser previews without overriding later theme choices.
+- Added unified Automatic and Advanced search with query-shape detection, exact-first indexed lookup, and domain matching that also finds emails, URLs, and subdomains.
+- Added Live files search for read-only TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR sources without extraction or persistent indexing.
+- Added background live-scan workers, cancellation, result caps, streaming masked hits, decompressed-byte throughput, source progress, archive safety limits, and synthetic ZIP/RAR regression coverage.
+- Added Fast index and Deep analysis profiles so smaller databases can keep instant repeated search without paying for optional deduplication, domain, and identity work.
+- Precompiled live literal matching and reused SQLite import statements per batch to reduce CPU and database preparation overhead.
+- Adapted the Efferd operational grid across the unified search workflow with compact shared controls, technical typography, sharp separators, and restrained signal color.
+- Matched Identities and Settings to the approved Overview density, typography, borders, spacing, and monochrome brand language.
+- Rebuilt Settings with official Shadcn tabs, selects, switches, badges, and a single small save action.
+- Added bundled Geist Mono typography for record locations and identifiers, and simplified Search, Datasets, and Exports copy.
+- Rebuilt identity evidence and member rows with Shadcn tables, compact bundle cards, and consistent controls.
+- Added signed in-app NSIS update download and installation with progress feedback, passive Windows installation, and release manifest generation.
+- Restored saved-view queries and advanced filters when reopened, persisted browser-preview export history, and linked every ready dataset directly into a scoped search.
+- Hardened cleanup against active indexing and added proof that only named generated folders can be removed while source files remain untouched.
+- Exposed the native audited identity split workflow through selectable member rows and a compact Shadcn action.
+- Added a separate local search-history cleanup action that preserves saved views.
+
 ## 0.1.6 - 2026-07-28
 
 - Rebuilt Search, Domains, Identities, Datasets, and Settings on one consistent Shadcn component system with a deeper neutral dark theme and compact source-location typography.

@@ -4,7 +4,7 @@
 
 Aletheia is a local-only Windows desktop investigation app for data the user is authorized to analyze. Source files are opened read-only. Their records, file paths, search queries, index contents, and exports never cross the local trust boundary.
 
-The app does not download breach data, test credentials, automate logins, scrape sites, enrich records through network services, or contact people. Its only optional outbound request checks the official GitHub Releases API for a newer app version and carries no workspace information.
+The app does not download breach data, test credentials, automate logins, scrape sites, enrich records through network services, or contact people. Its only optional outbound path checks the official signed Aletheia release feed and can download a verified app installer. It carries no workspace information.
 
 ## Stack
 
@@ -28,6 +28,7 @@ Rust application state
   |-- commands: validate requests, authorize paths, shape responses
   |-- jobs: cancellation tokens, pause gates, configured concurrency
   |-- import: detection, streaming parsers, normalization, fingerprints
+  |-- live scan: bounded direct search over text, GZIP, ZIP, and RAR
   |-- storage: SQLite repositories and migrations
   |-- search: Tantivy writer, reader, query compiler
   |-- analysis: domain and deterministic identity grouping
@@ -72,7 +73,9 @@ Backpressure is provided by the synchronous parser-to-batch callback: the reader
 
 Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 64 MiB, and Tantivy receives between 64 MiB and 2 GiB. The worker limit controls one Tantivy writer's indexing threads, and only one import writer runs at a time. Tantivy and sanitized job checkpoints are committed every 1,000,000 records and at every file boundary. Identity and record-to-domain links are materialized incrementally inside each batch instead of accumulating the dataset in memory. All byte and record totals use 64-bit counters for multi-terabyte inputs.
 
-Supported MVP inputs are TXT, CSV, TSV, JSONL, NDJSON, and GZIP-wrapped variants. Format detection uses a small byte sample, not the extension alone. The parser enforces maximum sample, line, field, and decompression sizes.
+Supported indexed inputs are TXT, CSV, TSV, JSONL, NDJSON, and GZIP-wrapped variants. Format detection uses a small byte sample, not the extension alone. The parser enforces maximum sample, line, field, and decompression sizes.
+
+The import wizard offers two explicit plans. **Fast index** stores searchable fields and source offsets while skipping deduplication, URL/domain materialization, and automatic identity grouping. **Deep analysis** enables that relationship work when the user needs the Domains and Identities views. Both plans reuse prepared SQLite statements for each batch. This keeps indexing available for small and medium databases without making it the only way to search a very large corpus.
 
 ## Metadata model
 
@@ -91,7 +94,12 @@ Raw records are not copied into SQLite. Recognized field values needed for detai
 
 ## Search model
 
-The frontend sends a parsed search request with mode, query, filters, sort, offset, and limit. Rust compiles it into a bounded Tantivy query and returns view models that are masked by default.
+Aletheia exposes two search scopes behind one command deck:
+
+- **Indexed** compiles a bounded request into Tantivy and joins masked, traceable view models from SQLite. It is best for repeated investigations, paging, saved views, exports, identities, and domain analysis.
+- **Live files** opens authorized files read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. It is best for one-off lookup across very large archives.
+
+Automatic mode recognizes common query shapes. Email, IP, phone, and service-ID queries use field-boundary matching; indexed domain queries use normalized domain links with an exact-first fallback, while live domain queries use literal containment so matches inside emails, URLs, and subdomains are not missed. Advanced mode exposes exact, contains, prefix, dataset, field, archive, case, worker, and result-limit controls.
 
 - Exact: normalized term query
 - Contains: escaped literal regex over safe normalized terms
@@ -102,6 +110,8 @@ also resolve hostnames extracted from URL fields. Secret fields are rejected
 before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
+
+The live path precompiles ASCII literal matching once per scan, checks cancellation between bounded reads, emits results in small batches, and stops the whole worker set at the configured result cap. Per-worker memory is bounded by a 1 MiB line buffer plus decoder state. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Raw lines are masked in Rust before events reach React.
 
 Result pages support 25, 50, 100, or 200 records with explicit ranges and
 navigation. Search hit metadata and fields are loaded in batches instead of one
@@ -141,7 +151,7 @@ Cleanup resolves and verifies every generated path under the configured storage 
 
 The app uses a persistent left rail, top command/search bar, route workspace, optional right details panel, and bottom privacy/status strip. React Query owns server state and local component state owns transient controls.
 
-Obsidian Signal uses graphite surfaces, fine neutral borders, a cool cyan primary accent, violet only as a secondary analysis cue, and mono type for technical values. Status includes text or icons so color is never the only signal. Dense screens use separators and alignment, not generic card grids.
+The interface uses `@efferd/dashboard-2` as its canonical composition base: neutral surfaces, one-pixel `DashboardGrid` separators, square `DashboardCard` surfaces, compact controls, restrained green signal accents, and mono type only for technical values. Aletheia adapts the content, not the component language. Status includes text or icons so color is never the only signal. Dense screens use shared table, tab, badge, switch, select, and pagination primitives instead of unrelated page-specific patterns.
 
 ## Quality gates
 

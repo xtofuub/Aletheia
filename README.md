@@ -1,143 +1,147 @@
-# Aletheia
+<p align="center">
+  <img src="public/aletheia.svg" width="88" height="88" alt="Aletheia logo" />
+</p>
 
-Aletheia is a local-only Windows desktop application for indexing and investigating datasets you are authorized to possess and analyze. It combines a Tauri 2 desktop shell, React and TypeScript interface, Rust import pipeline, SQLite metadata store, and Tantivy search index.
+<h1 align="center">Aletheia</h1>
 
-The application can:
+<p align="center">
+  A fast, private Windows workspace for investigating large authorized datasets.<br />
+  Local indexing, live archive search, linked evidence, and reviewable identities—without uploading the source.
+</p>
 
-- inspect local TXT, CSV, TSV, JSONL, NDJSON, and GZIP sources through read-only handles;
-- stream records into a bounded local indexing pipeline;
-- resume cancelled or interrupted imports from persisted local checkpoints;
-- search normalized fields with exact, contains, prefix, and structured queries;
-- preserve dataset, source file, line, parser, and record traceability;
-- group domains with Public Suffix List semantics;
-- group identities only through deterministic email, phone, or service-scoped ID rules;
-- export selected records as redacted CSV, JSON, JSONL, or Markdown with a manifest;
-- clear generated indexes, metadata, caches, temporary files, and history without deleting source files.
+<p align="center">
+  <a href="https://github.com/xtofuub/Aletheia/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/xtofuub/Aletheia?style=flat-square&color=111111" /></a>
+  <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-111111?style=flat-square&logo=windows11" />
+  <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-111111?style=flat-square&logo=tauri" />
+  <img alt="Local only" src="https://img.shields.io/badge/data-local%20only-0f766e?style=flat-square" />
+</p>
 
-The import path uses fixed memory ceilings and 64-bit counters for
-multi-terabyte sources. Completion speed still depends on record shape, local
-SSD throughput, and having enough workspace capacity for SQLite and Tantivy.
+![Aletheia evidence overview](docs/screenshots/dashboard.png)
 
-It does not download datasets, test credentials, automate logins, scrape websites, enrich records through remote services, transmit telemetry, or contact people.
+## What Aletheia does
+
+| Fast local investigation                                                             | Evidence relationships                                                                 | Controlled output                                                                    |
+| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Stream TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR sources with bounded memory. | Group parent domains, subdomains, exact emails, phone numbers, and service-scoped IDs. | Export reviewed findings to CSV, JSON, JSONL, or Markdown with a sidecar manifest.   |
+| Search an index repeatedly or scan archives directly without extraction.             | Keep dataset, source file, line, parser, and record provenance attached.               | Clear generated indexes, metadata, cache, and history without deleting source files. |
+
+Aletheia never tests credentials, automates logins, scrapes websites, enriches records through remote services, sends telemetry, or contacts people.
+
+## Product tour
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/search.png" alt="Aletheia indexed search" />
+      <br /><strong>Indexed search</strong><br />Exact, contains, prefix, and structured searches with pagination and source traceability.
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/search-live.png" alt="Aletheia live file search" />
+      <br /><strong>Live file search</strong><br />Scan huge local text and archive sources without building a persistent index first.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/domains.png" alt="Aletheia domain evidence" />
+      <br /><strong>Domain evidence</strong><br />Filter parent domains and subdomains, then inspect every linked source line.
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/identities.png" alt="Aletheia identity bundles" />
+      <br /><strong>Identity bundles</strong><br />Review deterministic automatic groups or build a named bundle from selected evidence.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="docs/screenshots/datasets.png" alt="Aletheia dataset manager" />
+      <br /><strong>Resumable datasets</strong><br />Pause, cancel, resume, and monitor throughput for long-running imports.
+    </td>
+    <td width="50%">
+      <img src="docs/screenshots/settings-dark.png" alt="Aletheia resource settings" />
+      <br /><strong>Resource controls</strong><br />Tune worker and memory limits, inactivity locking, updates, storage, and cleanup from one page.
+    </td>
+  </tr>
+</table>
+
+All product images use invented fixtures with reserved example domains and documentation IP ranges. No private records are stored in this repository.
 
 ## Install on Windows
 
-Open [GitHub Releases](https://github.com/xtofuub/Aletheia/releases) and download:
+Go to [GitHub Releases](https://github.com/xtofuub/Aletheia/releases) and download:
 
 ```text
 aletheia_<version>_x64-setup.exe
 ```
 
-This x64 NSIS setup executable is the recommended download for Windows 10 and 11. It installs Aletheia for the current user, adds a Start Menu shortcut and Windows uninstaller, and handles the required Microsoft Edge WebView2 Runtime. Ordinary users do not need Rust, Cargo, Node.js, npm, or other development tools.
+The NSIS x64 setup is the recommended package for Windows 10 and 11. It installs for the current user, creates a Start Menu entry, provides a Windows uninstaller, and handles the Microsoft Edge WebView2 Runtime. Rust, Cargo, Node.js, npm, and developer tools are not required.
 
-The release also includes `aletheia_<version>_x64.exe` as a standalone testing binary. It is not the recommended normal installation because it does not create shortcuts or an uninstaller. See [Windows distribution](docs/windows-distribution.md) for checksums, alternate MSI deployment, build requirements, and release instructions.
+The release also includes `aletheia_<version>_x64.exe`, a standalone binary intended for testing. See [Windows distribution](docs/windows-distribution.md) for checksums, MSI deployment, and release details.
 
-## Privacy model
+## Choose the right search path
 
-Data workflows have no network client. React never opens datasets directly: Rust owns the read-only handles, detection, parsing, normalization, SQLite writes, Tantivy writes, masking, and exports. Source datasets are referenced but never copied into the repository or deleted by cleanup.
+| Workflow          | Best for                                                              | Tradeoff                                                              |
+| ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **Live files**    | One-off searches across very large TXT, GZIP, ZIP, or RAR collections | No up-front index; repeated searches must read the source again       |
+| **Fast index**    | Repeated searches and general investigation                           | Uses local workspace storage while greatly accelerating later queries |
+| **Deep analysis** | Domain and identity relationship work                                 | Adds grouping work and storage beyond the fast profile                |
 
-An optional update check contacts only the official GitHub Releases API with the app version in the user agent. It never includes dataset content, paths, names, queries, indexes, or exports and can be disabled in Settings.
+The import pipeline uses streaming readers, fixed memory ceilings, resumable checkpoints, and 64-bit counters. It is designed for multi-terabyte inputs, but real throughput still depends on record shape, compression, workspace capacity, and disk speed. On HDD-based corpora, live sequential scans are usually preferable to random access; placing the Aletheia workspace on an SSD improves indexing and search latency.
 
-Secret fields are excluded from the general index. Their original values are replaced before storage. Sensitive result fields are masked by default. Search history and export audit data remain inside the selected local workspace.
+## Privacy and safety
 
-See [SECURITY.md](SECURITY.md), [PRIVACY.md](PRIVACY.md), and [ARCHITECTURE.md](ARCHITECTURE.md).
+- Source files are opened read-only and remain outside the workspace.
+- React never reads datasets directly; Rust owns detection, parsing, normalization, SQLite, Tantivy, masking, and exports.
+- Secret fields are excluded from the general Tantivy index and replaced before storage.
+- Signed update checks contact only the official GitHub release endpoint and can be disabled.
+- Cleanup is restricted to known generated paths under the verified Aletheia workspace.
 
-## Interface
-
-The dashboard uses the clean, compact structure of the referenced shadcn dashboard as a starting point, adapted to Aletheia's evidence, privacy, and traceability workflows.
-
-![Aletheia dashboard with synthetic data](docs/screenshots/dashboard.png)
-
-![Masked local search using synthetic data](docs/screenshots/search.png)
-
-![Manual and automatic identity bundles](docs/screenshots/identities.png)
-
-![Local performance and privacy settings](docs/screenshots/settings.png)
-
-All screenshots and examples use invented fixtures with reserved example domains and documentation IP ranges.
+Read [Security](SECURITY.md), [Privacy](PRIVACY.md), and [Architecture](ARCHITECTURE.md) before production use.
 
 ## Supported inputs
 
-| Format     | Extensions          | Notes                                            |
-| ---------- | ------------------- | ------------------------------------------------ |
-| Text       | `.txt`, `.log`      | One bounded record per line                      |
-| CSV        | `.csv`              | Conservative delimiter and header detection      |
-| TSV        | `.tsv`              | Tab-delimited                                    |
-| Delimited  | detected            | Comma, tab, semicolon, or consistent pipe        |
-| JSON Lines | `.jsonl`, `.ndjson` | One JSON object per bounded line                 |
-| GZIP       | `.gz`               | GZIP-wrapped supported content with ratio limits |
+| Format         | Extensions                                        |        Indexed         | Live files |
+| -------------- | ------------------------------------------------- | :--------------------: | :--------: |
+| Text and logs  | `.txt`, `.log`                                    |          Yes           |    Yes     |
+| Delimited text | `.csv`, `.tsv`, detected comma/tab/semicolon/pipe |          Yes           |    Yes     |
+| JSON Lines     | `.jsonl`, `.ndjson`                               |          Yes           |    Yes     |
+| GZIP           | `.gz`                                             |          Yes           |    Yes     |
+| ZIP and RAR    | `.zip`, `.rar`                                    | No extraction required |    Yes     |
 
-Detection reads at most 256 KiB. Imports enforce a 1 MiB line limit, a 256 KiB field limit, 256 fields per record, and a decompression ceiling.
+Detection reads at most 256 KiB. Imports enforce a 1 MiB line limit, 256 KiB field limit, 256 fields per record, decompression ceilings, and bounded queues.
 
-## Development setup
+## Build from source
 
-Requirements:
-
-- Windows 10 or 11
-- Node.js 24 or newer
-- Rust stable with the `x86_64-pc-windows-msvc` target
-- Visual Studio 2022 Build Tools with Desktop development with C++
-- WebView2 Runtime
-
-Install and start the web UI:
+Requirements: Windows 10 or 11, Node.js 24+, Rust stable with `x86_64-pc-windows-msvc`, Visual Studio 2022 Build Tools with Desktop development with C++, pnpm, and WebView2.
 
 ```powershell
-npm install
-npm run dev
+pnpm install
+pnpm dev
+pnpm tauri dev
 ```
 
-Start the desktop application from a Visual Studio developer shell:
+Create release packages:
 
 ```powershell
-npm run tauri dev
+pnpm build
+pnpm dist:windows
 ```
 
-Build:
+Run the quality gates:
 
 ```powershell
-npm run build
-npm run dist:windows
-```
-
-The consistently named Windows deliverables are written under `release/`, while native intermediate output remains under `src-tauri/target/release`. Generated build output is ignored by Git.
-
-## Tests and quality gates
-
-```powershell
-npm run format:check
-npm run lint
-npm run typecheck
-npm run test
-npm run test:e2e
-npm run build
-npm run safety
+pnpm format:check
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm test:e2e
+pnpm safety
 
 cd src-tauri
 cargo fmt --check
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
-cargo bench --bench core_benchmarks
 ```
 
-See [TESTING.md](TESTING.md) for fixture and benchmark details.
-
-## Storage and cleanup
-
-The selected workspace contains:
-
-```text
-metadata.sqlite3
-search-index/
-cache/
-temp/
-export-audit/
-```
-
-Settings can clear only the known generated paths below that verified root. “Clear all generated state” removes investigation metadata and indexes but leaves external source files and previously exported files untouched.
-
-## Legal and ethical use
-
-Use Aletheia only with data you are legally authorized to possess and analyze. Comply with applicable law, contracts, retention rules, and organizational policy. Aletheia is a defensive investigation tool; it must not be used for credential testing, automated login attempts, harassment, unauthorized access, or redistribution of sensitive data.
+Generated Windows deliverables are written to `release/`; native intermediate output remains under `src-tauri/target/release`.
 
 ## Documentation
 
@@ -150,3 +154,7 @@ Use Aletheia only with data you are legally authorized to possess and analyze. C
 - [Domain grouping](docs/domain-grouping.md)
 - [UI guidelines](docs/ui-guidelines.md)
 - [Windows distribution](docs/windows-distribution.md)
+
+## Responsible use
+
+Use Aletheia only with data you are legally authorized to possess and analyze. Follow applicable law, contracts, retention rules, and organizational policy. Aletheia is a defensive investigation tool and must not be used for credential testing, automated login attempts, harassment, unauthorized access, or redistribution of sensitive data.

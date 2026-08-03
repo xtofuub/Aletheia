@@ -26,3 +26,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Efferd Dashboard 2
+
+The Aletheia interface adapts the layout language of Efferd Dashboard 2 by
+sshahaider, retrieved through the 21st.dev component registry. Aletheia owns
+its application-specific React components and styling; no private registry
+credentials or generated dataset information are included in the source.
+
+## Rust archive and search crates
+
+- `rars` 0.4.7: MIT OR Apache-2.0
+- `zip` 4.6.1: MIT
+- `aho-corasick` 1.1.4: Unlicense OR MIT
+
+Their source repositories and complete license texts are available from the
+package metadata recorded in `src-tauri/Cargo.lock`.
