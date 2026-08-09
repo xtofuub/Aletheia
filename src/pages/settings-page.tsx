@@ -58,6 +58,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Spinner } from "@/components/ui/spinner";
 import {
   checkForUpdates,
   cleanupGenerated,
@@ -192,8 +193,12 @@ export function SettingsPage() {
               onClick={() => save.mutate()}
               size="sm"
             >
-              <SaveIcon data-icon="inline-start" />
-              Save changes
+              {save.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <SaveIcon data-icon="inline-start" />
+              )}
+              {save.isPending ? "Saving…" : "Save changes"}
             </Button>
           </div>
         }
@@ -601,8 +606,12 @@ export function SettingsPage() {
               size="sm"
               variant="outline"
             >
-              <RefreshCwIcon data-icon="inline-start" />
-              Check now
+              {update.isFetching ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <RefreshCwIcon data-icon="inline-start" />
+              )}
+              {update.isFetching ? "Checking…" : "Check now"}
             </Button>
             {update.data?.releaseUrl ? (
               <Button

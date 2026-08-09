@@ -8,14 +8,28 @@ import {
   PlayIcon,
   RotateCcwIcon,
   SquareIcon,
+  Trash2Icon,
   UploadIcon,
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
+  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
@@ -51,6 +65,7 @@ import {
   ProgressValue,
 } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -61,6 +76,7 @@ import {
 } from "@/components/ui/table";
 import {
   cancelImport,
+  deleteDataset,
   inspectSources,
   listDatasets,
   listenImportProgress,
@@ -73,6 +89,7 @@ import {
   type ImportOptions,
   type ImportProgress,
   type InspectionResult,
+  type DatasetSummary,
 } from "@/lib/desktop";
 import {
   formatBytes,
@@ -101,6 +118,13 @@ export function DatasetsPage() {
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [recordsPerSecond, setRecordsPerSecond] = useState(0);
   const [bytesPerSecond, setBytesPerSecond] = useState(0);
+  const [actionError, setActionError] = useState("");
+  const [resumingDatasetId, setResumingDatasetId] = useState<string | null>(
+    null,
+  );
+  const [datasetToRemove, setDatasetToRemove] = useState<DatasetSummary | null>(
+    null,
+  );
   const previous = useRef<{
     at: number;
     records: number;
@@ -159,6 +183,7 @@ export function DatasetsPage() {
       ),
     onSuccess: (result) => {
       if (!result) return;
+      setActionError("");
       setInspection(result);
       setDatasetLabel(
         result.files[0]?.fileName.replace(/\.[^.]+$/, "") ??
@@ -166,6 +191,7 @@ export function DatasetsPage() {
       );
       setDialogOpen(true);
     },
+    onError: (error) => setActionError(String(error)),
   });
 
   const start = useMutation({
@@ -179,6 +205,7 @@ export function DatasetsPage() {
       });
     },
     onSuccess: async (result) => {
+      setActionError("");
       setProgress({
         jobId: result.jobId,
         datasetId: result.datasetId,
@@ -196,7 +223,48 @@ export function DatasetsPage() {
       setInspection(null);
       await queryClient.invalidateQueries({ queryKey: ["datasets"] });
     },
+    onError: (error) => setActionError(String(error)),
   });
+
+  const remove = useMutation({
+    mutationFn: (datasetId: string) => deleteDataset(datasetId),
+    onSuccess: async () => {
+      setActionError("");
+      setDatasetToRemove(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["datasets"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["domains"] }),
+        queryClient.invalidateQueries({ queryKey: ["identities"] }),
+      ]);
+    },
+    onError: (error) => setActionError(String(error)),
+  });
+
+  async function continueDataset(dataset: DatasetSummary) {
+    setResumingDatasetId(dataset.id);
+    try {
+      const result = await resumeDatasetImport(dataset.id);
+      setActionError("");
+      setProgress({
+        jobId: result.jobId,
+        datasetId: result.datasetId,
+        status: "queued",
+        currentFile: null,
+        bytesRead: 0,
+        totalBytes: dataset.totalBytes,
+        recordsProcessed: dataset.recordCount,
+        recordsIndexed: dataset.recordCount,
+        invalidRecords: 0,
+        duplicateRecords: 0,
+        message: "Resume queued",
+      });
+    } catch (error) {
+      setActionError(String(error));
+    } finally {
+      setResumingDatasetId(null);
+    }
+  }
 
   const active =
     progress &&
@@ -204,6 +272,13 @@ export function DatasetsPage() {
   const percent = progress?.totalBytes
     ? Math.min(100, (progress.bytesRead / progress.totalBytes) * 100)
     : 0;
+  const largeInspection = Boolean(
+    inspection &&
+    (inspection.totalBytes >= 1024 ** 3 ||
+      inspection.files.some(
+        (file) => (file.estimatedRecords ?? 0) >= 4_000_000,
+      )),
+  );
 
   return (
     <div>
@@ -211,27 +286,103 @@ export function DatasetsPage() {
         actions={
           <>
             <Button
+              nativeButton={false}
+              render={<a href="#/search?surface=direct" />}
+              size="sm"
+            >
+              <FileSearchIcon data-icon="inline-start" />
+              Scan huge files
+            </Button>
+            <Button
               disabled={inspect.isPending}
               onClick={() => inspect.mutate("folder")}
               size="sm"
               variant="outline"
             >
-              <FolderOpenIcon data-icon="inline-start" />
-              Add folder
+              {inspect.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <FolderOpenIcon data-icon="inline-start" />
+              )}
+              {inspect.isPending ? "Reading…" : "Index folder"}
             </Button>
             <Button
               disabled={inspect.isPending}
               onClick={() => inspect.mutate("files")}
               size="sm"
+              variant="outline"
             >
-              <FilePlus2Icon data-icon="inline-start" />
-              Add files
+              {inspect.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <FilePlus2Icon data-icon="inline-start" />
+              )}
+              {inspect.isPending ? "Reading…" : "Index files"}
             </Button>
           </>
         }
-        description="Add local sources for fast, repeatable search. Original files stay unchanged."
+        description="Scan very large sources immediately, or index smaller collections you search repeatedly."
         title="Datasets"
       />
+
+      {actionError ? (
+        <Alert className="mb-4" variant="destructive">
+          <AlertTitle>Dataset action failed</AlertTitle>
+          <AlertDescription>{actionError}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2">
+        <DashboardCard>
+          <CardHeader>
+            <CardTitle>Live scan</CardTitle>
+            <CardDescription>
+              Best for multi-GB files, HDD storage, ZIP, RAR, and one-time
+              searches. No import or extraction.
+            </CardDescription>
+            <CardAction>
+              <Badge>Recommended for 4M+ rows</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardFooter>
+            <Button
+              nativeButton={false}
+              render={<a href="#/search?surface=direct" />}
+              size="sm"
+            >
+              <FileSearchIcon data-icon="inline-start" />
+              Open live scan
+            </Button>
+          </CardFooter>
+        </DashboardCard>
+        <DashboardCard>
+          <CardHeader>
+            <CardTitle>Persistent index</CardTitle>
+            <CardDescription>
+              Best for a curated dataset you will search many times or use for
+              domain and identity grouping.
+            </CardDescription>
+            <CardAction>
+              <Badge variant="outline">Reusable</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardFooter className="gap-2">
+            <Button
+              disabled={inspect.isPending}
+              onClick={() => inspect.mutate("files")}
+              size="sm"
+              variant="outline"
+            >
+              {inspect.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <FilePlus2Icon data-icon="inline-start" />
+              )}
+              Choose files
+            </Button>
+          </CardFooter>
+        </DashboardCard>
+      </div>
 
       <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-4">
         {progress ? (
@@ -347,46 +498,47 @@ export function DatasetsPage() {
                           {formatDateTime(dataset.lastIndexedAt)}
                         </TableCell>
                         <TableCell className="pe-6 text-right">
-                          {resumable ? (
+                          <div className="flex justify-end gap-1">
+                            {resumable ? (
+                              <Button
+                                disabled={resumingDatasetId === dataset.id}
+                                onClick={() => void continueDataset(dataset)}
+                                size="sm"
+                                variant="outline"
+                              >
+                                {resumingDatasetId === dataset.id ? (
+                                  <Spinner data-icon="inline-start" />
+                                ) : (
+                                  <RotateCcwIcon data-icon="inline-start" />
+                                )}
+                                {resumingDatasetId === dataset.id
+                                  ? "Resuming…"
+                                  : "Resume"}
+                              </Button>
+                            ) : (
+                              <Button
+                                nativeButton={false}
+                                render={
+                                  <a
+                                    href={`#/search?dataset=${encodeURIComponent(dataset.id)}`}
+                                  />
+                                }
+                                size="sm"
+                                variant="ghost"
+                              >
+                                Search
+                              </Button>
+                            )}
                             <Button
-                              onClick={() =>
-                                void resumeDatasetImport(dataset.id).then(
-                                  (result) =>
-                                    setProgress({
-                                      jobId: result.jobId,
-                                      datasetId: result.datasetId,
-                                      status: "queued",
-                                      currentFile: null,
-                                      bytesRead: 0,
-                                      totalBytes: dataset.totalBytes,
-                                      recordsProcessed: dataset.recordCount,
-                                      recordsIndexed: dataset.recordCount,
-                                      invalidRecords: 0,
-                                      duplicateRecords: 0,
-                                      message: "Resume queued",
-                                    }),
-                                )
-                              }
-                              size="sm"
-                              variant="outline"
-                            >
-                              <RotateCcwIcon data-icon="inline-start" />
-                              Resume
-                            </Button>
-                          ) : (
-                            <Button
-                              nativeButton={false}
-                              render={
-                                <a
-                                  href={`#/search?dataset=${encodeURIComponent(dataset.id)}`}
-                                />
-                              }
-                              size="sm"
+                              aria-label={`Remove ${dataset.name}`}
+                              disabled={Boolean(active)}
+                              onClick={() => setDatasetToRemove(dataset)}
+                              size="icon-sm"
                               variant="ghost"
                             >
-                              Search
+                              <Trash2Icon />
                             </Button>
-                          )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -436,6 +588,29 @@ export function DatasetsPage() {
           </DialogHeader>
           {inspection ? (
             <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+              {largeInspection ? (
+                <Alert>
+                  <FileSearchIcon />
+                  <AlertTitle>Live scan is faster to start</AlertTitle>
+                  <AlertDescription>
+                    This selection is at least 1 GB or contains an estimated 4
+                    million rows. Use live scan for immediate lookup; build an
+                    index only when you need repeated searches and grouping.
+                  </AlertDescription>
+                  <div className="col-start-2 mt-2">
+                    <Button
+                      nativeButton={false}
+                      onClick={() => setDialogOpen(false)}
+                      render={<a href="#/search?surface=direct" />}
+                      size="sm"
+                      variant="outline"
+                    >
+                      <FileSearchIcon data-icon="inline-start" />
+                      Switch to live scan
+                    </Button>
+                  </div>
+                </Alert>
+              ) : null}
               <FieldGroup>
                 <Field>
                   <FieldLabel htmlFor="dataset-label">Dataset name</FieldLabel>
@@ -537,12 +712,56 @@ export function DatasetsPage() {
               disabled={!datasetLabel.trim() || start.isPending}
               onClick={() => start.mutate()}
             >
-              <UploadIcon data-icon="inline-start" />
-              Start import
+              {start.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <UploadIcon data-icon="inline-start" />
+              )}
+              {start.isPending ? "Starting…" : "Build index"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        onOpenChange={(open) => {
+          if (!open && !remove.isPending) setDatasetToRemove(null);
+        }}
+        open={Boolean(datasetToRemove)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2Icon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Remove this dataset?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Aletheia will delete generated index entries and metadata for “
+              {datasetToRemove?.name}”. The original source files will not be
+              changed or deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={remove.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={remove.isPending || !datasetToRemove}
+              onClick={() => {
+                if (datasetToRemove) remove.mutate(datasetToRemove.id);
+              }}
+              variant="destructive"
+            >
+              {remove.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Trash2Icon data-icon="inline-start" />
+              )}
+              {remove.isPending ? "Removing…" : "Remove dataset"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

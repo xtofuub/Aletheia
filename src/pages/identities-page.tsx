@@ -495,6 +495,16 @@ export function IdentitiesPage() {
                 <CardDescription>
                   Search the index and select only reviewed rows.
                 </CardDescription>
+                <CardAction>
+                  {manualResults.isFetching ? (
+                    <Badge>
+                      <Spinner />
+                      Searching index
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline">Name-aware</Badge>
+                  )}
+                </CardAction>
               </CardHeader>
               <CardContent className="border-b p-4">
                 <form
@@ -511,7 +521,7 @@ export function IdentitiesPage() {
                     <InputGroupInput
                       aria-label="Find identity evidence"
                       onChange={(event) => setManualQuery(event.target.value)}
-                      placeholder="Email, username, phone, or account ID"
+                      placeholder="Name, email, username, phone, or account ID"
                       value={manualQuery}
                     />
                     <InputGroupAddon align="inline-end">

@@ -112,6 +112,9 @@ const fieldItems: Array<{ label: string; value: string }> = [
   { label: "Domain", value: "domain" },
   { label: "URL", value: "url" },
   { label: "Username", value: "username" },
+  { label: "First name", value: "first_name" },
+  { label: "Last name", value: "last_name" },
+  { label: "Full name", value: "full_name" },
   { label: "Phone", value: "phone" },
   { label: "IP address", value: "ip_address" },
   { label: "User ID", value: "user_id" },
@@ -124,7 +127,7 @@ const workerItems = [1, 2, 4, 8].map((value) => ({
   label: `${value} ${value === 1 ? "worker" : "workers"}`,
   value: String(value),
 }));
-const resultCapItems = [500, 2_000, 5_000, 10_000].map((value) => ({
+const resultCapItems = [500, 2_000, 5_000].map((value) => ({
   label: `${value.toLocaleString()} matches`,
   value: String(value),
 }));
@@ -140,6 +143,7 @@ function detectQueryKind(value: string) {
     return "Domain";
   }
   if (/^@[a-z0-9_.-]+$/i.test(query)) return "Username";
+  if (/^[\p{L}']+(?:[ -][\p{L}']+){1,3}$/u.test(query)) return "Name";
   return "Text";
 }
 
@@ -290,7 +294,7 @@ export function SearchPage({
             <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
               <span>Indexed search</span>
               <span className="text-xs font-normal text-muted-foreground">
-                Fast, repeatable lookup across datasets you added.
+                Repeated lookup across smaller datasets you added.
               </span>
             </span>
             <Badge variant="outline">Fast</Badge>
@@ -301,12 +305,12 @@ export function SearchPage({
           >
             <FileSearchIcon />
             <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-              <span>Direct file scan</span>
+              <span>Live scan for large files</span>
               <span className="text-xs font-normal text-muted-foreground">
-                One-time scan with no import or archive extraction.
+                Search TXT, ZIP, RAR, and GZIP without indexing first.
               </span>
             </span>
-            <Badge variant="outline">No index</Badge>
+            <Badge>Recommended for huge files</Badge>
           </TabsTrigger>
         </TabsList>
         <TabsContent value="index">
@@ -343,7 +347,7 @@ export function SearchPage({
                           submitSearch();
                         }
                       }}
-                      placeholder="Email, domain, username, phone, IP address, or URL"
+                      placeholder="Name, email, domain, username, phone, IP, or URL"
                       value={query}
                     />
                     <InputGroupAddon align="inline-end">
@@ -654,8 +658,8 @@ export function SearchPage({
               <CardHeader className="border-b">
                 <CardTitle>Direct file scan</CardTitle>
                 <CardDescription>
-                  Read files and compressed archives once without adding a
-                  dataset.
+                  Stream files and compressed archives without adding a dataset
+                  or extracting them to disk.
                 </CardDescription>
                 <CardAction>
                   <Badge variant="outline">
@@ -737,7 +741,7 @@ export function SearchPage({
                           onChange={(event) =>
                             setDirectQuery(event.target.value)
                           }
-                          placeholder="Email, domain, username, phone, IP, or URL"
+                          placeholder="Name, email, domain, username, phone, IP, or URL"
                           value={directQuery}
                         />
                         <InputGroupAddon align="inline-end">
@@ -774,7 +778,9 @@ export function SearchPage({
                         Detected: {directQueryKind}
                       </Badge>
                       <p className="text-xs text-muted-foreground">
-                        Contains matching works best for unknown source formats.
+                        {directQueryKind === "Name"
+                          ? "All name tokens can match across columns or email separators."
+                          : "Contains matching works best for unknown source formats."}
                       </p>
                     </div>
                   ) : null}

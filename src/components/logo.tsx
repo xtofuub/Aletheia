@@ -2,10 +2,7 @@ import type React from "react";
 
 import { cn } from "@/lib/utils";
 
-export function LogoIcon({
-  className,
-  ...props
-}: React.ComponentProps<"img">) {
+export function LogoIcon({ className, ...props }: React.ComponentProps<"img">) {
   return (
     <img
       alt=""
@@ -17,10 +14,7 @@ export function LogoIcon({
   );
 }
 
-export function Logo({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+export function Logo({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       aria-label="Aletheia"
