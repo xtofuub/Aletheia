@@ -27,7 +27,7 @@ export function AppSidebar({ activeRoute }: { activeRoute: RouteKey }) {
       collapsible="icon"
       variant="sidebar"
     >
-      <SidebarHeader className="h-14 justify-center border-b px-2">
+      <SidebarHeader className="h-12 justify-center border-b px-2">
         <SidebarMenuButton render={<a href="#/overview" />}>
           <LogoIcon />
           <span className="font-medium text-foreground!">Aletheia</span>
