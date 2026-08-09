@@ -72,6 +72,7 @@ export function NetRevenueChart({ datasets }: { datasets: DatasetSummary[] }) {
               }}
               dataKey="records"
               fill="var(--color-records)"
+              maxBarSize={72}
               radius={2}
             />
           </BarChart>
