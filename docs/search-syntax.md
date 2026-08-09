@@ -2,9 +2,11 @@
 
 ## Automatic mode
 
-Automatic mode is the default. Enter a value normally; no field prefix is required. Aletheia recognizes email addresses, domains, URLs, IP addresses, phone numbers, and service IDs, then chooses a safe field and match strategy. Other input is treated as text or a username.
+Automatic mode is the default. Enter a value normally; no field prefix is required. Aletheia recognizes email addresses, domains, URLs, IP addresses, phone numbers, service IDs, and person names, then chooses a safe field and match strategy. Other input is treated as text or a username.
 
 Indexed searches try normalized exact matching first for identifiers and fall back to literal containment when needed. Live domain searches use containment because a domain may be embedded in an email address, URL, or subdomain. Search still starts only when the user presses Enter or the Search/Scan button, so selecting a terabyte-scale folder never triggers an accidental scan on each keystroke.
+
+Contains searches split a likely person name into meaningful tokens. A query such as `Jane Doe` can therefore match separate first/last-name fields or common email-local-part separators such as `jane.doe`, `jane_doe`, and `jane-doe`. All name tokens must be present; token order does not matter.
 
 ## Search scopes
 

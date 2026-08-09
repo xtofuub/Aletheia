@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Replaced the old application mark with the supplied Aletheia artwork, regenerated every Windows icon asset, and integrated branded minimize, maximize, and close controls into the frameless app shell.
+- Added flexible first/last-name lookup across separate fields and common email separators for both Tantivy search and direct file scans.
+- Added safe dataset removal that deletes only generated SQLite and Tantivy data, blocks removal during active work, and proves the original source remains untouched.
+- Made live scanning the recommended path for multi-million-row, multi-gigabyte, HDD, ZIP, RAR, and GZIP sources; added clear throughput, loading, resume, removal, and long-running workflow feedback.
+- Rebuilt the README around current product screenshots, large-source guidance, normal-user installation, and the live-scan versus persistent-index decision.
 - Replaced identity source-only rows and field badges with readable delimited record values, plus an intentional full-identifier view that never exposes passwords, tokens, cookies, or API keys.
 - Separated Indexed Search from Direct File Scan with clear mode cards, independent queries, automatic query-type hints, and advanced scan controls for workers, archives, and result limits.
 - Standardized action footers across Search, Datasets, Identities, Exports, and Settings to the square Efferd treatment without rounded gray corners.
