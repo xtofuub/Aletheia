@@ -47,6 +47,7 @@ pub fn run() {
             importer::resume_import,
             importer::cancel_import,
             importer::list_datasets,
+            importer::delete_dataset,
             investigation::get_overview_stats,
             investigation::search_records,
             investigation::search_identity_records,

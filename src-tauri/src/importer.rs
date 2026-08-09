@@ -678,6 +678,77 @@ pub fn list_datasets(state: State<'_, AppState>) -> Result<Vec<DatasetSummary>, 
     rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)
 }
 
+#[tauri::command]
+pub async fn delete_dataset(dataset_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    if dataset_id.is_empty() || dataset_id.len() > 128 {
+        return Err("dataset identifier is invalid".to_string());
+    }
+    if !state
+        .jobs
+        .lock()
+        .map_err(|_| "job registry is unavailable".to_string())?
+        .is_empty()
+    {
+        return Err("finish or cancel active work before removing a dataset".to_string());
+    }
+    let storage_root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_dataset_from_workspace(&storage_root, &dataset_id)
+    })
+    .await
+    .map_err(|_| "dataset removal task failed".to_string())?
+}
+
+fn delete_dataset_from_workspace(storage_root: &Path, dataset_id: &str) -> Result<(), String> {
+    let mut connection = open_database(storage_root)
+        .map_err(|_| "dataset database worker could not start".to_string())?;
+    let transaction = connection.transaction().map_err(sanitized)?;
+    let removed = transaction
+        .execute("DELETE FROM datasets WHERE id = ?1", [dataset_id])
+        .map_err(sanitized)?;
+    if removed == 0 {
+        return Err("dataset was not found".to_string());
+    }
+    transaction
+        .execute_batch(
+            "UPDATE domains
+             SET record_count = (
+               SELECT COUNT(*) FROM record_domains rd
+               WHERE rd.hostname = domains.hostname
+             );
+             DELETE FROM domains WHERE record_count = 0;
+             DELETE FROM identity_groups
+             WHERE NOT EXISTS (
+               SELECT 1 FROM identity_memberships im
+               WHERE im.identity_group_id = identity_groups.id
+             );
+             DELETE FROM identity_candidates
+             WHERE group_id NOT IN (SELECT id FROM identity_groups);
+             DELETE FROM domain_link_repairs
+             WHERE registrable_domain NOT IN (
+               SELECT DISTINCT registrable_domain FROM domains
+             );",
+        )
+        .map_err(sanitized)?;
+    transaction
+        .execute(
+            "INSERT INTO audit_events(
+               id, event_type, entity_type, entity_id, details_json
+             ) VALUES (?1, 'dataset_removed', 'dataset', ?2, ?3)",
+            params![
+                Uuid::new_v4().to_string(),
+                dataset_id,
+                r#"{"sourceFilesDeleted":false,"generatedDataOnly":true}"#
+            ],
+        )
+        .map_err(sanitized)?;
+    transaction.commit().map_err(sanitized)?;
+
+    SearchIndex::open_or_create(storage_root)?.delete_dataset(dataset_id)
+}
+
 fn validate_plan(plan: &ImportPlan) -> Result<(), String> {
     if plan.dataset_label.trim().is_empty() || plan.dataset_label.len() > 160 {
         return Err("dataset label must contain 1 to 160 characters".to_string());
@@ -2145,16 +2216,16 @@ mod tests {
 
     use super::{
         BATCH_RECORDS, Counters, INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES,
-        batch_byte_limit, decompression_limit, extract_embedded_domains,
-        extract_embedded_identifiers, finish_cancelled, flush_batch, load_resume_plan,
-        normalize_value, prepare_database_rows, prepare_import_database, prepare_resume_files,
-        process_record, read_bounded_line, rebuild_domain_groups, rebuild_identity_groups,
-        run_import, store_identity, stream_file, writer_memory_budget,
+        batch_byte_limit, decompression_limit, delete_dataset_from_workspace,
+        extract_embedded_domains, extract_embedded_identifiers, finish_cancelled, flush_batch,
+        load_resume_plan, normalize_value, prepare_database_rows, prepare_import_database,
+        prepare_resume_files, process_record, read_bounded_line, rebuild_domain_groups,
+        rebuild_identity_groups, run_import, store_identity, stream_file, writer_memory_budget,
     };
     use crate::{
         detection::inspect_paths,
         models::{FieldMapping, FieldType, ImportOptions, ImportPlan, SearchMode},
-        search_index::SearchIndex,
+        search_index::{SearchIndex, make_document},
         storage::open_database,
     };
 
@@ -2961,6 +3032,77 @@ mod tests {
             imported_bytes as u64,
             std::fs::metadata(gzip_path).expect("gzip metadata").len()
         );
+    }
+
+    #[test]
+    fn deleting_dataset_removes_generated_rows_and_keeps_source_file() {
+        let workspace = tempdir().expect("temporary workspace");
+        let source = workspace.path().join("synthetic-source.txt");
+        std::fs::write(&source, "invented fixture").expect("source fixture");
+        let connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO datasets(
+                   id, name, status, parser_version, record_count, file_count
+                 ) VALUES ('dataset-delete', 'Synthetic', 'ready', 'test', 1, 1);
+                 INSERT INTO source_files(
+                   id, dataset_id, absolute_path, relative_path, file_size,
+                   format, index_status
+                 ) VALUES (
+                   'file-delete', 'dataset-delete', '{}', 'synthetic-source.txt',
+                   16, 'text', 'ready'
+                 );
+                 INSERT INTO records(
+                   id, dataset_id, source_file_id, source_location,
+                   record_fingerprint, parser
+                 ) VALUES (
+                   'record-delete', 'dataset-delete', 'file-delete',
+                   'line 1', 'synthetic-delete', 'test'
+                 );",
+                source.to_string_lossy().replace('\\', "\\\\")
+            ))
+            .expect("synthetic dataset");
+        let search = SearchIndex::open_or_create(workspace.path()).expect("search index");
+        let mut writer = search.writer().expect("writer");
+        writer
+            .add_document(make_document(
+                search.fields,
+                "record-delete",
+                "dataset-delete",
+                &["synthetic-search-value".to_string()],
+            ))
+            .expect("search document");
+        writer.commit().expect("commit");
+        drop(writer);
+
+        delete_dataset_from_workspace(workspace.path(), "dataset-delete")
+            .expect("dataset deletion");
+        let reopened = open_database(workspace.path()).expect("reopen database");
+        let dataset_count: i64 = reopened
+            .query_row("SELECT COUNT(*) FROM datasets", [], |row| row.get(0))
+            .expect("dataset count");
+        let audit_count: i64 = reopened
+            .query_row(
+                "SELECT COUNT(*) FROM audit_events WHERE event_type = 'dataset_removed'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("audit count");
+        let (_, hits) = SearchIndex::open_or_create(workspace.path())
+            .expect("search index")
+            .search_record_ids(
+                "synthetic-search-value",
+                SearchMode::Exact,
+                None,
+                None,
+                0,
+                20,
+            )
+            .expect("search after deletion");
+        assert_eq!(dataset_count, 0);
+        assert_eq!(audit_count, 1);
+        assert!(hits.is_empty());
+        assert!(source.exists(), "source files must never be deleted");
     }
 
     fn synthetic_plan(files: Vec<crate::models::FileInspection>) -> ImportPlan {

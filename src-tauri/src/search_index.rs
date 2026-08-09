@@ -62,6 +62,13 @@ impl SearchIndex {
             .map_err(sanitized)
     }
 
+    pub fn delete_dataset(&self, dataset_id: &str) -> Result<(), String> {
+        let mut writer = self.writer()?;
+        writer.delete_term(Term::from_field_text(self.fields.dataset_id, dataset_id));
+        writer.commit().map_err(sanitized)?;
+        writer.wait_merging_threads().map_err(sanitized)
+    }
+
     pub fn search_record_ids(
         &self,
         query_text: &str,
@@ -95,13 +102,30 @@ impl SearchIndex {
                 if value.len() < 2 {
                     return Err("contains searches require at least two characters".to_string());
                 }
-                Box::new(
-                    RegexQuery::from_pattern(
-                        &format!(".*{}.*", escape_tantivy_regex(&term_value)),
-                        self.fields.exact_values,
+                if requested_type.is_none()
+                    && let Some(tokens) = flexible_name_tokens(value)
+                {
+                    let clauses = tokens
+                        .into_iter()
+                        .map(|token| {
+                            RegexQuery::from_pattern(
+                                &format!(".*{}.*", escape_tantivy_regex(&token)),
+                                self.fields.exact_values,
+                            )
+                            .map(|query| (Occur::Must, Box::new(query) as Box<dyn Query>))
+                            .map_err(sanitized)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Box::new(BooleanQuery::new(clauses))
+                } else {
+                    Box::new(
+                        RegexQuery::from_pattern(
+                            &format!(".*{}.*", escape_tantivy_regex(&term_value)),
+                            self.fields.exact_values,
+                        )
+                        .map_err(sanitized)?,
                     )
-                    .map_err(sanitized)?,
-                )
+                }
             }
             SearchMode::Prefix => Box::new(
                 RegexQuery::from_pattern(
@@ -153,6 +177,24 @@ impl SearchIndex {
         }
         Ok((total, record_ids))
     }
+}
+
+fn flexible_name_tokens(value: &str) -> Option<Vec<String>> {
+    let mut tokens = value
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    tokens.dedup();
+    if !(2..=4).contains(&tokens.len())
+        || tokens
+            .iter()
+            .any(|token| token.chars().count() < 2 || !token.chars().all(char::is_alphabetic))
+    {
+        return None;
+    }
+    Some(tokens)
 }
 
 pub fn make_document(
@@ -262,6 +304,19 @@ mod tests {
                 ],
             ))
             .expect("document");
+        writer
+            .add_document(make_document(
+                search.fields,
+                "record-2",
+                "dataset-1",
+                &[
+                    "first_name:john".to_string(),
+                    "last_name:doe".to_string(),
+                    "email:john.doe@sample.test".to_string(),
+                    "john.doe@sample.test".to_string(),
+                ],
+            ))
+            .expect("name document");
         writer.commit().expect("commit");
 
         for (query, mode) in [
@@ -274,5 +329,35 @@ mod tests {
                 .expect("search");
             assert_eq!(hits, ["record-1"]);
         }
+
+        let (_, hits) = search
+            .search_record_ids("John Doe", SearchMode::Contains, None, None, 0, 20)
+            .expect("name search");
+        assert_eq!(hits, ["record-2"]);
+    }
+
+    #[test]
+    fn deleting_a_dataset_removes_only_its_documents() {
+        let directory = tempdir().expect("temporary directory");
+        let search = SearchIndex::open_or_create(directory.path()).expect("index");
+        let mut writer = search.writer().expect("writer");
+        for (record, dataset) in [("record-a", "dataset-a"), ("record-b", "dataset-b")] {
+            writer
+                .add_document(make_document(
+                    search.fields,
+                    record,
+                    dataset,
+                    &["shared-value".to_string()],
+                ))
+                .expect("document");
+        }
+        writer.commit().expect("commit");
+        drop(writer);
+
+        search.delete_dataset("dataset-a").expect("delete dataset");
+        let (_, hits) = search
+            .search_record_ids("shared-value", SearchMode::Exact, None, None, 0, 20)
+            .expect("remaining search");
+        assert_eq!(hits, ["record-b"]);
     }
 }

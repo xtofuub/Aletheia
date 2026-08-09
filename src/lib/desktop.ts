@@ -691,6 +691,18 @@ export async function listDatasets(): Promise<DatasetSummary[]> {
   return stored ? (JSON.parse(stored) as DatasetSummary[]) : [];
 }
 
+export async function deleteDataset(datasetId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("delete_dataset", { datasetId });
+    return;
+  }
+  const datasets = await listDatasets();
+  window.localStorage.setItem(
+    "aletheia.browser.datasets",
+    JSON.stringify(datasets.filter((dataset) => dataset.id !== datasetId)),
+  );
+}
+
 export async function getOverviewStats(): Promise<OverviewStats> {
   if (isTauriRuntime()) return invoke<OverviewStats>("get_overview_stats");
   const [datasets, domains, identities] = await Promise.all([

@@ -124,6 +124,7 @@ struct SharedScan {
 
 struct QueryMatcher {
     literal: Option<AhoCorasick>,
+    flexible_name: Option<(AhoCorasick, usize)>,
     needle: Vec<u8>,
     mode: SearchMode,
     case_sensitive: bool,
@@ -132,6 +133,21 @@ struct QueryMatcher {
 impl QueryMatcher {
     fn new(query: &str, mode: SearchMode, case_sensitive: bool) -> Result<Self, String> {
         let needle = query.as_bytes().to_vec();
+        let name_tokens = if matches!(mode, SearchMode::Contains) {
+            flexible_ascii_name_tokens(query)
+        } else {
+            None
+        };
+        let flexible_name = name_tokens
+            .as_ref()
+            .map(|tokens| {
+                AhoCorasickBuilder::new()
+                    .ascii_case_insensitive(!case_sensitive)
+                    .build(tokens)
+                    .map(|matcher| (matcher, tokens.len()))
+                    .map_err(|_| "the name search could not be compiled".to_string())
+            })
+            .transpose()?;
         let literal = if query.is_ascii() {
             Some(
                 AhoCorasickBuilder::new()
@@ -144,6 +160,7 @@ impl QueryMatcher {
         };
         Ok(Self {
             literal,
+            flexible_name,
             needle,
             mode,
             case_sensitive,
@@ -151,6 +168,16 @@ impl QueryMatcher {
     }
 
     fn matches(&self, line: &[u8]) -> bool {
+        if let Some((matcher, pattern_count)) = &self.flexible_name {
+            let mut found = 0_u8;
+            for matched in matcher.find_iter(line) {
+                found |= 1_u8 << matched.pattern().as_usize();
+                if found.count_ones() as usize == *pattern_count {
+                    return true;
+                }
+            }
+            return false;
+        }
         if let Some(literal) = &self.literal {
             return match self.mode {
                 SearchMode::Contains => literal.is_match(line),
@@ -177,6 +204,28 @@ impl QueryMatcher {
             SearchMode::Exact => field_tokens(&haystack).any(|token| token == needle),
         }
     }
+
+    fn is_flexible_name(&self) -> bool {
+        self.flexible_name.is_some()
+    }
+}
+
+fn flexible_ascii_name_tokens(value: &str) -> Option<Vec<String>> {
+    let mut tokens = value
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    tokens.dedup();
+    if !(2..=4).contains(&tokens.len())
+        || tokens
+            .iter()
+            .any(|token| token.len() < 2 || !token.bytes().all(|byte| byte.is_ascii_alphabetic()))
+    {
+        return None;
+    }
+    Some(tokens)
 }
 
 fn is_field_boundary(byte: u8) -> bool {
@@ -683,10 +732,14 @@ fn make_hit(
         archive_entry: archive_entry.map(ToString::to_string),
         source_location: format!("line {line_number}"),
         excerpt: mask_excerpt(&String::from_utf8_lossy(line)),
-        match_reason: match shared.request.mode {
-            SearchMode::Exact => "Exact field match",
-            SearchMode::Prefix => "Field prefix match",
-            SearchMode::Contains => "Line contains query",
+        match_reason: if shared.matcher.is_flexible_name() {
+            "Name tokens found"
+        } else {
+            match shared.request.mode {
+                SearchMode::Exact => "Exact field match",
+                SearchMode::Prefix => "Field prefix match",
+                SearchMode::Contains => "Line contains query",
+            }
         }
         .to_string(),
     })
@@ -920,6 +973,22 @@ mod tests {
             "url=https://portal.example.com/path|status=synthetic",
             "https://portal.example",
             SearchMode::Prefix,
+            false,
+        ));
+    }
+
+    #[test]
+    fn name_search_matches_columns_and_email_local_parts() {
+        assert!(line_matches(
+            "John,Doe,john.doe@example.test",
+            "john doe",
+            SearchMode::Contains,
+            false,
+        ));
+        assert!(!line_matches(
+            "John,Smith,john.smith@example.test",
+            "john doe",
+            SearchMode::Contains,
             false,
         ));
     }
