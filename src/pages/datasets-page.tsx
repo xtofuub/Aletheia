@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowRightIcon,
   FilePlus2Icon,
   FileSearchIcon,
   FolderOpenIcon,
@@ -66,6 +67,7 @@ import {
 } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
+import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -283,44 +285,6 @@ export function DatasetsPage() {
   return (
     <div>
       <PageHeader
-        actions={
-          <>
-            <Button
-              nativeButton={false}
-              render={<a href="#/search?surface=direct" />}
-              size="sm"
-            >
-              <FileSearchIcon data-icon="inline-start" />
-              Scan huge files
-            </Button>
-            <Button
-              disabled={inspect.isPending}
-              onClick={() => inspect.mutate("folder")}
-              size="sm"
-              variant="outline"
-            >
-              {inspect.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <FolderOpenIcon data-icon="inline-start" />
-              )}
-              {inspect.isPending ? "Reading…" : "Index folder"}
-            </Button>
-            <Button
-              disabled={inspect.isPending}
-              onClick={() => inspect.mutate("files")}
-              size="sm"
-              variant="outline"
-            >
-              {inspect.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <FilePlus2Icon data-icon="inline-start" />
-              )}
-              {inspect.isPending ? "Reading…" : "Index files"}
-            </Button>
-          </>
-        }
         description="Scan very large sources immediately, or index smaller collections you search repeatedly."
         title="Datasets"
       />
@@ -333,54 +297,88 @@ export function DatasetsPage() {
       ) : null}
 
       <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2">
-        <DashboardCard>
+        <DashboardCard className="min-h-56">
           <CardHeader>
             <CardTitle>Live scan</CardTitle>
             <CardDescription>
-              Best for multi-GB files, HDD storage, ZIP, RAR, and one-time
-              searches. No import or extraction.
+              Search huge files and compressed archives immediately. Nothing is
+              imported, extracted, or added to the workspace.
             </CardDescription>
             <CardAction>
-              <Badge>Recommended for 4M+ rows</Badge>
+              <Badge>Recommended</Badge>
             </CardAction>
           </CardHeader>
-          <CardFooter>
-            <Button
-              nativeButton={false}
-              render={<a href="#/search?surface=direct" />}
-              size="sm"
-            >
-              <FileSearchIcon data-icon="inline-start" />
-              Open live scan
-            </Button>
-          </CardFooter>
+          <CardContent className="flex flex-1 flex-col gap-4">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">TXT · ZIP · RAR · GZIP</Badge>
+              <Badge variant="outline">HDD friendly</Badge>
+              <Badge variant="outline">One-time lookup</Badge>
+            </div>
+            <Separator />
+            <div className="mt-auto flex items-center justify-between gap-3">
+              <span className="text-xs text-muted-foreground">
+                Choose a source and query, then scan without creating an index.
+              </span>
+              <Button
+                nativeButton={false}
+                render={<a href="#/search?surface=direct" />}
+                size="sm"
+              >
+                <FileSearchIcon data-icon="inline-start" />
+                Start live scan
+                <ArrowRightIcon data-icon="inline-end" />
+              </Button>
+            </div>
+          </CardContent>
         </DashboardCard>
-        <DashboardCard>
+        <DashboardCard className="min-h-56">
           <CardHeader>
             <CardTitle>Persistent index</CardTitle>
             <CardDescription>
-              Best for a curated dataset you will search many times or use for
-              domain and identity grouping.
+              Build a reusable local index for fast repeated searches, domain
+              exploration, and identity grouping.
             </CardDescription>
             <CardAction>
               <Badge variant="outline">Reusable</Badge>
             </CardAction>
           </CardHeader>
-          <CardFooter className="gap-2">
-            <Button
-              disabled={inspect.isPending}
-              onClick={() => inspect.mutate("files")}
-              size="sm"
-              variant="outline"
-            >
-              {inspect.isPending ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <FilePlus2Icon data-icon="inline-start" />
-              )}
-              Choose files
-            </Button>
-          </CardFooter>
+          <CardContent className="flex flex-1 flex-col gap-4">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">Fast repeated search</Badge>
+              <Badge variant="outline">Domains</Badge>
+              <Badge variant="outline">Identities</Badge>
+              <Badge variant="outline">Resumable</Badge>
+            </div>
+            <Separator />
+            <div className="mt-auto flex flex-wrap items-center justify-end gap-2">
+              <Button
+                disabled={inspect.isPending}
+                onClick={() => inspect.mutate("folder")}
+                size="sm"
+                variant="outline"
+              >
+                {inspect.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <FolderOpenIcon data-icon="inline-start" />
+                )}
+                {inspect.isPending ? "Reading…" : "Index folder"}
+              </Button>
+              <Button
+                disabled={inspect.isPending}
+                onClick={() => inspect.mutate("files")}
+                size="sm"
+                variant="outline"
+              >
+                {inspect.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <FilePlus2Icon data-icon="inline-start" />
+                )}
+                {inspect.isPending ? "Reading…" : "Index files"}
+              </Button>
+            </div>
+          </CardContent>
         </DashboardCard>
       </div>
 

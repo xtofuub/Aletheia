@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Redesigned the dataset entry point as two clean Shadcn workflow cards, removed the gray action footers and duplicated header buttons, and made live scan versus persistent indexing easier to understand.
 - Replaced the old application mark with the supplied Aletheia artwork, regenerated every Windows icon asset, and integrated branded minimize, maximize, and close controls into the frameless app shell.
 - Added flexible first/last-name lookup across separate fields and common email separators for both Tantivy search and direct file scans.
 - Added safe dataset removal that deletes only generated SQLite and Tantivy data, blocks removal during active work, and proves the original source remains untouched.
