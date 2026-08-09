@@ -753,8 +753,8 @@ fn validate_plan(plan: &ImportPlan) -> Result<(), String> {
     if plan.dataset_label.trim().is_empty() || plan.dataset_label.len() > 160 {
         return Err("dataset label must contain 1 to 160 characters".to_string());
     }
-    if plan.authorization_note.trim().is_empty() || plan.authorization_note.len() > 500 {
-        return Err("authorization note must contain 1 to 500 characters".to_string());
+    if plan.authorization_note.len() > 500 {
+        return Err("authorization note must contain at most 500 characters".to_string());
     }
     if plan.files.is_empty() || plan.files.len() > 10_000 {
         return Err("select between 1 and 10,000 source files".to_string());
@@ -2220,7 +2220,8 @@ mod tests {
         extract_embedded_domains, extract_embedded_identifiers, finish_cancelled, flush_batch,
         load_resume_plan, normalize_value, prepare_database_rows, prepare_import_database,
         prepare_resume_files, process_record, read_bounded_line, rebuild_domain_groups,
-        rebuild_identity_groups, run_import, store_identity, stream_file, writer_memory_budget,
+        rebuild_identity_groups, run_import, store_identity, stream_file, validate_plan,
+        writer_memory_budget,
     };
     use crate::{
         detection::inspect_paths,
@@ -2233,6 +2234,21 @@ mod tests {
         pattern: Vec<u8>,
         pattern_offset: usize,
         remaining: u64,
+    }
+
+    #[test]
+    fn import_authorization_note_is_optional_but_bounded() {
+        let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tests")
+            .join("fixtures")
+            .join("records_valid.csv");
+        let inspection = inspect_paths(&[source]).expect("inspection");
+        let mut plan = synthetic_plan(inspection.files);
+        plan.authorization_note.clear();
+        assert!(validate_plan(&plan).is_ok());
+        plan.authorization_note = "x".repeat(501);
+        assert!(validate_plan(&plan).is_err());
     }
 
     impl RepeatingRecordReader {
