@@ -7,7 +7,7 @@ export function LogoIcon({ className, ...props }: React.ComponentProps<"img">) {
     <img
       alt=""
       aria-hidden="true"
-      className={cn("size-5 rounded-sm object-cover", className)}
+      className={cn("size-6 shrink-0 rounded-sm object-cover", className)}
       src="/aletheia-logo.png"
       {...props}
     />
