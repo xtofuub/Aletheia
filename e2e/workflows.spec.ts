@@ -97,15 +97,16 @@ test("Identity Builder reuses a saved Live source", async ({ page }) => {
   await expect(page.getByText("Live search complete")).toBeVisible();
 });
 
-test("indexed results use neutral protected values and wrap safely", async ({
+test("indexed results show complete identifiers and wrap safely", async ({
   page,
 }) => {
   await page.goto("/#/search");
   await page.getByLabel("Search query").fill("example.com");
   await page.getByRole("button", { name: "Search", exact: true }).click();
 
-  await expect(page.getByText("••••••").first()).toBeVisible();
+  await expect(page.getByText("analyst@example.com").first()).toBeVisible();
   await expect(page.getByText(/redact/i)).toHaveCount(0);
+  await expect(page.getByText(/password:/i)).toHaveCount(0);
   await expect(page.locator("table").first()).toHaveCSS(
     "table-layout",
     "fixed",

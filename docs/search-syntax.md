@@ -50,6 +50,6 @@ Password, password-hash, and salt fields cannot be searched. Regex and fuzzy sec
 
 ## Results
 
-Every result includes dataset, source file, consistently formatted source location, parser, match reason, and masked fields. Search failures are shown instead of being presented as empty results. Select explicit records to export them through the strict redaction pipeline. Saved views keep the query and filters only in local SQLite.
+Every result includes dataset, source file, consistently formatted source location, parser, match reason, and complete non-secret fields. Secret fields are excluded. Search failures are shown instead of being presented as empty results. Select explicit records to export them through the protected export pipeline. Saved views keep the query and filters only in local SQLite.
 
 Opening a saved view restores its Automatic/Advanced mode, match mode, dataset, safe field, and sort order. Ready datasets also link directly to Advanced search with that dataset already selected.

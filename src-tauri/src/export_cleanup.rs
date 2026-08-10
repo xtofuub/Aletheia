@@ -31,7 +31,7 @@ struct ExportManifest {
     created_at: String,
     format: String,
     record_count: usize,
-    redactions: Vec<&'static str>,
+    protections: Vec<&'static str>,
     contains_raw_records: bool,
     source_files_modified: bool,
 }
@@ -59,9 +59,8 @@ pub fn export_records(
         created_at: chrono::Utc::now().to_rfc3339(),
         format: request.format.clone(),
         record_count: records.len(),
-        redactions: vec![
+        protections: vec![
             "secret fields excluded",
-            "sensitive values masked",
             "URL credentials and query values excluded",
         ],
         contains_raw_records: false,
@@ -77,9 +76,9 @@ pub fn export_records(
         .database
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
-    let redactions_json = serde_json::json!({
+    let protections_json = serde_json::json!({
         "strict": true,
-        "maskEmailLocalPart": request.mask_email_local_part,
+        "identifiers": "complete",
         "secretFields": "excluded"
     })
     .to_string();
@@ -93,7 +92,7 @@ pub fn export_records(
                 request.format,
                 destination.to_string_lossy(),
                 records.len() as i64,
-                redactions_json,
+                protections_json,
             ],
         )
         .map_err(sanitized)?;
@@ -101,14 +100,14 @@ pub fn export_records(
         .execute(
             "INSERT INTO audit_events(
                 id, event_type, entity_type, entity_id, details_json
-             ) VALUES (?1, 'redacted_export', 'export', ?2, ?3)",
+             ) VALUES (?1, 'protected_export', 'export', ?2, ?3)",
             params![
                 Uuid::new_v4().to_string(),
                 export_id,
                 serde_json::json!({
                     "format": request.format,
                     "recordCount": records.len(),
-                    "strictRedaction": true
+                    "secretFieldsExcluded": true
                 })
                 .to_string()
             ],
@@ -292,15 +291,12 @@ fn load_export_records(
             .map_err(sanitized)?;
         let mut fields = BTreeMap::new();
         for row in rows {
-            let (name, field_type, original, normalized, sensitive) = row.map_err(sanitized)?;
+            let (name, field_type, original, _normalized, _sensitive) = row.map_err(sanitized)?;
             if matches!(field_type.as_str(), "password" | "password_hash" | "salt") {
                 continue;
             }
             let value = match field_type.as_str() {
-                "email" if request.mask_email_local_part => mask_email(&normalized),
-                "phone" => mask_phone(&normalized),
-                "address" | "date_of_birth" if sensitive => "[REDACTED]".to_string(),
-                _ if sensitive => "••••••••".to_string(),
+                "url" => protected_url(&original),
                 _ => original,
             };
             fields.insert(name, value);
@@ -367,7 +363,7 @@ fn render_export(format: &str, records: &[ExportRecord]) -> Result<Vec<u8>, Stri
         }
         "markdown" => {
             let mut output = format!(
-                "# Aletheia redacted findings\n\nRecords: {}\n\n| Record | Dataset | Source | Location |\n|---|---|---|---|\n",
+                "# Aletheia findings\n\nRecords: {}\n\n| Record | Dataset | Source | Location |\n|---|---|---|---|\n",
                 records.len()
             );
             for record in records {
@@ -379,9 +375,7 @@ fn render_export(format: &str, records: &[ExportRecord]) -> Result<Vec<u8>, Stri
                     record.source_location.replace('|', "\\|")
                 ));
             }
-            output.push_str(
-                "\nSecret fields were excluded. Sensitive values were masked. See the sidecar manifest.\n",
-            );
+            output.push_str("\nSecret fields were excluded. See the sidecar manifest.\n");
             Ok(output.into_bytes())
         }
         _ => Err("unsupported export format".to_string()),
@@ -420,28 +414,20 @@ fn remove_generated_directory(root: &Path, name: &str) -> Result<(), String> {
         .map_err(|_| "generated cleanup could not be completed".to_string())
 }
 
-fn mask_email(value: &str) -> String {
-    let Some((local, domain)) = value.split_once('@') else {
-        return "masked email".to_string();
+fn protected_url(value: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(value) else {
+        return value.to_string();
     };
-    format!("{}•••@{domain}", local.chars().next().unwrap_or('•'))
-}
-
-fn mask_phone(value: &str) -> String {
-    let suffix: String = value
-        .chars()
-        .rev()
-        .take(2)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("••••••{suffix}")
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    parsed.to_string()
 }
 
 fn sanitized(error: impl std::fmt::Display) -> String {
     let _ = error;
-    "redacted export operation failed".to_string()
+    "protected export operation failed".to_string()
 }
 
 #[cfg(test)]
@@ -457,12 +443,12 @@ mod tests {
             dataset_id: "dataset-synthetic".to_string(),
             source_file: "invented.csv".to_string(),
             source_location: "line 2".to_string(),
-            fields: BTreeMap::from([("email".to_string(), "p•••@example.com".to_string())]),
+            fields: BTreeMap::from([("email".to_string(), "person@example.com".to_string())]),
         }];
         for format in ["csv", "jsonl"] {
             let output = render_export(format, &records).expect("export");
             let text = String::from_utf8(output).expect("utf8");
-            assert!(text.contains("p•••@example.com"));
+            assert!(text.contains("person@example.com"));
             assert!(!text.contains("password"));
         }
     }

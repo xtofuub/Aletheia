@@ -4,7 +4,7 @@
 read-only source
   -> canonical path and metadata verification
   -> 256 KiB bounded detection sample
-  -> masked preview and user-approved mapping
+  -> complete non-secret preview and user-approved mapping
   -> background job with pause/cancel control
   -> bounded line decoding and parsing
   -> field normalization and secret replacement

@@ -14,7 +14,8 @@ The bundled Public Suffix List determines the registrable parent. Aletheia there
 
 The domain explorer has a local prefix search for parent domains and observed
 hostnames. Selecting a parent shows its hostnames, every linked breach dataset,
-and paginated source records with masked field contents. Hostname chips are
+and paginated source records with complete non-secret field contents. Secret
+fields are excluded. Hostname chips are
 clickable evidence filters, and the hostname search is applied in SQLite with a
 bounded result limit. These links are materialized incrementally during import
 so opening a domain does not scan the full workspace. Older URL links and

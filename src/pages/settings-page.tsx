@@ -427,7 +427,7 @@ export function SettingsPage() {
                 <FieldContent>
                   <FieldTitle>Clipboard clearing</FieldTitle>
                   <FieldDescription>
-                    Clear copied masked values after this delay.
+                    Clear copied values after this delay.
                   </FieldDescription>
                 </FieldContent>
                 <Select

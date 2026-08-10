@@ -68,7 +68,7 @@ pub async fn search_records(
         .map_err(|_| "storage location is unavailable".to_string())?;
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        search_records_inner(request, database, &root, false)
+        search_records_inner(request, database, &root, true)
     })
     .await
     .map_err(|_| "search task failed".to_string())?
@@ -465,7 +465,7 @@ fn load_domain_details(
         .iter()
         .map(|record| record.record_id.clone())
         .collect::<Vec<_>>();
-    let mut display_fields = load_display_fields_batch(connection, &record_ids, 16, false)?;
+    let mut display_fields = load_display_fields_batch(connection, &record_ids, 16, true)?;
     for record in &mut records {
         record.fields = display_fields.remove(&record.record_id).unwrap_or_default();
     }
@@ -1256,7 +1256,7 @@ pub fn list_saved_searches(state: State<'_, AppState>) -> Result<Vec<SavedSearch
 fn load_search_hits(
     connection: &Connection,
     record_ids: &[String],
-    reveal_non_secret: bool,
+    _reveal_non_secret: bool,
 ) -> Result<Vec<SearchHit>, String> {
     if record_ids.is_empty() {
         return Ok(Vec::new());
@@ -1267,7 +1267,7 @@ fn load_search_hits(
     let sql = format!(
         "SELECT r.id, r.dataset_id, d.name, r.source_file_id, sf.relative_path,
                 r.source_location, r.parser, fv.field_name, fv.field_type,
-                fv.original_value, fv.normalized_value, fv.is_sensitive
+                fv.original_value, fv.is_sensitive
          FROM records r
          JOIN datasets d ON d.id = r.dataset_id
          JOIN source_files sf ON sf.id = r.source_file_id
@@ -1298,17 +1298,15 @@ fn load_search_hits(
         };
         let field_type_name: String = row.get(8).map_err(sanitized)?;
         let original: String = row.get(9).map_err(sanitized)?;
-        let normalized: String = row.get(10).map_err(sanitized)?;
-        let sensitive: bool = row.get(11).map_err(sanitized)?;
+        let sensitive: bool = row.get(10).map_err(sanitized)?;
         let field_type = parse_field_type(&field_type_name);
+        if field_type.is_secret() {
+            continue;
+        }
         hit.fields.push(SearchField {
             name,
             field_type,
-            display_value: if reveal_non_secret && !field_type.is_secret() {
-                original
-            } else {
-                mask_for_display(field_type, sensitive, &original, &normalized)
-            },
+            display_value: original,
             sensitive,
         });
     }
@@ -1322,7 +1320,7 @@ fn load_display_fields_batch(
     connection: &Connection,
     record_ids: &[String],
     per_record_limit: usize,
-    reveal_non_sensitive: bool,
+    _reveal_non_sensitive: bool,
 ) -> Result<HashMap<String, Vec<SearchField>>, String> {
     if record_ids.is_empty() {
         return Ok(HashMap::new());
@@ -1331,8 +1329,7 @@ fn load_display_fields_batch(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT record_id, field_name, field_type, original_value,
-                normalized_value, is_sensitive
+        "SELECT record_id, field_name, field_type, original_value, is_sensitive
          FROM field_values
          WHERE record_id IN ({placeholders})
          ORDER BY record_id, id"
@@ -1350,18 +1347,15 @@ fn load_display_fields_batch(
         }
         let field_type_name: String = row.get(2).map_err(sanitized)?;
         let original: String = row.get(3).map_err(sanitized)?;
-        let normalized: String = row.get(4).map_err(sanitized)?;
-        let sensitive: bool = row.get(5).map_err(sanitized)?;
+        let sensitive: bool = row.get(4).map_err(sanitized)?;
         let field_type = parse_field_type(&field_type_name);
-        let display_value = if reveal_non_sensitive && !field_type.is_secret() {
-            original
-        } else {
-            mask_for_display(field_type, sensitive, &original, &normalized)
-        };
+        if field_type.is_secret() {
+            continue;
+        }
         values.push(SearchField {
             name: row.get(1).map_err(sanitized)?,
             field_type,
-            display_value,
+            display_value: original,
             sensitive,
         });
     }
@@ -1607,36 +1601,6 @@ fn undo_event(connection: &Connection, original_id: &str, undo_id: &str) -> Resu
     )
 }
 
-fn mask_for_display(
-    field_type: FieldType,
-    sensitive: bool,
-    original: &str,
-    normalized: &str,
-) -> String {
-    match field_type {
-        FieldType::Email => {
-            let Some((local, domain)) = normalized.split_once('@') else {
-                return "masked email".to_string();
-            };
-            format!("{}•••@{domain}", local.chars().next().unwrap_or('•'))
-        }
-        FieldType::Phone => {
-            let suffix: String = normalized
-                .chars()
-                .rev()
-                .take(2)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            format!("••••••{suffix}")
-        }
-        FieldType::Password | FieldType::PasswordHash | FieldType::Salt => "[REDACTED]".to_string(),
-        _ if sensitive => "••••••••".to_string(),
-        _ => original.to_string(),
-    }
-}
-
 fn parse_field_type(value: &str) -> FieldType {
     match value {
         "email" => FieldType::Email,
@@ -1686,30 +1650,13 @@ mod tests {
     use super::{
         apply_identity_action_inner, create_manual_identity_inner, ensure_url_domain_links,
         exact_domain_query, list_identities_inner, load_domain_details, load_identity_members,
-        mask_for_display, search_domain_groups, search_domain_record_ids,
+        load_search_hits, search_domain_groups, search_domain_record_ids,
     };
     use crate::models::{
         FieldType, IdentityActionInput, LiveIdentityEvidenceInput, ManualIdentityInput, SearchMode,
         SearchRequest,
     };
     use crate::storage::open_database;
-
-    #[test]
-    fn result_view_masks_sensitive_fields() {
-        assert_eq!(
-            mask_for_display(
-                FieldType::Email,
-                false,
-                "person@example.com",
-                "person@example.com"
-            ),
-            "p•••@example.com"
-        );
-        assert_eq!(
-            mask_for_display(FieldType::Password, true, "[REDACTED]", "blake3:abc"),
-            "[REDACTED]"
-        );
-    }
 
     #[test]
     fn domain_search_and_details_keep_dataset_traceability() {
@@ -1774,6 +1721,14 @@ mod tests {
             search_domain_record_ids(&connection, &domain, None, 0, 50).expect("domain records");
         assert_eq!(total, 1);
         assert_eq!(records, ["record-1"]);
+        let hits = load_search_hits(&connection, &records, false).expect("search hits");
+        assert_eq!(hits[0].fields[0].display_value, "person@example.co.uk");
+        assert!(
+            hits[0]
+                .fields
+                .iter()
+                .all(|field| !field.field_type.is_secret())
+        );
 
         ensure_url_domain_links(&connection, &domain).expect("repair domain counts");
         let details = load_domain_details(&connection, "example.co.uk", None, None, None, 0, 50)
@@ -1787,13 +1742,13 @@ mod tests {
             .iter()
             .find(|field| field.name == "email")
             .expect("email field");
-        let password = details.records[0]
-            .fields
-            .iter()
-            .find(|field| field.name == "password")
-            .expect("password field");
-        assert_eq!(email.display_value, "p•••@example.co.uk");
-        assert_eq!(password.display_value, "[REDACTED]");
+        assert_eq!(email.display_value, "person@example.co.uk");
+        assert!(
+            details.records[0]
+                .fields
+                .iter()
+                .all(|field| !field.field_type.is_secret())
+        );
 
         let hostname_details = load_domain_details(
             &connection,
@@ -1866,16 +1821,16 @@ mod tests {
             load_identity_members(&connection, &group_id, 0, 25, false).expect("identity members");
         assert_eq!(members.total, 2);
         assert_eq!(members.members.len(), 2);
-        let masked = &members.members[0].fields;
-        assert_eq!(masked[0].display_value, "s•••@example.test");
-        assert_eq!(masked[1].display_value, "[REDACTED]");
+        let visible = &members.members[0].fields;
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].display_value, "synthetic@example.test");
         let revealed = load_identity_members(&connection, &group_id, 0, 25, true)
             .expect("revealed identity members");
         assert_eq!(
             revealed.members[0].fields[0].display_value,
             "synthetic@example.test"
         );
-        assert_eq!(revealed.members[0].fields[1].display_value, "[REDACTED]");
+        assert_eq!(revealed.members[0].fields.len(), 1);
         drop(connection);
 
         let event_id = apply_identity_action_inner(

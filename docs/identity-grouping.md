@@ -25,7 +25,7 @@ only those selected records. Member lists are paginated.
 
 The same builder can run a read-only live scan across large text files and
 compressed archives. Users may select two or more returned rows and persist
-only those bounded, masked evidence snapshots in the identity. This does not
+only those bounded, secret-filtered evidence snapshots in the identity. This does not
 create a Tantivy index, extract an archive, or modify the source. Indexed and
 live evidence may also be combined in one reviewed bundle.
 

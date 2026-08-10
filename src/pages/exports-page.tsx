@@ -40,7 +40,7 @@ export function ExportsPage() {
   return (
     <div>
       <PageHeader
-        description="Redacted files created from results you reviewed and selected in Search."
+        description="Protected files created from results you reviewed and selected in Search."
         title="Exports"
       />
       <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2">
@@ -62,7 +62,7 @@ export function ExportsPage() {
         <DashboardCard>
           <CardHeader>
             <CardTitle className="font-normal text-xs">
-              Redacted records
+              Records exported
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -71,7 +71,7 @@ export function ExportsPage() {
             </p>
           </CardContent>
           <CardFooter className="rounded-none bg-background text-xs text-muted-foreground">
-            Sensitive values masked automatically
+            Secret fields excluded automatically
           </CardFooter>
         </DashboardCard>
         <DashboardCard className="gap-0 md:col-span-2">

@@ -1039,7 +1039,7 @@ export async function startDirectSearch(
     sourceFile: "synthetic-authorized-source.txt",
     archiveEntry: request.includeArchives ? "records/synthetic.txt" : null,
     sourceLocation: "line 42",
-    excerpt: "s•••@example.com:[REDACTED]:portal.example.com",
+    excerpt: "synthetic@example.com portal.example.com",
     matchReason:
       queryCount > 1
         ? "Batch value found"
@@ -1198,7 +1198,7 @@ export async function getDomainDetails(
         {
           name: "email",
           fieldType: "email",
-          displayValue: "a•••@example.com",
+          displayValue: "analyst@example.com",
           sensitive: false,
         },
         {
@@ -1218,12 +1218,6 @@ export async function getDomainDetails(
               },
             ]
           : []),
-        {
-          name: "password",
-          fieldType: "password",
-          displayValue: "[REDACTED]",
-          sensitive: true,
-        },
       ],
     }),
   );
@@ -1337,9 +1331,7 @@ export async function listIdentityMembers(
         {
           name: "email",
           fieldType: "email" as const,
-          displayValue: revealValues
-            ? "synthetic@example.test"
-            : "s•••@example.test",
+          displayValue: "synthetic@example.test",
           sensitive: false,
         },
         {
@@ -1347,12 +1339,6 @@ export async function listIdentityMembers(
           fieldType: "domain" as const,
           displayValue: "example.test",
           sensitive: false,
-        },
-        {
-          name: "password",
-          fieldType: "password" as const,
-          displayValue: "[REDACTED]",
-          sensitive: true,
         },
       ],
     },
@@ -1368,9 +1354,7 @@ export async function listIdentityMembers(
         {
           name: "email",
           fieldType: "email" as const,
-          displayValue: revealValues
-            ? "synthetic@example.test"
-            : "s•••@example.test",
+          displayValue: "synthetic@example.test",
           sensitive: false,
         },
         {
@@ -1497,7 +1481,7 @@ export async function selectExportDestination(
   if (!isTauriRuntime()) return `C:\\Synthetic\\findings.${format}`;
   const extension = format === "markdown" ? "md" : format;
   return save({
-    title: "Save redacted findings",
+    title: "Save protected findings",
     defaultPath: `aletheia-findings.${extension}`,
     filters: [
       { name: `${format.toUpperCase()} export`, extensions: [extension] },
@@ -1627,13 +1611,13 @@ function syntheticInspection(paths: string[] = []): InspectionResult {
         {
           sourceLocation: 2,
           values: [
-            "a•••@example.com",
-            "av•••",
-            "••••••67",
+            "analyst@example.com",
+            "ava-research",
+            "+12025550167",
             "198.51.100.25",
             "https://portal.example.com/login",
-            "••••••••••••",
-            "••••••••••••",
+            "",
+            "",
             "svc-1001",
             "2025-03-14",
           ],
@@ -1664,7 +1648,7 @@ function syntheticSearchHit(index = 0): SearchHit {
       {
         name: "email",
         fieldType: "email",
-        displayValue: "a•••@example.com",
+        displayValue: "analyst@example.com",
         sensitive: false,
       },
       {
@@ -1672,12 +1656,6 @@ function syntheticSearchHit(index = 0): SearchHit {
         fieldType: "url",
         displayValue: "https://portal.example.com/login",
         sensitive: false,
-      },
-      {
-        name: "password",
-        fieldType: "password",
-        displayValue: "[REDACTED]",
-        sensitive: true,
       },
     ],
   };

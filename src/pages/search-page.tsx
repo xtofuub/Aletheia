@@ -103,7 +103,6 @@ import {
   type SearchMode,
 } from "@/lib/desktop";
 import { formatBytes, formatDuration } from "@/lib/format";
-import { formatSearchDisplay } from "@/lib/search-display";
 
 const modeItems = [
   { label: "Contains", value: "contains" },
@@ -383,7 +382,7 @@ export function SearchPage({
       destinationPath,
       format: "csv",
       recordIds: [...selected],
-      maskEmailLocalPart: true,
+      maskEmailLocalPart: false,
     });
     setNotice(`Exported ${result.recordCount} records.`);
     await queryClient.invalidateQueries({ queryKey: ["exports"] });
@@ -855,7 +854,7 @@ export function SearchPage({
                           {hit.sourceLocation}
                         </TableCell>
                         <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
-                          {formatSearchDisplay(hit.excerpt)}
+                          {hit.excerpt}
                         </TableCell>
                         <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
                           <p className="break-all font-mono text-foreground">
@@ -937,7 +936,7 @@ export function SearchPage({
                             >
                               <span className="shrink-0">{item.name}:</span>
                               <span className="min-w-0 break-all text-left">
-                                {formatSearchDisplay(item.displayValue)}
+                                {item.displayValue}
                               </span>
                             </Badge>
                           ))}

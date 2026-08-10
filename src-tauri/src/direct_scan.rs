@@ -41,20 +41,14 @@ const HIT_BATCH_SIZE: usize = 20;
 const PROGRESS_EMIT_INTERVAL_MS: u64 = 250;
 const PROGRESS_BYTE_INTERVAL: u64 = 1024 * 1024;
 
-static EMAIL_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)\b([a-z0-9._%+\-])([a-z0-9._%+\-]*)@([a-z0-9.\-]+\.[a-z]{2,})\b")
-        .expect("email redaction pattern")
-});
 static SECRET_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(password|passwd|pwd|token|cookie|secret|api[_-]?key)\s*[:=]\s*[^\s,;|]+")
-        .expect("secret redaction pattern")
+        .expect("secret filtering pattern")
 });
 static EMAIL_SECRET_PAIR_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b([a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,})\s*:\s*([^:\s,;|]+)")
-        .expect("email credential-pair redaction pattern")
+        .expect("email credential-pair filtering pattern")
 });
-static PHONE_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?:\+?[0-9][0-9 ()-]{5,}[0-9])").expect("phone redaction pattern"));
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -948,7 +942,7 @@ fn make_hit(
         source_file: source_file.to_string(),
         archive_entry: archive_entry.map(ToString::to_string),
         source_location: format!("line {line_number}"),
-        excerpt: mask_excerpt(&String::from_utf8_lossy(line)),
+        excerpt: display_excerpt(&String::from_utf8_lossy(line)),
         match_reason: if shared.matcher.is_flexible_name() {
             "Name tokens found"
         } else if shared.matcher.query_count() > 1 {
@@ -985,7 +979,7 @@ fn field_tokens(value: &str) -> impl Iterator<Item = &str> {
         .filter(|token| !token.is_empty())
 }
 
-fn mask_excerpt(value: &str) -> String {
+fn display_excerpt(value: &str) -> String {
     let normalized: String = value
         .chars()
         .map(|character| {
@@ -996,24 +990,11 @@ fn mask_excerpt(value: &str) -> String {
             }
         })
         .collect();
-    let secrets = SECRET_PATTERN.replace_all(&normalized, "$1=[REDACTED]");
-    let pairs = EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, "$1:[REDACTED]");
-    let emails = EMAIL_PATTERN.replace_all(&pairs, |captures: &regex::Captures<'_>| {
-        format!("{}•••@{}", &captures[1], &captures[3])
-    });
-    let phones = PHONE_PATTERN.replace_all(&emails, |captures: &regex::Captures<'_>| {
-        let value = captures.get(0).map_or("", |matched| matched.as_str());
-        let digits = value
-            .chars()
-            .filter(char::is_ascii_digit)
-            .collect::<String>();
-        if !(7..=16).contains(&digits.len()) {
-            return value.to_string();
-        }
-        format!("•••{}", &digits[digits.len().saturating_sub(2)..])
-    });
-    let mut excerpt: String = phones.chars().take(360).collect();
-    if phones.chars().count() > 360 {
+    let secrets = SECRET_PATTERN.replace_all(&normalized, "");
+    let pairs = EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, "$1");
+    let compact = pairs.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut excerpt: String = compact.chars().take(360).collect();
+    if compact.chars().count() > 360 {
         excerpt.push('…');
     }
     excerpt
@@ -1188,9 +1169,9 @@ mod tests {
     use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, estimate_remaining_ms,
-        extension, field_tokens, is_text_extension, line_matches, mask_excerpt, parse_queries,
-        read_bounded_line,
+        ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, display_excerpt,
+        estimate_remaining_ms, extension, field_tokens, is_text_extension, line_matches,
+        parse_queries, read_bounded_line,
     };
     use crate::models::SearchMode;
 
@@ -1449,16 +1430,15 @@ mod tests {
     }
 
     #[test]
-    fn excerpts_mask_email_and_secret_labels() {
-        let masked = mask_excerpt(
+    fn excerpts_show_identifiers_and_drop_secret_values() {
+        let excerpt = display_excerpt(
             "synthetic@example.com:invented-value password=invented-secret +1 202 555 0142",
         );
-        assert!(masked.contains("s•••@example.com"));
-        assert!(masked.contains("s•••@example.com:[REDACTED]"));
-        assert!(masked.contains("password=[REDACTED]"));
-        assert!(!masked.contains("invented-secret"));
-        assert!(!masked.contains("invented-value"));
-        assert!(masked.contains("•••42"));
+        assert!(excerpt.contains("synthetic@example.com"));
+        assert!(excerpt.contains("+1 202 555 0142"));
+        assert!(!excerpt.contains("password"));
+        assert!(!excerpt.contains("invented-secret"));
+        assert!(!excerpt.contains("invented-value"));
     }
 
     #[test]

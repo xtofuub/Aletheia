@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Removed identifier masking across Search, Live scans, Domains, Identities, previews, and exports; complete non-secret values are shown while reusable secret fields are excluded instead of rendered as placeholders.
 - Tightened the full-workspace UI audit: domain evidence now adapts without overlapping, empty charts and saved views offer direct next steps, activity charts use honest scales, and resource copy is easier to scan.
 - Added completed Live scans to Overview metrics, charts, recent sources, and activity so the dashboard no longer reports only indexed evidence.
 - Made Identity Builder reuse saved Live folders and archives from Datasets, with automatic source selection and no repeated folder picker.

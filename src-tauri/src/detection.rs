@@ -600,7 +600,7 @@ fn build_preview(rows: &[Vec<String>], mappings: &[FieldMapping]) -> Vec<Preview
                 .iter()
                 .enumerate()
                 .map(|(column, mapping)| {
-                    mask_value(
+                    preview_value(
                         row.get(column).map(String::as_str).unwrap_or(""),
                         mapping.field_type,
                     )
@@ -610,57 +610,25 @@ fn build_preview(rows: &[Vec<String>], mappings: &[FieldMapping]) -> Vec<Preview
         .collect()
 }
 
-pub fn mask_value(value: &str, field_type: FieldType) -> String {
+pub fn preview_value(value: &str, field_type: FieldType) -> String {
     if value.is_empty() {
         return String::new();
     }
     match field_type {
-        FieldType::Email => {
-            let (local, domain) = value.split_once('@').unwrap_or(("", value));
-            let first = local.chars().next().unwrap_or('•');
-            format!("{first}•••@{domain}")
-        }
-        FieldType::Phone => {
-            let suffix: String = value
-                .chars()
-                .rev()
-                .take(2)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            format!("••••••{suffix}")
-        }
-        FieldType::Password | FieldType::PasswordHash | FieldType::Salt => {
-            "••••••••••••".to_string()
-        }
-        FieldType::Url => mask_url(value),
-        FieldType::Username | FieldType::FullName | FieldType::FirstName | FieldType::LastName => {
-            let prefix: String = value.chars().take(2).collect();
-            format!("{prefix}•••")
-        }
-        FieldType::Unknown => "••••••••".to_string(),
+        FieldType::Password | FieldType::PasswordHash | FieldType::Salt => String::new(),
+        FieldType::Url => preview_url(value),
         _ => value.to_string(),
     }
 }
 
-fn mask_url(value: &str) -> String {
+fn preview_url(value: &str) -> String {
     let Ok(mut parsed) = url::Url::parse(value) else {
-        return "••••••••".to_string();
+        return value.to_string();
     };
-    if parsed.query().is_some() {
-        let keys: Vec<String> = parsed
-            .query_pairs()
-            .map(|(key, _)| key.into_owned())
-            .collect();
-        parsed.set_query(None);
-        let query = keys
-            .into_iter()
-            .map(|key| format!("{key}=•••"))
-            .collect::<Vec<_>>()
-            .join("&");
-        parsed.set_query(Some(&query));
-    }
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
     parsed.to_string()
 }
 
@@ -696,7 +664,7 @@ fn sanitize(error: impl std::fmt::Display) -> String {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use super::{detect_delimiter, inspect_paths, mask_value};
+    use super::{detect_delimiter, inspect_paths, preview_value};
     use crate::models::{FieldType, SourceFormat};
     use tempfile::tempdir;
 
@@ -709,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_csv_header_mapping_and_masks_secrets() {
+    fn detects_csv_header_mapping_and_excludes_secrets() {
         let result = inspect_paths(&[fixture("records_valid.csv")]).expect("inspection");
         let file = result.files.first().expect("file");
         assert_eq!(file.format, SourceFormat::Csv);
@@ -717,7 +685,7 @@ mod tests {
         assert_eq!(file.column_count, 9);
         assert_eq!(file.mappings[0].field_type, FieldType::Email);
         assert_eq!(file.mappings[5].field_type, FieldType::Password);
-        assert!(!file.preview[0].values[0].contains("ava.research"));
+        assert!(file.preview[0].values[0].contains("ava.research"));
         assert!(!file.preview[0].values[5].contains("Synthetic"));
     }
 
@@ -760,12 +728,23 @@ mod tests {
     }
 
     #[test]
-    fn masks_email_phone_and_unknown_values() {
+    fn preview_shows_identifiers_and_excludes_secret_values() {
         assert_eq!(
-            mask_value("ava@example.com", FieldType::Email),
-            "a•••@example.com"
+            preview_value("ava@example.com", FieldType::Email),
+            "ava@example.com"
         );
-        assert_eq!(mask_value("+12025550142", FieldType::Phone), "••••••42");
-        assert_eq!(mask_value("opaque", FieldType::Unknown), "••••••••");
+        assert_eq!(
+            preview_value("+12025550142", FieldType::Phone),
+            "+12025550142"
+        );
+        assert_eq!(preview_value("opaque", FieldType::Unknown), "opaque");
+        assert_eq!(preview_value("invented-secret", FieldType::Password), "");
+        assert_eq!(
+            preview_value(
+                "https://user:pass@example.test/path?token=invented#private",
+                FieldType::Url
+            ),
+            "https://example.test/path"
+        );
     }
 }
