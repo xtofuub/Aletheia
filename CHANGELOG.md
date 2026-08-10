@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added reviewed identity bundles built directly from live TXT, ZIP, RAR, and GZIP scan results, preserving selected masked source snapshots without requiring a full persistent index.
+- Fixed streamed live-search batches disappearing on completion and paginated direct-scan result rendering so thousands of matches do not freeze the interface.
 - Detects index-only workspaces whose SQLite dataset catalog is missing, explains that localhost shows sample data only, and confirms workspace switches before previously indexed datasets disappear from view.
 - Redesigned the dataset entry point as two clean Shadcn workflow cards, removed the gray action footers and duplicated header buttons, and made live scan versus persistent indexing easier to understand.
 - Replaced the old application mark with the supplied Aletheia artwork, regenerated every Windows icon asset, and integrated branded minimize, maximize, and close controls into the frameless app shell.

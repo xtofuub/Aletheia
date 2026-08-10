@@ -85,7 +85,7 @@ SQLite is authoritative for:
 - datasets and source files
 - import jobs, checkpoints, mappings, and reports
 - record traceability and field metadata
-- domains, URLs, identities, and memberships
+- domains, URLs, identities, indexed memberships, and selected live-evidence snapshots
 - bounded identity candidates and one-time domain aggregate repair markers
 - saved searches, notes, tags, review state, and bookmarks
 - export history and audit events
@@ -134,8 +134,10 @@ Automatic groups use deterministic keys only:
 Unique values remain compact candidates and do not become singleton identity
 groups. A group materializes only after a deterministic key repeats. Username
 matches are never automatically grouped. Manual reviewed bundles contain only
-the records explicitly selected by the user. Merge, split, reject, and undo
-actions write append-only audit events.
+the indexed records and bounded live-scan rows explicitly selected by the user.
+Live evidence stores the already-masked excerpt, source path, archive entry, and
+line location; it does not create a full index or copy an archive. Merge, split,
+reject, and undo actions write append-only audit events.
 
 An idempotent bounded rebuild applies the same deterministic rules to records indexed by older versions.
 

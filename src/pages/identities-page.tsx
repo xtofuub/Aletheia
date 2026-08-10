@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArchiveIcon,
   CheckIcon,
+  DatabaseIcon,
   FingerprintIcon,
+  FileSearchIcon,
+  FolderOpenIcon,
   LinkIcon,
   ListChecksIcon,
   RefreshCwIcon,
   SearchIcon,
+  SquareIcon,
   UserRoundCheckIcon,
   UsersIcon,
   XIcon,
@@ -47,6 +52,19 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -57,17 +75,27 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
   applyIdentityAction,
+  cancelDirectSearch,
   createManualIdentity,
   listIdentities,
   listIdentityMembers,
   rebuildIdentities,
   searchIdentityRecords,
+  selectDirectSearchSources,
+  startDirectSearch,
+  type SearchMode,
 } from "@/lib/desktop";
-import { formatCount } from "@/lib/format";
+import { formatBytes, formatCount } from "@/lib/format";
 
 const memberLimit = 25;
+const identitySearchModes: Array<{ label: string; value: SearchMode }> = [
+  { label: "Contains", value: "contains" },
+  { label: "Exact", value: "exact" },
+  { label: "Prefix", value: "prefix" },
+];
 
 export function IdentitiesPage() {
   const queryClient = useQueryClient();
@@ -82,7 +110,20 @@ export function IdentitiesPage() {
   const [manualSelection, setManualSelection] = useState<Set<string>>(
     new Set(),
   );
+  const [evidenceSurface, setEvidenceSurface] = useState<"index" | "live">(
+    "index",
+  );
+  const [liveSourcePaths, setLiveSourcePaths] = useState<string[]>([]);
+  const [liveQuery, setLiveQuery] = useState("");
+  const [liveMode, setLiveMode] = useState<SearchMode>("contains");
+  const [liveOffset, setLiveOffset] = useState(0);
+  const [liveSelection, setLiveSelection] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState("");
+  const {
+    begin: beginLiveSearch,
+    clear: clearLiveSearch,
+    progress: liveProgress,
+  } = useDirectSearchProgress();
 
   const identities = useQuery({
     queryKey: ["identities"],
@@ -137,19 +178,50 @@ export function IdentitiesPage() {
     },
     onError: (error) => setNotice(`Identity analysis failed: ${String(error)}`),
   });
+  const liveSearch = useMutation({
+    mutationFn: () =>
+      startDirectSearch({
+        paths: liveSourcePaths,
+        query: liveQuery.trim(),
+        mode: liveMode,
+        caseSensitive: false,
+        includeArchives: true,
+        maxResults: 2_000,
+        workerLimit: 2,
+      }),
+    onSuccess: beginLiveSearch,
+    onError: (error) => setNotice(`Live scan failed: ${String(error)}`),
+  });
+  const liveHitsById = useMemo(
+    () => new Map((liveProgress?.hits ?? []).map((hit) => [hit.id, hit])),
+    [liveProgress?.hits],
+  );
   const create = useMutation({
     mutationFn: () =>
       createManualIdentity({
         name: manualName.trim(),
         recordIds: [...manualSelection],
+        liveEvidence: [...liveSelection]
+          .map((id) => liveHitsById.get(id))
+          .filter((hit) => hit !== undefined)
+          .map((hit) => ({
+            sourcePath: hit.sourcePath,
+            sourceFile: hit.sourceFile,
+            archiveEntry: hit.archiveEntry,
+            sourceLocation: hit.sourceLocation,
+            excerpt: hit.excerpt,
+            matchReason: hit.matchReason,
+          })),
       }),
     onSuccess: async (id) => {
       setNotice("Manual identity created");
       setManualName("");
       setManualSelection(new Set());
+      setLiveSelection(new Set());
       setSelectedIdentity(id);
       await queryClient.invalidateQueries({ queryKey: ["identities"] });
     },
+    onError: (error) => setNotice(`Identity creation failed: ${String(error)}`),
   });
 
   const rebuildGroups = rebuild.mutate;
@@ -178,6 +250,17 @@ export function IdentitiesPage() {
   const reviewCount = identityList.filter(
     (identity) => identity.userStatus !== "confirmed",
   ).length;
+  const selectedEvidenceCount = manualSelection.size + liveSelection.size;
+  const livePercent = liveProgress?.totalBytes
+    ? Math.min(
+        100,
+        (liveProgress.contentBytesScanned / liveProgress.totalBytes) * 100,
+      )
+    : 0;
+  const visibleLiveHits = (liveProgress?.hits ?? []).slice(
+    liveOffset,
+    liveOffset + memberLimit,
+  );
   const identityStats: Array<{
     icon: LucideIcon;
     label: string;
@@ -189,7 +272,7 @@ export function IdentitiesPage() {
       icon: FingerprintIcon,
     },
     {
-      label: "Linked records",
+      label: "Linked evidence",
       value: formatCount(totalMembers),
       icon: LinkIcon,
     },
@@ -314,7 +397,7 @@ export function IdentitiesPage() {
                             </span>
                             <span className="mt-1 block truncate text-xs text-muted-foreground">
                               {identity.linkType.replaceAll("_", " ")} ·{" "}
-                              {formatCount(identity.memberCount)} records
+                              {formatCount(identity.memberCount)} evidence rows
                             </span>
                           </span>
                           <Badge variant="outline">{identity.userStatus}</Badge>
@@ -413,7 +496,10 @@ export function IdentitiesPage() {
                               <p className="truncate text-xs font-medium">
                                 {member.datasetName}
                               </p>
-                              <p className="truncate text-xs text-muted-foreground">
+                              <p
+                                className="truncate text-xs text-muted-foreground"
+                                title={member.sourcePath ?? member.sourceFile}
+                              >
                                 {member.sourceFile}
                               </p>
                               <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -423,6 +509,11 @@ export function IdentitiesPage() {
                                 <Badge variant="outline">
                                   {member.userStatus}
                                 </Badge>
+                                {member.origin === "live" ? (
+                                  <Badge variant="secondary">
+                                    Live snapshot
+                                  </Badge>
+                                ) : null}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -493,147 +584,399 @@ export function IdentitiesPage() {
               <CardHeader className="border-b">
                 <CardTitle>Find evidence</CardTitle>
                 <CardDescription>
-                  Search the index and select only reviewed rows.
+                  Use the persistent index or scan large local sources directly.
                 </CardDescription>
                 <CardAction>
-                  {manualResults.isFetching ? (
+                  {manualResults.isFetching ||
+                  liveProgress?.status === "running" ? (
                     <Badge>
                       <Spinner />
-                      Searching index
+                      {evidenceSurface === "live"
+                        ? "Scanning files"
+                        : "Searching index"}
                     </Badge>
                   ) : (
-                    <Badge variant="outline">Name-aware</Badge>
+                    <Badge variant="outline">
+                      {formatCount(selectedEvidenceCount)} selected
+                    </Badge>
                   )}
                 </CardAction>
               </CardHeader>
-              <CardContent className="border-b p-4">
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    setManualOffset(0);
-                    setSubmittedManualQuery(manualQuery.trim());
-                  }}
-                >
-                  <InputGroup>
-                    <InputGroupAddon>
-                      <SearchIcon />
-                    </InputGroupAddon>
-                    <InputGroupInput
-                      aria-label="Find identity evidence"
-                      onChange={(event) => setManualQuery(event.target.value)}
-                      placeholder="Name, email, username, phone, or account ID"
-                      value={manualQuery}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <Button
-                        disabled={manualResults.isFetching}
-                        size="sm"
-                        type="submit"
-                      >
-                        {manualResults.isFetching ? (
-                          <Spinner data-icon="inline-start" />
-                        ) : null}
-                        {manualResults.isFetching ? "Searching…" : "Search"}
-                      </Button>
-                    </InputGroupAddon>
-                  </InputGroup>
-                </form>
-              </CardContent>
-              <CardContent className="px-0">
-                {manualResults.data?.hits.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10 ps-4" />
-                        <TableHead>Evidence</TableHead>
-                        <TableHead className="pe-6">Context</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {manualResults.data.hits.map((hit) => (
-                        <TableRow key={hit.recordId}>
-                          <TableCell className="ps-4">
-                            <Checkbox
-                              aria-label={`Select ${hit.recordId}`}
-                              checked={manualSelection.has(hit.recordId)}
-                              onCheckedChange={(checked) =>
-                                setManualSelection((current) => {
-                                  const next = new Set(current);
-                                  if (checked) next.add(hit.recordId);
-                                  else next.delete(hit.recordId);
-                                  return next;
-                                })
-                              }
-                            />
-                          </TableCell>
-                          <TableCell className="max-w-2xl">
-                            <p className="font-mono text-xs break-all">
-                              {hit.fields
-                                .filter(
-                                  (field) =>
-                                    ![
-                                      "password",
-                                      "password_hash",
-                                      "salt",
-                                    ].includes(field.fieldType),
-                                )
-                                .slice(0, 8)
-                                .map((field) => field.displayValue)
-                                .join(" | ") || "No displayable values"}
-                            </p>
-                          </TableCell>
-                          <TableCell className="whitespace-normal pe-6">
-                            <p className="truncate text-xs font-medium">
-                              {hit.datasetName}
-                            </p>
-                            <p className="font-mono text-xs text-muted-foreground">
-                              {hit.sourceLocation}
-                            </p>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <Empty className="min-h-80 rounded-none border-0">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        {manualResults.isFetching ? (
-                          <Spinner />
-                        ) : (
+              <Tabs
+                onValueChange={(value) =>
+                  setEvidenceSurface(value as "index" | "live")
+                }
+                value={evidenceSurface}
+              >
+                <TabsList className="m-4" variant="line">
+                  <TabsTrigger value="index">
+                    <DatabaseIcon />
+                    Indexed evidence
+                  </TabsTrigger>
+                  <TabsTrigger value="live">
+                    <FileSearchIcon />
+                    Live files & archives
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="index">
+                  <CardContent className="border-b p-4">
+                    <form
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        setManualOffset(0);
+                        setSubmittedManualQuery(manualQuery.trim());
+                      }}
+                    >
+                      <InputGroup>
+                        <InputGroupAddon>
                           <SearchIcon />
-                        )}
-                      </EmptyMedia>
-                      <EmptyTitle>
-                        {manualResults.isFetching
-                          ? "Searching identity evidence"
-                          : "Find a person or account"}
-                      </EmptyTitle>
-                      <EmptyDescription>
-                        {manualResults.isFetching
-                          ? "Checking the local index for matching records."
-                          : "Search, review the matching rows, then select the evidence to bundle."}
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </CardContent>
-              {manualResults.data ? (
-                <PaginationControls
-                  label="identity builder results"
-                  limit={memberLimit}
-                  offset={manualOffset}
-                  onOffsetChange={setManualOffset}
-                  total={manualResults.data.total}
-                />
-              ) : null}
+                        </InputGroupAddon>
+                        <InputGroupInput
+                          aria-label="Find identity evidence"
+                          onChange={(event) =>
+                            setManualQuery(event.target.value)
+                          }
+                          placeholder="Name, email, username, phone, or account ID"
+                          value={manualQuery}
+                        />
+                        <InputGroupAddon align="inline-end">
+                          <Button
+                            disabled={manualResults.isFetching}
+                            size="sm"
+                            type="submit"
+                          >
+                            {manualResults.isFetching ? (
+                              <Spinner data-icon="inline-start" />
+                            ) : null}
+                            {manualResults.isFetching ? "Searching…" : "Search"}
+                          </Button>
+                        </InputGroupAddon>
+                      </InputGroup>
+                    </form>
+                  </CardContent>
+                  <CardContent className="px-0">
+                    {manualResults.data?.hits.length ? (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-10 ps-4" />
+                            <TableHead>Evidence</TableHead>
+                            <TableHead className="pe-6">Context</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {manualResults.data.hits.map((hit) => (
+                            <TableRow key={hit.recordId}>
+                              <TableCell className="ps-4">
+                                <Checkbox
+                                  aria-label={`Select ${hit.recordId}`}
+                                  checked={manualSelection.has(hit.recordId)}
+                                  onCheckedChange={(checked) =>
+                                    setManualSelection((current) => {
+                                      const next = new Set(current);
+                                      if (checked) next.add(hit.recordId);
+                                      else next.delete(hit.recordId);
+                                      return next;
+                                    })
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell className="max-w-2xl">
+                                <p className="font-mono text-xs break-all">
+                                  {hit.fields
+                                    .filter(
+                                      (field) =>
+                                        ![
+                                          "password",
+                                          "password_hash",
+                                          "salt",
+                                        ].includes(field.fieldType),
+                                    )
+                                    .slice(0, 8)
+                                    .map((field) => field.displayValue)
+                                    .join(" | ") || "No displayable values"}
+                                </p>
+                              </TableCell>
+                              <TableCell className="whitespace-normal pe-6">
+                                <p className="truncate text-xs font-medium">
+                                  {hit.datasetName}
+                                </p>
+                                <p className="font-mono text-xs text-muted-foreground">
+                                  {hit.sourceLocation}
+                                </p>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : (
+                      <Empty className="min-h-80 rounded-none border-0">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            {manualResults.isFetching ? (
+                              <Spinner />
+                            ) : (
+                              <SearchIcon />
+                            )}
+                          </EmptyMedia>
+                          <EmptyTitle>
+                            {manualResults.isFetching
+                              ? "Searching identity evidence"
+                              : "Find a person or account"}
+                          </EmptyTitle>
+                          <EmptyDescription>
+                            {manualResults.isFetching
+                              ? "Checking the local index for matching records."
+                              : "Search, review the matching rows, then select the evidence to bundle."}
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    )}
+                  </CardContent>
+                  {manualResults.data ? (
+                    <PaginationControls
+                      label="identity builder results"
+                      limit={memberLimit}
+                      offset={manualOffset}
+                      onOffsetChange={setManualOffset}
+                      total={manualResults.data.total}
+                    />
+                  ) : null}
+                </TabsContent>
+
+                <TabsContent value="live">
+                  <CardContent className="border-y p-4">
+                    <div className="flex flex-col gap-4">
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel>1. Choose authorized sources</FieldLabel>
+                          <FieldDescription>
+                            TXT, CSV, JSONL, GZIP, ZIP, and RAR are streamed
+                            read-only.
+                          </FieldDescription>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              onClick={() =>
+                                void selectDirectSearchSources("files").then(
+                                  setLiveSourcePaths,
+                                )
+                              }
+                              size="sm"
+                              variant="outline"
+                            >
+                              <ArchiveIcon data-icon="inline-start" />
+                              Choose files
+                            </Button>
+                            <Button
+                              onClick={() =>
+                                void selectDirectSearchSources("folder").then(
+                                  setLiveSourcePaths,
+                                )
+                              }
+                              size="sm"
+                              variant="outline"
+                            >
+                              <FolderOpenIcon data-icon="inline-start" />
+                              Choose folder
+                            </Button>
+                            {liveSourcePaths.length ? (
+                              <Badge variant="secondary">
+                                {formatCount(liveSourcePaths.length)} selected
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="identity-live-query">
+                            2. Search the selected sources
+                          </FieldLabel>
+                          <InputGroup>
+                            <InputGroupAddon>
+                              <SearchIcon />
+                            </InputGroupAddon>
+                            <InputGroupInput
+                              id="identity-live-query"
+                              onChange={(event) =>
+                                setLiveQuery(event.target.value)
+                              }
+                              placeholder="Name, email, username, phone, or account ID"
+                              value={liveQuery}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <Select
+                                items={identitySearchModes}
+                                onValueChange={(value) =>
+                                  setLiveMode(value as SearchMode)
+                                }
+                                value={liveMode}
+                              >
+                                <SelectTrigger size="sm">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    {identitySearchModes.map((item) => (
+                                      <SelectItem
+                                        key={item.value}
+                                        value={item.value}
+                                      >
+                                        {item.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </Field>
+                      </FieldGroup>
+
+                      {liveProgress ? (
+                        <Progress value={livePercent}>
+                          <ProgressLabel>
+                            {liveProgress.message} -{" "}
+                            {formatBytes(liveProgress.bytesPerSecond)}/s
+                          </ProgressLabel>
+                          <ProgressValue>
+                            {() => `${livePercent.toFixed(0)}%`}
+                          </ProgressValue>
+                        </Progress>
+                      ) : null}
+
+                      <div className="flex justify-end gap-2">
+                        {liveProgress?.status === "running" ? (
+                          <Button
+                            onClick={() =>
+                              void cancelDirectSearch(liveProgress.jobId)
+                            }
+                            size="sm"
+                            variant="outline"
+                          >
+                            <SquareIcon data-icon="inline-start" />
+                            Cancel
+                          </Button>
+                        ) : null}
+                        <Button
+                          disabled={
+                            !liveSourcePaths.length ||
+                            liveQuery.trim().length < 2 ||
+                            liveProgress?.status === "running" ||
+                            liveSearch.isPending
+                          }
+                          onClick={() => {
+                            setLiveOffset(0);
+                            setLiveSelection(new Set());
+                            clearLiveSearch();
+                            liveSearch.mutate();
+                          }}
+                          size="sm"
+                        >
+                          {liveSearch.isPending ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <FileSearchIcon data-icon="inline-start" />
+                          )}
+                          {liveSearch.isPending
+                            ? "Starting..."
+                            : "Start live scan"}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+
+                  <CardContent className="px-0">
+                    {visibleLiveHits.length ? (
+                      <Table className="table-fixed">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-10 ps-4" />
+                            <TableHead>Source line</TableHead>
+                            <TableHead className="w-2/5 pe-6">
+                              Context
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {visibleLiveHits.map((hit) => (
+                            <TableRow key={hit.id}>
+                              <TableCell className="ps-4">
+                                <Checkbox
+                                  aria-label={`Select ${hit.sourceFile} ${hit.sourceLocation}`}
+                                  checked={liveSelection.has(hit.id)}
+                                  onCheckedChange={(checked) =>
+                                    setLiveSelection((current) => {
+                                      const next = new Set(current);
+                                      if (checked) next.add(hit.id);
+                                      else next.delete(hit.id);
+                                      return next;
+                                    })
+                                  }
+                                />
+                              </TableCell>
+                              <TableCell className="whitespace-normal">
+                                <p className="font-mono text-xs break-all">
+                                  {hit.excerpt}
+                                </p>
+                              </TableCell>
+                              <TableCell className="whitespace-normal pe-6">
+                                <p className="truncate text-xs font-medium">
+                                  {hit.archiveEntry ?? hit.sourceFile}
+                                </p>
+                                <p
+                                  className="truncate font-mono text-xs text-muted-foreground"
+                                  title={hit.sourcePath}
+                                >
+                                  {hit.sourceFile} - {hit.sourceLocation}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {hit.matchReason}
+                                </p>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : (
+                      <Empty className="min-h-72 rounded-none border-0">
+                        <EmptyHeader>
+                          <EmptyMedia variant="icon">
+                            {liveProgress?.status === "running" ? (
+                              <Spinner />
+                            ) : (
+                              <FileSearchIcon />
+                            )}
+                          </EmptyMedia>
+                          <EmptyTitle>
+                            {liveProgress?.status === "running"
+                              ? "Scanning large sources"
+                              : "No live evidence yet"}
+                          </EmptyTitle>
+                          <EmptyDescription>
+                            Select matching rows and save a local identity
+                            snapshot without building a full index.
+                          </EmptyDescription>
+                        </EmptyHeader>
+                      </Empty>
+                    )}
+                  </CardContent>
+                  {liveProgress?.hits.length ? (
+                    <PaginationControls
+                      label="live identity evidence"
+                      limit={memberLimit}
+                      offset={liveOffset}
+                      onOffsetChange={setLiveOffset}
+                      total={liveProgress.hits.length}
+                    />
+                  ) : null}
+                </TabsContent>
+              </Tabs>
             </DashboardCard>
 
             <DashboardCard className="gap-0">
               <CardHeader>
                 <CardTitle>Identity bundle</CardTitle>
                 <CardDescription>
-                  {formatCount(manualSelection.size)} selected records
+                  {formatCount(selectedEvidenceCount)} selected evidence rows
                 </CardDescription>
                 <CardAction>
                   <UsersIcon />
@@ -663,14 +1006,16 @@ export function IdentitiesPage() {
                       <FingerprintIcon />
                     </EmptyMedia>
                     <EmptyTitle>
-                      {manualSelection.size
-                        ? `${formatCount(manualSelection.size)} records ready`
+                      {selectedEvidenceCount
+                        ? `${formatCount(selectedEvidenceCount)} evidence rows ready`
                         : "No evidence selected"}
                     </EmptyTitle>
                     <EmptyDescription>
-                      {manualSelection.size
+                      {selectedEvidenceCount >= 2
                         ? "Name the bundle, then create the reviewed identity."
-                        : "Select reviewed evidence from the search results to build this identity."}
+                        : selectedEvidenceCount === 1
+                          ? "Select one more evidence row to create an identity."
+                          : "Select reviewed indexed or live evidence to build this identity."}
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -680,7 +1025,7 @@ export function IdentitiesPage() {
                   className="w-full"
                   disabled={
                     !manualName.trim() ||
-                    !manualSelection.size ||
+                    selectedEvidenceCount < 2 ||
                     create.isPending
                   }
                   onClick={() => create.mutate()}

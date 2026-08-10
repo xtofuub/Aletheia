@@ -13,7 +13,7 @@ Contains searches split a likely person name into meaningful tokens. A query suc
 - **Indexed** searches an existing Tantivy index. Use it for fast repeated queries, paging, saved views, redacted export, domain analysis, and identity grouping.
 - **Live files** scans selected TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR sources directly. Archives are streamed in memory and are never extracted beside the source. Results appear while the scan is running and remain masked.
 
-Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, and cancellation. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker.
+Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, cancellation, and paginated results. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker. Streamed result batches remain available after the completion event.
 
 ## Advanced mode
 

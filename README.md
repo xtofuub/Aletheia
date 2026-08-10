@@ -46,7 +46,7 @@ All screenshots use synthetic fixtures with reserved example domains and documen
 - Exact, contains, prefix, field-specific, and flexible name search with pagination.
 - Direct sequential search inside text files, GZIP streams, ZIP entries, and RAR entries.
 - Parent-domain and subdomain navigation with linked source evidence.
-- Automatic deterministic identity groups plus manually reviewed identity bundles.
+- Automatic deterministic identity groups plus manually reviewed bundles from indexed records or selected live-scan evidence.
 - Dataset, file, archive-entry, parser, line, and record provenance.
 - Redacted CSV, JSON, JSONL, and Markdown exports with sidecar manifests.
 - Configurable workers, memory ceilings, inactivity locking, update checks, and generated-data cleanup.
