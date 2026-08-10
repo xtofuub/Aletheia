@@ -11,6 +11,10 @@ fn windows_icon_is_transparent_and_uses_the_canvas() {
         "Windows icon has no frames"
     );
     for entry in directory.entries() {
+        assert!(
+            !entry.is_png(),
+            "Windows executable icon frames must use bitmap encoding so alpha survives resource embedding"
+        );
         let image = entry.decode().expect("Windows icon frame should decode");
         let width = image.width() as usize;
         let height = image.height() as usize;

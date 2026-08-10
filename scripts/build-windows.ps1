@@ -86,7 +86,24 @@ try {
     if ($null -eq $embeddedIcon -or $embeddedIcon.Width -lt 16 -or $embeddedIcon.Height -lt 16) {
         throw "The standalone executable is missing its embedded application icon."
     }
-    $embeddedIcon.Dispose()
+    $embeddedBitmap = $embeddedIcon.ToBitmap()
+    try {
+        $transparentPixels = 0
+        for ($y = 0; $y -lt $embeddedBitmap.Height; $y++) {
+            for ($x = 0; $x -lt $embeddedBitmap.Width; $x++) {
+                if ($embeddedBitmap.GetPixel($x, $y).A -eq 0) {
+                    $transparentPixels++
+                }
+            }
+        }
+        if ($transparentPixels -eq 0) {
+            throw "The standalone executable icon lost transparency during resource embedding."
+        }
+    }
+    finally {
+        $embeddedBitmap.Dispose()
+        $embeddedIcon.Dispose()
+    }
 
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
     Get-ChildItem -LiteralPath $releaseRoot -File |

@@ -154,6 +154,7 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Recursively discover supported files when indexing a folder
 - [x] Recover active import telemetry after navigation and prevent stale writer locks
 - [x] Block a second index while the current import or cancellation is active
+- [x] Preserve transparent Windows icon alpha in the embedded executable resource
 
 ## Signed update reliability
 

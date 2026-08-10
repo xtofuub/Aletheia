@@ -88,9 +88,15 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri icon generation failed."
     }
+
+    $windowsIconPath = Join-Path $iconRoot "icon.ico"
+    & cargo run --quiet --manifest-path "src-tauri/Cargo.toml" --example windows_icon_compat -- $windowsIconPath $windowsIconPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows-compatible ICO conversion failed."
+    }
 }
 finally {
     Pop-Location
 }
 
-Write-Host "Generated transparent Aletheia icons with an 87.5% mark footprint."
+Write-Host "Generated transparent Aletheia icons with bitmap ICO frames and an 87.5% mark footprint."
