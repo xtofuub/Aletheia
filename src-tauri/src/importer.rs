@@ -495,6 +495,10 @@ fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
              WHERE NOT EXISTS (
                SELECT 1 FROM identity_memberships im
                WHERE im.identity_group_id = identity_groups.id
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM identity_live_evidence le
+                 WHERE le.identity_group_id = identity_groups.id
              );
              DELETE FROM identity_candidates;",
         )
@@ -568,6 +572,10 @@ fn rebuild_identity_groups(connection: &mut Connection) -> Result<u64, String> {
              WHERE NOT EXISTS (
                SELECT 1 FROM identity_memberships im
                WHERE im.identity_group_id = identity_groups.id
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM identity_live_evidence le
+                 WHERE le.identity_group_id = identity_groups.id
              )",
             [],
         )
@@ -723,6 +731,10 @@ fn delete_dataset_from_workspace(storage_root: &Path, dataset_id: &str) -> Resul
              WHERE NOT EXISTS (
                SELECT 1 FROM identity_memberships im
                WHERE im.identity_group_id = identity_groups.id
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM identity_live_evidence le
+                 WHERE le.identity_group_id = identity_groups.id
              );
              DELETE FROM identity_candidates
              WHERE group_id NOT IN (SELECT id FROM identity_groups);

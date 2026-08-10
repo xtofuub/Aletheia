@@ -76,6 +76,7 @@ pub struct DirectSearchStart {
 #[serde(rename_all = "camelCase")]
 pub struct DirectSearchHit {
     pub id: String,
+    pub source_path: String,
     pub source_file: String,
     pub archive_entry: Option<String>,
     pub source_location: String,
@@ -511,6 +512,7 @@ fn scan_plain(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Str
         .map_err(|_| "a source could not be opened read-only".to_string())?;
     scan_reader(
         BufReader::with_capacity(1024 * 1024, file),
+        &candidate.path.to_string_lossy(),
         &file_name(&candidate.path),
         None,
         shared,
@@ -523,6 +525,7 @@ fn scan_gzip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Stri
     let decoder = GzDecoder::new(file);
     scan_reader(
         BufReader::with_capacity(1024 * 1024, decoder),
+        &candidate.path.to_string_lossy(),
         &file_name(&candidate.path),
         None,
         shared,
@@ -571,6 +574,7 @@ fn scan_zip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
         let entry_name = entry_path.to_string_lossy().into_owned();
         scan_reader(
             BufReader::with_capacity(1024 * 1024, entry),
+            &candidate.path.to_string_lossy(),
             &file_name(&candidate.path),
             Some(entry_name),
             shared,
@@ -608,6 +612,7 @@ fn scan_rar(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
     if encrypted_text_entry {
         return Err("encrypted RAR text entries require an unlocked copy".to_string());
     }
+    let archive_path = candidate.path.to_string_lossy().into_owned();
     let archive_name = file_name(&candidate.path);
     let shared_for_writers = Arc::clone(shared);
     let extraction = archive.extract_to(None, move |meta| {
@@ -616,6 +621,7 @@ fn scan_rar(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
             return Ok(Box::new(io::sink()));
         }
         Ok(Box::new(RarLineWriter::new(
+            archive_path.clone(),
             archive_name.clone(),
             entry_name,
             Arc::clone(&shared_for_writers),
@@ -629,6 +635,7 @@ fn scan_rar(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
 
 fn scan_reader<R: BufRead>(
     mut reader: R,
+    source_path: &str,
     source_file: &str,
     archive_entry: Option<String>,
     shared: &Arc<SharedScan>,
@@ -650,6 +657,7 @@ fn scan_reader<R: BufRead>(
             continue;
         }
         if let Some(hit) = make_hit(
+            source_path,
             source_file,
             archive_entry.as_deref(),
             line_number,
@@ -714,6 +722,7 @@ fn read_bounded_line<R: BufRead>(
 }
 
 fn make_hit(
+    source_path: &str,
     source_file: &str,
     archive_entry: Option<&str>,
     line_number: u64,
@@ -728,6 +737,7 @@ fn make_hit(
     }
     Some(DirectSearchHit {
         id: Uuid::new_v4().to_string(),
+        source_path: source_path.to_string(),
         source_file: source_file.to_string(),
         archive_entry: archive_entry.map(ToString::to_string),
         source_location: format!("line {line_number}"),
@@ -800,6 +810,7 @@ fn mask_excerpt(value: &str) -> String {
 }
 
 struct RarLineWriter {
+    source_path: String,
     source_file: String,
     archive_entry: String,
     shared: Arc<SharedScan>,
@@ -810,8 +821,14 @@ struct RarLineWriter {
 }
 
 impl RarLineWriter {
-    fn new(source_file: String, archive_entry: String, shared: Arc<SharedScan>) -> Self {
+    fn new(
+        source_path: String,
+        source_file: String,
+        archive_entry: String,
+        shared: Arc<SharedScan>,
+    ) -> Self {
         Self {
+            source_path,
             source_file,
             archive_entry,
             shared,
@@ -828,6 +845,7 @@ impl RarLineWriter {
         }
         self.line_number += 1;
         if let Some(hit) = make_hit(
+            &self.source_path,
             &self.source_file,
             Some(&self.archive_entry),
             self.line_number,

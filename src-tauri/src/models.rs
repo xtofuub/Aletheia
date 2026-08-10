@@ -321,8 +321,10 @@ pub struct IdentitySummary {
 #[serde(rename_all = "camelCase")]
 pub struct IdentityMember {
     pub record_id: String,
+    pub origin: String,
     pub dataset_name: String,
     pub source_file: String,
+    pub source_path: Option<String>,
     pub source_location: String,
     pub user_status: String,
     pub fields: Vec<SearchField>,
@@ -349,7 +351,21 @@ pub struct IdentityActionInput {
 #[serde(rename_all = "camelCase")]
 pub struct ManualIdentityInput {
     pub name: String,
+    #[serde(default)]
     pub record_ids: Vec<String>,
+    #[serde(default)]
+    pub live_evidence: Vec<LiveIdentityEvidenceInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveIdentityEvidenceInput {
+    pub source_path: String,
+    pub source_file: String,
+    pub archive_entry: Option<String>,
+    pub source_location: String,
+    pub excerpt: String,
+    pub match_reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -13,8 +13,9 @@ use crate::{
     models::{
         DomainBreachSummary, DomainDetailsResponse, DomainGroupSummary, DomainRecordSummary,
         DomainSearchResponse, DomainSummary, FieldType, IdentityActionInput, IdentityMember,
-        IdentityMembersResponse, IdentitySummary, ManualIdentityInput, OverviewStats, SavedSearch,
-        SavedSearchInput, SearchField, SearchHit, SearchMode, SearchRequest, SearchResponse,
+        IdentityMembersResponse, IdentitySummary, LiveIdentityEvidenceInput, ManualIdentityInput,
+        OverviewStats, SavedSearch, SavedSearchInput, SearchField, SearchHit, SearchMode,
+        SearchRequest, SearchResponse,
     },
     search_index::SearchIndex,
     storage::AppState,
@@ -29,12 +30,14 @@ pub async fn get_overview_stats(state: State<'_, AppState>) -> Result<OverviewSt
             .map_err(|_| "metadata database is unavailable".to_string())?;
         let identity_group_count = connection
             .query_row(
-                "SELECT COUNT(*) FROM (
-                   SELECT identity_group_id
-                   FROM identity_memberships
-                   GROUP BY identity_group_id
-                   HAVING COUNT(*) >= 2
-                 )",
+                "SELECT COUNT(*) FROM identity_groups ig
+                 WHERE (
+                   SELECT COUNT(*) FROM identity_memberships im
+                   WHERE im.identity_group_id = ig.id
+                 ) + (
+                   SELECT COUNT(*) FROM identity_live_evidence le
+                   WHERE le.identity_group_id = ig.id
+                 ) >= 2",
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -658,23 +661,44 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
                       COUNT(*) AS member_count,
                       MIN(link_type) AS link_type,
                       MIN(explanation_json) AS explanation_json,
-                      CASE
-                        WHEN SUM(user_status = 'rejected') > 0
-                          THEN 'needs review'
-                        WHEN SUM(user_status = 'confirmed') > 0
-                          THEN 'confirmed'
-                        ELSE 'automatic'
-                      END AS review_status
+                      SUM(link_type IN ('manual_bundle', 'user_split', 'user_merge')) AS manual_links,
+                      SUM(user_status = 'rejected') AS rejected_count,
+                      SUM(user_status = 'confirmed') AS confirmed_count
                FROM identity_memberships
                GROUP BY identity_group_id
-               HAVING COUNT(*) >= 2
-                   OR SUM(link_type IN ('manual_bundle', 'user_split', 'user_merge')) > 0
+             ),
+             live_summary AS (
+               SELECT identity_group_id,
+                      COUNT(*) AS member_count,
+                      SUM(user_status = 'rejected') AS rejected_count,
+                      SUM(user_status = 'confirmed') AS confirmed_count
+               FROM identity_live_evidence
+               GROUP BY identity_group_id
              )
              SELECT ig.id, ig.display_label, ig.confidence_level,
-                    ms.member_count, ms.link_type, ms.explanation_json,
-                    ms.review_status
+                    COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0),
+                    CASE
+                      WHEN COALESCE(ms.member_count, 0) = 0 THEN 'live_scan_bundle'
+                      WHEN COALESCE(ls.member_count, 0) > 0 THEN 'mixed_evidence_bundle'
+                      ELSE ms.link_type
+                    END,
+                    CASE
+                      WHEN COALESCE(ms.member_count, 0) = 0 THEN '{\"rule\":\"reviewed_live_scan_evidence\"}'
+                      WHEN COALESCE(ls.member_count, 0) > 0 THEN '{\"rule\":\"reviewed_index_and_live_evidence\"}'
+                      ELSE ms.explanation_json
+                    END,
+                    CASE
+                      WHEN COALESCE(ms.rejected_count, 0) + COALESCE(ls.rejected_count, 0) > 0
+                        THEN 'needs review'
+                      WHEN COALESCE(ms.confirmed_count, 0) + COALESCE(ls.confirmed_count, 0) > 0
+                        THEN 'confirmed'
+                      ELSE 'automatic'
+                    END
              FROM identity_groups ig
-             JOIN membership_summary ms ON ms.identity_group_id = ig.id
+             LEFT JOIN membership_summary ms ON ms.identity_group_id = ig.id
+             LEFT JOIN live_summary ls ON ls.identity_group_id = ig.id
+             WHERE COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0) >= 2
+                OR COALESCE(ms.manual_links, 0) > 0
              ORDER BY ig.updated_at DESC, ig.id
              LIMIT 500",
         )
@@ -733,21 +757,52 @@ fn load_identity_members(
 ) -> Result<IdentityMembersResponse, String> {
     let total = connection
         .query_row(
-            "SELECT COUNT(*) FROM identity_memberships
-             WHERE identity_group_id = ?1",
+            "SELECT
+               (SELECT COUNT(*) FROM identity_memberships WHERE identity_group_id = ?1) +
+               (SELECT COUNT(*) FROM identity_live_evidence WHERE identity_group_id = ?1)",
             [group_id],
             |row| row.get::<_, i64>(0),
         )
         .map_err(sanitized)?;
     let mut statement = connection
         .prepare(
-            "SELECT im.record_id, d.name, sf.relative_path, r.source_location, im.user_status
-             FROM identity_memberships im
-             JOIN records r ON r.id = im.record_id
-             JOIN datasets d ON d.id = r.dataset_id
-             JOIN source_files sf ON sf.id = r.source_file_id
-             WHERE im.identity_group_id = ?1
-             ORDER BY im.record_id
+            "WITH evidence AS (
+               SELECT im.record_id AS evidence_id,
+                      'indexed' AS origin,
+                      d.name AS dataset_name,
+                      sf.relative_path AS source_file,
+                      sf.absolute_path AS source_path,
+                      r.source_location,
+                      im.user_status,
+                      NULL AS excerpt,
+                      NULL AS match_reason,
+                      '0-' || im.record_id AS sort_key
+               FROM identity_memberships im
+               JOIN records r ON r.id = im.record_id
+               JOIN datasets d ON d.id = r.dataset_id
+               JOIN source_files sf ON sf.id = r.source_file_id
+               WHERE im.identity_group_id = ?1
+               UNION ALL
+               SELECT 'live:' || le.id,
+                      'live',
+                      'Live scan',
+                      CASE
+                        WHEN le.archive_entry IS NULL THEN le.source_file
+                        ELSE le.source_file || ' > ' || le.archive_entry
+                      END,
+                      le.source_path,
+                      le.source_location,
+                      le.user_status,
+                      le.excerpt,
+                      le.match_reason,
+                      '1-' || le.id
+               FROM identity_live_evidence le
+               WHERE le.identity_group_id = ?1
+             )
+             SELECT evidence_id, origin, dataset_name, source_file, source_path,
+                    source_location, user_status, excerpt, match_reason
+             FROM evidence
+             ORDER BY sort_key
              LIMIT ?2 OFFSET ?3",
         )
         .map_err(sanitized)?;
@@ -761,11 +816,27 @@ fn load_identity_members(
             |row| {
                 Ok(IdentityMember {
                     record_id: row.get(0)?,
-                    dataset_name: row.get(1)?,
-                    source_file: row.get(2)?,
-                    source_location: row.get(3)?,
-                    user_status: row.get(4)?,
-                    fields: Vec::new(),
+                    origin: row.get(1)?,
+                    dataset_name: row.get(2)?,
+                    source_file: row.get(3)?,
+                    source_path: row.get(4)?,
+                    source_location: row.get(5)?,
+                    user_status: row.get(6)?,
+                    fields: row
+                        .get::<_, Option<String>>(7)?
+                        .map(|excerpt| {
+                            vec![SearchField {
+                                name: row
+                                    .get::<_, Option<String>>(8)
+                                    .ok()
+                                    .flatten()
+                                    .unwrap_or_else(|| "reviewed source line".to_string()),
+                                field_type: FieldType::Unknown,
+                                display_value: excerpt,
+                                sensitive: false,
+                            }]
+                        })
+                        .unwrap_or_default(),
                 })
             },
         )
@@ -773,14 +844,17 @@ fn load_identity_members(
     let mut members = rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)?;
     let record_ids = members
         .iter()
+        .filter(|member| member.origin == "indexed")
         .map(|member| member.record_id.clone())
         .collect::<Vec<_>>();
     let mut fields_by_record =
         load_display_fields_batch(connection, &record_ids, 32, reveal_values)?;
     for member in &mut members {
-        member.fields = fields_by_record
-            .remove(&member.record_id)
-            .unwrap_or_default();
+        if member.origin == "indexed" {
+            member.fields = fields_by_record
+                .remove(&member.record_id)
+                .unwrap_or_default();
+        }
     }
     Ok(IdentityMembersResponse {
         total: total.max(0) as u64,
@@ -822,8 +896,18 @@ fn create_manual_identity_inner(
     let mut record_ids = input.record_ids;
     record_ids.sort_unstable();
     record_ids.dedup();
-    if !(2..=10_000).contains(&record_ids.len()) {
-        return Err("select between 2 and 10,000 records".to_string());
+    let mut live_evidence = input
+        .live_evidence
+        .into_iter()
+        .map(|evidence| {
+            validate_live_identity_evidence(&evidence).map(|fingerprint| (fingerprint, evidence))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    live_evidence.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    live_evidence.dedup_by(|left, right| left.0 == right.0);
+    let evidence_count = record_ids.len().saturating_add(live_evidence.len());
+    if !(2..=10_000).contains(&evidence_count) || live_evidence.len() > 5_000 {
+        return Err("select between 2 and 10,000 evidence rows".to_string());
     }
     let mut connection = database
         .lock()
@@ -837,8 +921,14 @@ fn create_manual_identity_inner(
             params![group_id, name],
         )
         .map_err(sanitized)?;
+    let rule = match (record_ids.is_empty(), live_evidence.is_empty()) {
+        (false, true) => "manual_search_bundle",
+        (true, false) => "reviewed_live_scan_evidence",
+        (false, false) => "reviewed_index_and_live_evidence",
+        (true, true) => unreachable!("evidence count was validated"),
+    };
     let explanation = serde_json::json!({
-        "rule": "manual_search_bundle",
+        "rule": rule,
         "deterministic": false
     })
     .to_string();
@@ -860,16 +950,81 @@ fn create_manual_identity_inner(
     if inserted != record_ids.len() {
         return Err("one or more selected records are no longer available".to_string());
     }
+    for (fingerprint, evidence) in &live_evidence {
+        transaction
+            .execute(
+                "INSERT INTO identity_live_evidence(
+                    id, identity_group_id, source_path, source_file, archive_entry,
+                    source_location, excerpt, match_reason, evidence_fingerprint,
+                    user_status
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'confirmed')",
+                params![
+                    Uuid::new_v4().to_string(),
+                    group_id,
+                    evidence.source_path,
+                    evidence.source_file,
+                    evidence.archive_entry,
+                    evidence.source_location,
+                    evidence.excerpt,
+                    evidence.match_reason,
+                    fingerprint,
+                ],
+            )
+            .map_err(sanitized)?;
+    }
     insert_audit(
         &transaction,
         &Uuid::new_v4().to_string(),
         "create_manual",
         &group_id,
-        serde_json::json!({"records": record_ids, "name": name}),
+        serde_json::json!({
+            "records": record_ids,
+            "live_evidence_count": live_evidence.len(),
+            "name": name
+        }),
         None,
     )?;
     transaction.commit().map_err(sanitized)?;
     Ok(group_id)
+}
+
+fn validate_live_identity_evidence(evidence: &LiveIdentityEvidenceInput) -> Result<String, String> {
+    let required = [
+        ("source path", evidence.source_path.trim(), 4_096_usize),
+        ("source file", evidence.source_file.trim(), 512_usize),
+        (
+            "source location",
+            evidence.source_location.trim(),
+            256_usize,
+        ),
+        ("source excerpt", evidence.excerpt.trim(), 1_024_usize),
+        ("match reason", evidence.match_reason.trim(), 256_usize),
+    ];
+    for (label, value, max) in required {
+        if value.is_empty() || value.chars().count() > max {
+            return Err(format!(
+                "live evidence {label} is outside the allowed limit"
+            ));
+        }
+    }
+    if evidence
+        .archive_entry
+        .as_deref()
+        .is_some_and(|value| value.chars().count() > 1_024)
+    {
+        return Err("live evidence archive entry is outside the allowed limit".to_string());
+    }
+    let fingerprint = blake3::hash(
+        format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            evidence.source_path,
+            evidence.archive_entry.as_deref().unwrap_or_default(),
+            evidence.source_location,
+            evidence.excerpt
+        )
+        .as_bytes(),
+    );
+    Ok(fingerprint.to_hex().to_string())
 }
 
 fn apply_identity_action_inner(
@@ -891,6 +1046,10 @@ fn apply_identity_action_inner(
             let records =
                 selected_or_all_records(&transaction, &input.group_id, &input.record_ids)?;
             let previous = previous_statuses(&transaction, &input.group_id, &records)?;
+            let live_evidence =
+                selected_or_all_live_evidence(&transaction, &input.group_id, &input.record_ids)?;
+            let previous_live =
+                previous_live_statuses(&transaction, &input.group_id, &live_evidence)?;
             for record_id in &records {
                 transaction
                     .execute(
@@ -900,12 +1059,26 @@ fn apply_identity_action_inner(
                     )
                     .map_err(sanitized)?;
             }
+            for evidence_id in &live_evidence {
+                transaction
+                    .execute(
+                        "UPDATE identity_live_evidence SET user_status = ?3
+                         WHERE identity_group_id = ?1 AND id = ?2",
+                        params![input.group_id, evidence_id, next_status],
+                    )
+                    .map_err(sanitized)?;
+            }
             insert_audit(
                 &transaction,
                 &event_id,
                 &input.action,
                 &input.group_id,
-                serde_json::json!({"records": records, "previous": previous}),
+                serde_json::json!({
+                    "records": records,
+                    "previous": previous,
+                    "live_evidence": live_evidence,
+                    "previous_live": previous_live
+                }),
                 None,
             )?;
         }
@@ -1004,7 +1177,11 @@ fn apply_identity_action_inner(
              WHERE NOT EXISTS (
                SELECT 1 FROM identity_memberships im
                WHERE im.identity_group_id = identity_groups.id
-             )",
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM identity_live_evidence le
+                 WHERE le.identity_group_id = identity_groups.id
+               )",
             [],
         )
         .map_err(sanitized)?;
@@ -1211,6 +1388,35 @@ fn selected_or_all_records(
     rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)
 }
 
+fn selected_or_all_live_evidence(
+    connection: &Connection,
+    group_id: &str,
+    selected: &[String],
+) -> Result<Vec<String>, String> {
+    let selected_live = selected
+        .iter()
+        .filter_map(|value| value.strip_prefix("live:"))
+        .take(5_000)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !selected_live.is_empty() {
+        return Ok(selected_live);
+    }
+    if !selected.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT id FROM identity_live_evidence
+             WHERE identity_group_id = ?1 LIMIT 5000",
+        )
+        .map_err(sanitized)?;
+    let rows = statement
+        .query_map(params![group_id], |row| row.get(0))
+        .map_err(sanitized)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)
+}
+
 fn previous_statuses(
     connection: &Connection,
     group_id: &str,
@@ -1229,6 +1435,29 @@ fn previous_statuses(
             .map_err(sanitized)?;
         if let Some(status) = status {
             previous.push((record.clone(), status));
+        }
+    }
+    Ok(previous)
+}
+
+fn previous_live_statuses(
+    connection: &Connection,
+    group_id: &str,
+    evidence_ids: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let mut previous = Vec::new();
+    for evidence_id in evidence_ids {
+        let status = connection
+            .query_row(
+                "SELECT user_status FROM identity_live_evidence
+                 WHERE identity_group_id = ?1 AND id = ?2",
+                params![group_id, evidence_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sanitized)?;
+        if let Some(status) = status {
+            previous.push((evidence_id.clone(), status));
         }
     }
     Ok(previous)
@@ -1306,6 +1535,29 @@ fn undo_event(connection: &Connection, original_id: &str, undo_id: &str) -> Resu
                         params![entity_id, record, status],
                     )
                     .map_err(sanitized)?;
+            }
+            if let Some(previous_live) = details
+                .get("previous_live")
+                .and_then(|value| value.as_array())
+            {
+                for pair in previous_live {
+                    let Some(values) = pair.as_array() else {
+                        continue;
+                    };
+                    let (Some(evidence_id), Some(status)) = (
+                        values.first().and_then(|value| value.as_str()),
+                        values.get(1).and_then(|value| value.as_str()),
+                    ) else {
+                        continue;
+                    };
+                    connection
+                        .execute(
+                            "UPDATE identity_live_evidence SET user_status = ?3
+                             WHERE identity_group_id = ?1 AND id = ?2",
+                            params![entity_id, evidence_id, status],
+                        )
+                        .map_err(sanitized)?;
+                }
             }
         }
         "merge" | "split" => {
@@ -1437,7 +1689,8 @@ mod tests {
         mask_for_display, search_domain_groups, search_domain_record_ids,
     };
     use crate::models::{
-        FieldType, IdentityActionInput, ManualIdentityInput, SearchMode, SearchRequest,
+        FieldType, IdentityActionInput, LiveIdentityEvidenceInput, ManualIdentityInput, SearchMode,
+        SearchRequest,
     };
     use crate::storage::open_database;
 
@@ -1596,6 +1849,7 @@ mod tests {
             ManualIdentityInput {
                 name: "Reviewed synthetic person".to_string(),
                 record_ids: vec!["manual-a".to_string(), "manual-b".to_string()],
+                live_evidence: Vec::new(),
             },
             database.clone(),
         )
@@ -1661,5 +1915,52 @@ mod tests {
                 .total,
             2
         );
+    }
+
+    #[test]
+    fn manual_identity_persists_reviewed_live_scan_evidence() {
+        let workspace = tempdir().expect("temporary workspace");
+        let connection = open_database(workspace.path()).expect("database");
+        let database = Arc::new(Mutex::new(connection));
+        let group_id = create_manual_identity_inner(
+            ManualIdentityInput {
+                name: "Reviewed live identity".to_string(),
+                record_ids: Vec::new(),
+                live_evidence: vec![
+                    LiveIdentityEvidenceInput {
+                        source_path: r"C:\Synthetic\authorized.zip".to_string(),
+                        source_file: "authorized.zip".to_string(),
+                        archive_entry: Some("records/one.txt".to_string()),
+                        source_location: "line 4".to_string(),
+                        excerpt: "synthetic@example.test | [REDACTED]".to_string(),
+                        match_reason: "Line contains query".to_string(),
+                    },
+                    LiveIdentityEvidenceInput {
+                        source_path: r"C:\Synthetic\authorized.zip".to_string(),
+                        source_file: "authorized.zip".to_string(),
+                        archive_entry: Some("records/two.txt".to_string()),
+                        source_location: "line 8".to_string(),
+                        excerpt: "synthetic@example.test | account-2".to_string(),
+                        match_reason: "Line contains query".to_string(),
+                    },
+                ],
+            },
+            database.clone(),
+        )
+        .expect("live identity");
+
+        let identities = list_identities_inner(database.clone()).expect("identity list");
+        assert_eq!(identities.len(), 1);
+        assert_eq!(identities[0].member_count, 2);
+        assert_eq!(identities[0].link_type, "live_scan_bundle");
+
+        let connection = database.lock().expect("database lock");
+        let members = load_identity_members(&connection, &group_id, 0, 25, true)
+            .expect("live identity members");
+        assert_eq!(members.total, 2);
+        assert!(members.members.iter().all(|member| member.origin == "live"));
+        assert_eq!(members.members[0].dataset_name, "Live scan");
+        assert_eq!(members.members[0].fields.len(), 1);
+        assert!(members.members[0].source_path.is_some());
     }
 }

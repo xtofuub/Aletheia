@@ -20,6 +20,7 @@ const MIGRATION_V4: &str = include_str!("../migrations/0004_record_domains.sql")
 const MIGRATION_V5: &str = include_str!("../migrations/0005_resumable_imports.sql");
 const MIGRATION_V6: &str =
     include_str!("../migrations/0006_identity_candidates_and_domain_repairs.sql");
+const MIGRATION_V7: &str = include_str!("../migrations/0007_identity_live_evidence.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -218,6 +219,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 7 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V7)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -332,13 +342,14 @@ mod tests {
                      'domain_dataset_counts',
                      'hostname_dataset_counts',
                      'identity_candidates',
-                     'domain_link_repairs'
+                     'domain_link_repairs',
+                     'identity_live_evidence'
                    )",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 9);
+        assert_eq!(table_count, 10);
 
         let theme: String = connection
             .query_row(
