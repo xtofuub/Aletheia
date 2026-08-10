@@ -25,6 +25,7 @@
     "test:e2e": "playwright test --pass-with-no-tests",
     "build": "tsc -b && vite build",
     "dist:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1",
+    "icons:generate": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-icons.ps1",
     "verify:updater-artifacts": "node scripts/verify-updater-artifacts.mjs",
     "verify:release-version": "node scripts/verify-release-version.mjs",
     "format": "prettier --write .",

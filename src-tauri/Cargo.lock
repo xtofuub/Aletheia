@@ -42,6 +42,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "flate2",
+ "ico",
  "memchr",
  "minisign-verify",
  "once_cell",
