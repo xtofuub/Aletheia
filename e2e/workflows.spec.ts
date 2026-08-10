@@ -47,6 +47,41 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   ).toHaveCount(0);
 });
 
+test("Identity Builder reuses a saved Live source", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "aletheia.browser.live-sources",
+      JSON.stringify([
+        {
+          id: "live-authorized-corpus",
+          name: "Authorized corpus",
+          paths: ["C:\\Synthetic\\Authorized corpus"],
+          includeArchives: true,
+          createdAt: new Date().toISOString(),
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/identities");
+  await page.getByRole("tab", { name: "Build identity" }).click();
+  await page.getByRole("tab", { name: "Live files & archives" }).click();
+
+  const sourceSelect = page.getByLabel("Identity Live source");
+  await expect(sourceSelect).toContainText("Authorized corpus");
+  await expect(
+    page.getByText("C:\\Synthetic\\Authorized corpus"),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose folder" })).toHaveCount(
+    0,
+  );
+
+  await page
+    .getByLabel("2. Search the selected sources")
+    .fill("synthetic@example.test");
+  await page.getByRole("button", { name: "Start live scan" }).click();
+  await expect(page.getByText("Live search complete")).toBeVisible();
+});
+
 test("indexed results use neutral protected values and wrap safely", async ({
   page,
 }) => {

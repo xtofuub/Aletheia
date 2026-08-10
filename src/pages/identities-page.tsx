@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArchiveIcon,
   CheckIcon,
   DatabaseIcon,
   FingerprintIcon,
@@ -84,11 +83,11 @@ import {
   createManualIdentity,
   listIdentities,
   listIdentityMembers,
+  listLiveSources,
   pauseDirectSearch,
   rebuildIdentities,
   resumeDirectSearch,
   searchIdentityRecords,
-  selectDirectSearchSources,
   startDirectSearch,
   type SearchMode,
 } from "@/lib/desktop";
@@ -117,7 +116,7 @@ export function IdentitiesPage() {
   const [evidenceSurface, setEvidenceSurface] = useState<"index" | "live">(
     "index",
   );
-  const [liveSourcePaths, setLiveSourcePaths] = useState<string[]>([]);
+  const [selectedLiveSourceId, setSelectedLiveSourceId] = useState("");
   const [liveQuery, setLiveQuery] = useState("");
   const [liveMode, setLiveMode] = useState<SearchMode>("contains");
   const [liveOffset, setLiveOffset] = useState(0);
@@ -133,6 +132,29 @@ export function IdentitiesPage() {
     queryKey: ["identities"],
     queryFn: listIdentities,
   });
+  const liveSources = useQuery({
+    queryKey: ["live-sources"],
+    queryFn: listLiveSources,
+  });
+  const liveSourceList = useMemo(
+    () => liveSources.data ?? [],
+    [liveSources.data],
+  );
+  const activeLiveSourceId = liveSourceList.some(
+    (source) => source.id === selectedLiveSourceId,
+  )
+    ? selectedLiveSourceId
+    : (liveSourceList[0]?.id ?? "");
+  const selectedLiveSource =
+    liveSourceList.find((source) => source.id === activeLiveSourceId) ?? null;
+  const liveSourceOptions = useMemo(
+    () =>
+      liveSourceList.map((source) => ({
+        label: source.name,
+        value: source.id,
+      })),
+    [liveSourceList],
+  );
   const identityList = useMemo(() => identities.data ?? [], [identities.data]);
   const filteredIdentities = useMemo(() => {
     const needle = identityFilter.trim().toLowerCase();
@@ -185,11 +207,11 @@ export function IdentitiesPage() {
   const liveSearch = useMutation({
     mutationFn: () =>
       startDirectSearch({
-        paths: liveSourcePaths,
+        paths: selectedLiveSource?.paths ?? [],
         query: liveQuery.trim(),
         mode: liveMode,
         caseSensitive: false,
-        includeArchives: true,
+        includeArchives: selectedLiveSource?.includeArchives ?? true,
         maxResults: 2_000,
         workerLimit: 1,
       }),
@@ -755,42 +777,83 @@ export function IdentitiesPage() {
                     <div className="flex flex-col gap-4">
                       <FieldGroup>
                         <Field>
-                          <FieldLabel>1. Choose authorized sources</FieldLabel>
+                          <FieldLabel>1. Choose a saved Live source</FieldLabel>
                           <FieldDescription>
-                            TXT, CSV, JSONL, GZIP, ZIP, and RAR are streamed
-                            read-only.
+                            Reuse any folder or archive source saved on the
+                            Datasets page. Original files stay read-only.
                           </FieldDescription>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              onClick={() =>
-                                void selectDirectSearchSources("files").then(
-                                  setLiveSourcePaths,
-                                )
-                              }
-                              size="sm"
-                              variant="outline"
+                          {liveSourceList.length ? (
+                            <div className="flex min-w-0 items-center gap-2">
+                              <Select
+                                items={liveSourceOptions}
+                                onValueChange={(value) => {
+                                  setSelectedLiveSourceId(value as string);
+                                  setLiveOffset(0);
+                                  setLiveSelection(new Set());
+                                  clearLiveSearch();
+                                }}
+                                value={activeLiveSourceId}
+                              >
+                                <SelectTrigger
+                                  aria-label="Identity Live source"
+                                  className="min-w-0 flex-1"
+                                >
+                                  <SelectValue placeholder="Select a saved source" />
+                                </SelectTrigger>
+                                <SelectContent alignItemWithTrigger={false}>
+                                  <SelectGroup>
+                                    {liveSourceList.map((source) => (
+                                      <SelectItem
+                                        key={source.id}
+                                        value={source.id}
+                                      >
+                                        {source.name} ·{" "}
+                                        {formatCount(source.paths.length)}{" "}
+                                        {source.paths.length === 1
+                                          ? "location"
+                                          : "locations"}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                              <Button
+                                nativeButton={false}
+                                render={<a href="#/datasets" />}
+                                size="sm"
+                                variant="outline"
+                              >
+                                <FolderOpenIcon data-icon="inline-start" />
+                                Manage
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-3 border border-dashed p-3">
+                              <p className="text-sm text-muted-foreground">
+                                No saved Live sources yet.
+                              </p>
+                              <Button
+                                nativeButton={false}
+                                render={<a href="#/datasets" />}
+                                size="sm"
+                                variant="outline"
+                              >
+                                <FolderOpenIcon data-icon="inline-start" />
+                                Add source
+                              </Button>
+                            </div>
+                          )}
+                          {selectedLiveSource ? (
+                            <p
+                              className="truncate font-mono text-xs text-muted-foreground"
+                              title={selectedLiveSource.paths.join("\n")}
                             >
-                              <ArchiveIcon data-icon="inline-start" />
-                              Choose files
-                            </Button>
-                            <Button
-                              onClick={() =>
-                                void selectDirectSearchSources("folder").then(
-                                  setLiveSourcePaths,
-                                )
-                              }
-                              size="sm"
-                              variant="outline"
-                            >
-                              <FolderOpenIcon data-icon="inline-start" />
-                              Choose folder
-                            </Button>
-                            {liveSourcePaths.length ? (
-                              <Badge variant="secondary">
-                                {formatCount(liveSourcePaths.length)} selected
-                              </Badge>
-                            ) : null}
-                          </div>
+                              {selectedLiveSource.paths[0]}
+                              {selectedLiveSource.paths.length > 1
+                                ? ` +${selectedLiveSource.paths.length - 1} more`
+                                : ""}
+                            </p>
+                          ) : null}
                         </Field>
                         <Field>
                           <FieldLabel htmlFor="identity-live-query">
@@ -892,7 +955,7 @@ export function IdentitiesPage() {
                         ) : null}
                         <Button
                           disabled={
-                            !liveSourcePaths.length ||
+                            !selectedLiveSource ||
                             liveQuery.trim().length < 2 ||
                             ["running", "paused"].includes(
                               liveProgress?.status ?? "",

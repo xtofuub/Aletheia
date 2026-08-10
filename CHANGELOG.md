@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Made Identity Builder reuse saved Live folders and archives from Datasets, with automatic source selection and no repeated folder picker.
 - Restored Search to a compact single-line indexed query bar, kept the multiline batch composer only for saved Live sources, and added clear source-specific Search/Scan loading states.
 - Bumped the next Windows build to 0.1.7 and made NSIS recreate legacy shortcuts with a dedicated transparent icon resource, then notify Explorer so stale desktop and Start Menu icon caches are refreshed.
 - Re-encoded Windows ICO frames as alpha-preserving bitmaps and added a release-build check that fails if the standalone executable regresses to an opaque black icon background.
