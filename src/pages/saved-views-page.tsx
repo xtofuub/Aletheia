@@ -28,6 +28,27 @@ import {
 import { listSavedSearches } from "@/lib/desktop";
 import { formatDateTime } from "@/lib/format";
 
+function savedSearchHref(query: string, filtersJson: string) {
+  const params = new URLSearchParams({ q: query });
+  try {
+    const filters = JSON.parse(filtersJson) as {
+      datasetId?: string;
+      field?: string;
+      mode?: string;
+      sourceKey?: string;
+    };
+    const sourceKey =
+      filters.sourceKey ??
+      (filters.datasetId ? `index:${filters.datasetId}` : undefined);
+    if (sourceKey) params.set("source", sourceKey);
+    if (filters.mode) params.set("mode", filters.mode);
+    if (filters.field) params.set("field", filters.field);
+  } catch {
+    // Legacy saved searches may not have structured filters.
+  }
+  return `#/search?${params.toString()}`;
+}
+
 export function SavedViewsPage() {
   const saved = useQuery({
     queryKey: ["saved-searches"],
@@ -75,7 +96,10 @@ export function SavedViewsPage() {
                           nativeButton={false}
                           render={
                             <a
-                              href={`#/search?q=${encodeURIComponent(item.query)}`}
+                              href={savedSearchHref(
+                                item.query,
+                                item.filtersJson,
+                              )}
                             />
                           }
                           size="sm"

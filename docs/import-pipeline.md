@@ -31,7 +31,7 @@ The background importer uses its own SQLite WAL connection. Dashboard reads ther
 
 Profile options remain visible and can be changed before the job starts. SQLite record, field, and duplicate statements are prepared once per batch instead of once per record.
 
-For a one-off query over a very large folder or archive, use **Search > Live files**. That path does not create SQLite rows or a Tantivy index.
+For lookup over a very large folder or archive, save it as a **Live source** on the Datasets page and choose it in Search. The small source catalog persists, but scans create neither record rows nor a Tantivy index.
 
 ## Very large datasets
 

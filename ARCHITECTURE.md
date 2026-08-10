@@ -51,7 +51,7 @@ aletheia-storage/
   export-audit/
 ```
 
-Source datasets can live anywhere. SQLite stores their absolute path, fingerprint, size, modification time, parser, and source location metadata. Removing a dataset reference or index never removes the source file.
+Source datasets can live anywhere. SQLite stores indexed dataset metadata and a small catalog of saved Live-source paths. Removing an indexed dataset or saved Live source never removes the original file or folder.
 
 ## Import pipeline
 
@@ -83,6 +83,7 @@ SQLite is authoritative for:
 
 - settings and onboarding authorization
 - datasets and source files
+- saved Live sources and their read-only paths
 - import jobs, checkpoints, mappings, and reports
 - record traceability and field metadata
 - domains, URLs, identities, indexed memberships, and selected live-evidence snapshots
@@ -94,10 +95,10 @@ Raw records are not copied into SQLite. Recognized field values needed for detai
 
 ## Search model
 
-Aletheia exposes two search scopes behind one command deck:
+Aletheia exposes both search engines through one source-aware command deck. The chosen saved source determines the engine automatically:
 
 - **Indexed** compiles a bounded request into Tantivy and joins masked, traceable view models from SQLite. It is best for repeated investigations, paging, saved views, exports, identities, and domain analysis.
-- **Live files** opens authorized files read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. Up to 512 newline-separated queries share one Aho-Corasick matcher and one physical read pass. It is best for one-off or batched lookup across very large archives.
+- **Saved Live source** opens cataloged authorized paths read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. Up to 512 newline-separated queries share one Aho-Corasick matcher and one physical read pass. The catalog persists only the name, paths, and archive preference, so the user does not need to choose the source for every search.
 
 Automatic mode recognizes common query shapes. Email, IP, phone, and service-ID queries use field-boundary matching; indexed domain queries use normalized domain links with an exact-first fallback, while live domain queries use literal containment so matches inside emails, URLs, and subdomains are not missed. Advanced mode exposes exact, contains, prefix, dataset, field, archive, case, worker, and result-limit controls.
 

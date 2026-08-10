@@ -11,9 +11,11 @@ import {
 
 export function DashboardStats({
   datasets,
+  liveSourceCount,
   stats,
 }: {
   datasets: DatasetSummary[];
+  liveSourceCount: number;
   stats: OverviewStats;
 }) {
   const records = datasets.reduce(
@@ -32,9 +34,9 @@ export function DashboardStats({
       note: "from latest dataset",
     },
     {
-      label: "Datasets",
-      value: formatCount(datasets.length),
-      signal: ready,
+      label: "Search sources",
+      value: formatCount(datasets.length + liveSourceCount),
+      signal: ready + liveSourceCount,
       note: "ready to search",
     },
     {

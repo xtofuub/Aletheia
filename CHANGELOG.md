@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added persistent, removable Live-source catalogs and merged indexed lookup and live scanning into one source-aware Search workflow; source removal never deletes original files.
 - Replaced implementation-facing redaction wording in Search with a neutral protected-value marker and constrained indexed and direct-scan tables so long fields, paths, excerpts, and match values wrap without overlapping adjacent content.
 - Rebuilt the desktop, taskbar, installer, and in-app logo assets with a transparent canvas and an 87.5% mark footprint so the Aletheia symbol matches normal Windows icon sizing without a black tile.
 - Added automatic signed GitHub update detection with an in-app approval dialog, verified download progress, passive installation, and application relaunch; release CI now fails closed without signing material and validates updater artifacts before publishing.

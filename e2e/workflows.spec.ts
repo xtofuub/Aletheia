@@ -18,19 +18,33 @@ test("core investigation routes stay reachable", async ({ page }) => {
   }
 });
 
-test("batch live scan searches many values in one pass", async ({ page }) => {
-  await page.goto("/#/search?surface=direct");
-  await page.getByRole("button", { name: "Choose folder" }).click();
+test("saved Live source searches many values in one pass", async ({ page }) => {
+  await page.goto("/#/datasets");
+  await page.getByRole("button", { name: "Save folder" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Save Live source" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Save source" }).click();
+  const liveSourceRow = page.getByRole("row", { name: /Authorized corpus/ });
+  await expect(liveSourceRow).toBeVisible();
+  await liveSourceRow.getByRole("button", { name: "Search" }).click();
   await page
-    .getByLabel("Direct scan query")
+    .getByLabel("Search query")
     .fill("synthetic@example.test\nportal.example.com");
 
   await expect(page.getByText("2 values")).toBeVisible();
-  await page.getByRole("button", { name: "Start scan" }).click();
+  await page.getByRole("button", { name: "Search", exact: true }).click();
 
   await expect(page.getByText("Live search complete")).toBeVisible();
   await expect(page.getByText("Batch value found").first()).toBeVisible();
   await expect(page.getByText("synthetic@example.test").first()).toBeVisible();
+
+  await page.goto("/#/datasets");
+  await page.getByRole("button", { name: "Remove Authorized corpus" }).click();
+  await page.getByRole("button", { name: "Remove source" }).click();
+  await expect(
+    page.getByRole("row", { name: /Authorized corpus/ }),
+  ).toHaveCount(0);
 });
 
 test("indexed results use neutral protected values and wrap safely", async ({

@@ -4,6 +4,7 @@ pub mod domain_analysis;
 mod export_cleanup;
 mod importer;
 mod investigation;
+mod live_sources;
 pub mod models;
 pub mod search_index;
 mod settings;
@@ -49,6 +50,9 @@ pub fn run() {
             importer::cancel_import,
             importer::list_datasets,
             importer::delete_dataset,
+            live_sources::create_live_source,
+            live_sources::list_live_sources,
+            live_sources::delete_live_source,
             investigation::get_overview_stats,
             investigation::search_records,
             investigation::search_identity_records,

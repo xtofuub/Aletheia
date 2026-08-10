@@ -90,10 +90,15 @@ export function AppBootstrap() {
     case "search":
       page = (
         <SearchPage
-          initialDatasetId={query.get("dataset") ?? "all"}
+          initialField={query.get("field") ?? "all"}
+          initialMode={
+            ["exact", "contains", "prefix"].includes(query.get("mode") ?? "")
+              ? (query.get("mode") as "exact" | "contains" | "prefix")
+              : "contains"
+          }
           initialQuery={query.get("q") ?? ""}
-          initialSurface={
-            query.get("surface") === "direct" ? "direct" : "index"
+          initialSource={
+            query.get("source") ?? `index:${query.get("dataset") ?? "all"}`
           }
         />
       );

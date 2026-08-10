@@ -21,6 +21,7 @@ const MIGRATION_V5: &str = include_str!("../migrations/0005_resumable_imports.sq
 const MIGRATION_V6: &str =
     include_str!("../migrations/0006_identity_candidates_and_domain_repairs.sql");
 const MIGRATION_V7: &str = include_str!("../migrations/0007_identity_live_evidence.sql");
+const MIGRATION_V8: &str = include_str!("../migrations/0008_live_sources.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -234,6 +235,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 8 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V8)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (8)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -326,9 +336,13 @@ fn normalize_path(path: &Path) -> Result<PathBuf, StorageError> {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
     use tempfile::tempdir;
 
-    use super::{open_database, recover_interrupted_imports};
+    use super::{
+        MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
+        MIGRATION_V7, open_database, recover_interrupted_imports,
+    };
 
     #[test]
     fn migration_creates_foundation_tables_and_defaults() {
@@ -349,13 +363,15 @@ mod tests {
                      'hostname_dataset_counts',
                      'identity_candidates',
                      'domain_link_repairs',
-                     'identity_live_evidence'
+                     'identity_live_evidence',
+                     'live_sources',
+                     'live_source_paths'
                    )",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 10);
+        assert_eq!(table_count, 12);
 
         let theme: String = connection
             .query_row(
@@ -425,5 +441,61 @@ mod tests {
         assert_eq!(dataset, ("interrupted".to_string(), 1));
         assert_eq!(job, "interrupted");
         assert_eq!(file, "pending");
+    }
+
+    #[test]
+    fn migration_upgrades_an_existing_v7_workspace_with_live_sources() {
+        let directory = tempdir().expect("temporary directory");
+        let database_path = directory.path().join("metadata.sqlite3");
+        let connection = Connection::open(&database_path).expect("legacy database");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY,
+                   applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .expect("migration catalog");
+        for (index, migration) in [
+            MIGRATION_V1,
+            MIGRATION_V2,
+            MIGRATION_V3,
+            MIGRATION_V4,
+            MIGRATION_V5,
+            MIGRATION_V6,
+            MIGRATION_V7,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            connection
+                .execute_batch(migration)
+                .expect("legacy migration");
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations(version) VALUES (?1)",
+                    [(index + 1) as i64],
+                )
+                .expect("legacy migration version");
+        }
+        drop(connection);
+
+        let upgraded = open_database(directory.path()).expect("upgraded database");
+        let version: i64 = upgraded
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("version");
+        let live_table_count: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table'
+                   AND name IN ('live_sources', 'live_source_paths')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("live source tables");
+        assert_eq!(version, 8);
+        assert_eq!(live_table_count, 2);
     }
 }

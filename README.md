@@ -20,9 +20,9 @@
 
 ## Built for large local collections
 
-Aletheia has two search paths so a multi-million-row file does not always need a permanent index.
+Aletheia has one search screen backed by two engines, so a multi-million-row file does not always need a permanent index.
 
-- **Live scan** streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR sources with bounded memory. Archives are read directly without extraction. Paste up to 512 values to find them in one physical pass instead of rereading a huge collection for every query.
+- **Saved Live source** remembers a file or folder selection and streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR content with bounded memory. Archives are read directly without extraction. Paste up to 512 values to find them in one physical pass instead of rereading a huge collection for every query.
 - **Persistent index** stores a reusable Tantivy index for fast repeated searches, pagination, domain grouping, and identity workflows. Imports are cancellable, resumable, and report throughput.
 - **Flexible name lookup** finds first and last names across separate fields and common email separators, so `Jane Doe` can match values such as `jane.doe@example.com`.
 
@@ -30,7 +30,7 @@ Aletheia has two search paths so a multi-million-row file does not always need a
   <tr>
     <td width="50%">
       <img src="docs/screenshots/search-live.jpg" alt="Aletheia live archive search" />
-      <br /><strong>Search before indexing</strong><br />Choose files or a folder, enter a value, and stream the source immediately.
+      <br /><strong>Search before indexing</strong><br />Save a file or folder once, select it in Search, and stream the source immediately.
     </td>
     <td width="50%">
       <img src="docs/screenshots/datasets.jpg" alt="Aletheia dataset workspace" />
@@ -80,7 +80,7 @@ The import pipeline uses streaming readers, fixed memory ceilings, resumable che
 ## Privacy and safety
 
 - Source files are opened read-only and remain in their original locations.
-- Removing a dataset deletes generated metadata and index documents only; it never deletes the source.
+- Removing an indexed dataset deletes generated metadata and index documents only. Removing a saved Live source deletes only its catalog entry. Neither action deletes the source.
 - Rust owns format detection, parsing, normalization, SQLite, Tantivy, and exports.
 - Secret fields are excluded from the general index, and export safety defaults are enforced natively.
 - Update checks contact only the official GitHub release endpoint and can be disabled.

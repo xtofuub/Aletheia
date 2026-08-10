@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRightIcon,
+  ArchiveIcon,
   DatabaseIcon,
   FilePlus2Icon,
   FileSearchIcon,
@@ -83,22 +83,27 @@ import {
 } from "@/components/ui/table";
 import {
   cancelImport,
+  createLiveSource,
   deleteDataset,
+  deleteLiveSource,
   getSystemStatus,
   inspectSources,
   isTauriRuntime,
   listDatasets,
+  listLiveSources,
   listenImportProgress,
   pauseImport,
   resumeDatasetImport,
   resumeImport,
   selectSourceFiles,
   selectSourceFolder,
+  selectDirectSearchSources,
   startImport,
   type ImportOptions,
   type ImportProgress,
   type InspectionResult,
   type DatasetSummary,
+  type LiveSourceSummary,
 } from "@/lib/desktop";
 import {
   formatBytes,
@@ -134,6 +139,12 @@ function isLargeInspection(result: InspectionResult) {
   );
 }
 
+function sourceNameFromPath(path: string, count: number) {
+  const segments = path.replace(/[\\/]+$/, "").split(/[\\/]/);
+  const base = segments.at(-1) || "Saved live source";
+  return count > 1 ? `${base} + ${count - 1} more` : base;
+}
+
 export function DatasetsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -152,6 +163,12 @@ export function DatasetsPage() {
   const [datasetToRemove, setDatasetToRemove] = useState<DatasetSummary | null>(
     null,
   );
+  const [liveDialogOpen, setLiveDialogOpen] = useState(false);
+  const [liveSourceName, setLiveSourceName] = useState("");
+  const [liveSourcePaths, setLiveSourcePaths] = useState<string[]>([]);
+  const [liveSourceArchives, setLiveSourceArchives] = useState(true);
+  const [liveSourceToRemove, setLiveSourceToRemove] =
+    useState<LiveSourceSummary | null>(null);
   const previous = useRef<{
     jobId: string;
     at: number;
@@ -163,6 +180,10 @@ export function DatasetsPage() {
     queryKey: ["datasets"],
     queryFn: listDatasets,
     refetchInterval: 3_000,
+  });
+  const liveSources = useQuery({
+    queryKey: ["live-sources"],
+    queryFn: listLiveSources,
   });
   const system = useQuery({
     queryKey: ["system-status"],
@@ -294,6 +315,49 @@ export function DatasetsPage() {
     onError: (error) => setActionError(String(error)),
   });
 
+  const saveLiveSource = useMutation({
+    mutationFn: () =>
+      createLiveSource({
+        name: liveSourceName.trim(),
+        paths: liveSourcePaths,
+        includeArchives: liveSourceArchives,
+      }),
+    onSuccess: async () => {
+      setActionError("");
+      setLiveDialogOpen(false);
+      setLiveSourceName("");
+      setLiveSourcePaths([]);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["live-sources"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+      ]);
+    },
+    onError: (error) => setActionError(String(error)),
+  });
+
+  const removeLiveSource = useMutation({
+    mutationFn: (id: string) => deleteLiveSource(id),
+    onSuccess: async () => {
+      setActionError("");
+      setLiveSourceToRemove(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["live-sources"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+      ]);
+    },
+    onError: (error) => setActionError(String(error)),
+  });
+
+  async function chooseLiveSource(kind: "files" | "folder") {
+    const paths = await selectDirectSearchSources(kind);
+    const firstPath = paths[0];
+    if (!firstPath) return;
+    setActionError("");
+    setLiveSourcePaths(paths);
+    setLiveSourceName(sourceNameFromPath(firstPath, paths.length));
+    setLiveDialogOpen(true);
+  }
+
   async function continueDataset(dataset: DatasetSummary) {
     setResumingDatasetId(dataset.id);
     try {
@@ -378,10 +442,10 @@ export function DatasetsPage() {
       <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2">
         <DashboardCard className="min-h-56">
           <CardHeader>
-            <CardTitle>Live scan</CardTitle>
+            <CardTitle>Saved Live sources</CardTitle>
             <CardDescription>
-              Search huge files and compressed archives immediately. Nothing is
-              imported, extracted, or added to the workspace.
+              Register huge files or folders once, then search them anytime
+              without building an index.
             </CardDescription>
             <CardAction>
               <Badge>Recommended</Badge>
@@ -391,22 +455,31 @@ export function DatasetsPage() {
             <div className="flex flex-wrap gap-2">
               <Badge variant="outline">TXT · ZIP · RAR · GZIP</Badge>
               <Badge variant="outline">HDD friendly</Badge>
-              <Badge variant="outline">One-time lookup</Badge>
+              <Badge variant="outline">No extraction</Badge>
             </div>
             <Separator />
-            <div className="mt-auto flex items-center justify-between gap-3">
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-3">
               <span className="text-xs text-muted-foreground">
-                Choose a source and query, then scan without creating an index.
+                Source files stay untouched. Removing a saved source only
+                removes its local catalog entry.
               </span>
-              <Button
-                nativeButton={false}
-                render={<a href="#/search?surface=direct" />}
-                size="sm"
-              >
-                <FileSearchIcon data-icon="inline-start" />
-                Start live scan
-                <ArrowRightIcon data-icon="inline-end" />
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => void chooseLiveSource("folder")}
+                  size="sm"
+                  variant="outline"
+                >
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Save folder
+                </Button>
+                <Button
+                  onClick={() => void chooseLiveSource("files")}
+                  size="sm"
+                >
+                  <FileSearchIcon data-icon="inline-start" />
+                  Save files
+                </Button>
+              </div>
             </div>
           </CardContent>
         </DashboardCard>
@@ -533,27 +606,88 @@ export function DatasetsPage() {
 
         <DashboardCard className="gap-0 lg:col-span-4">
           <CardHeader className="border-b">
-            <CardTitle>Local datasets</CardTitle>
+            <CardTitle>Search sources</CardTitle>
             <CardDescription>
-              {datasets.data?.length ?? 0} sources registered in this workspace.
+              {(datasets.data?.length ?? 0) + (liveSources.data?.length ?? 0)}{" "}
+              reusable sources registered in this workspace.
             </CardDescription>
           </CardHeader>
           <CardContent className="px-0">
-            {datasets.data?.length ? (
-              <Table>
+            {datasets.data?.length || liveSources.data?.length ? (
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="ps-6">Dataset</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Files</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Records</TableHead>
-                    <TableHead>Last indexed</TableHead>
-                    <TableHead className="pe-6 text-right">Action</TableHead>
+                    <TableHead className="w-20 ps-6">Type</TableHead>
+                    <TableHead className="w-1/3">Source</TableHead>
+                    <TableHead className="w-24">Status</TableHead>
+                    <TableHead className="w-16">Files</TableHead>
+                    <TableHead className="w-24">Size</TableHead>
+                    <TableHead className="w-24">Records</TableHead>
+                    <TableHead className="hidden 2xl:table-cell">
+                      Updated
+                    </TableHead>
+                    <TableHead className="w-28 pe-6 text-right">
+                      Action
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {datasets.data.map((dataset) => {
+                  {(liveSources.data ?? []).map((source) => (
+                    <TableRow key={source.id}>
+                      <TableCell className="ps-6">
+                        <Badge>Live</Badge>
+                      </TableCell>
+                      <TableCell className="min-w-0 whitespace-normal">
+                        <p className="truncate font-medium">{source.name}</p>
+                        <p className="truncate font-mono text-xs text-muted-foreground">
+                          {source.paths[0]}
+                          {source.paths.length > 1
+                            ? ` + ${source.paths.length - 1} more`
+                            : ""}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">On demand</Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {source.paths.length}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        —
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        —
+                      </TableCell>
+                      <TableCell className="hidden text-xs text-muted-foreground 2xl:table-cell">
+                        {formatDateTime(source.createdAt)}
+                      </TableCell>
+                      <TableCell className="w-28 pe-6 text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            nativeButton={false}
+                            render={
+                              <a
+                                href={`#/search?source=${encodeURIComponent(`live:${source.id}`)}`}
+                              />
+                            }
+                            size="sm"
+                            variant="ghost"
+                          >
+                            Search
+                          </Button>
+                          <Button
+                            aria-label={`Remove ${source.name}`}
+                            onClick={() => setLiveSourceToRemove(source)}
+                            size="icon-sm"
+                            variant="ghost"
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {(datasets.data ?? []).map((dataset) => {
                     const resumable = [
                       "cancelled",
                       "interrupted",
@@ -562,8 +696,11 @@ export function DatasetsPage() {
                     ].includes(dataset.status);
                     return (
                       <TableRow key={dataset.id}>
-                        <TableCell className="max-w-72 truncate ps-6 font-medium">
-                          {dataset.name}
+                        <TableCell className="ps-6">
+                          <Badge variant="outline">Index</Badge>
+                        </TableCell>
+                        <TableCell className="min-w-0 whitespace-normal">
+                          <p className="truncate font-medium">{dataset.name}</p>
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline">{dataset.status}</Badge>
@@ -577,10 +714,10 @@ export function DatasetsPage() {
                         <TableCell className="font-mono text-xs tabular-nums">
                           {formatCount(dataset.recordCount)}
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
+                        <TableCell className="hidden text-xs text-muted-foreground 2xl:table-cell">
                           {formatDateTime(dataset.lastIndexedAt)}
                         </TableCell>
-                        <TableCell className="pe-6 text-right">
+                        <TableCell className="w-28 pe-6 text-right">
                           <div className="flex justify-end gap-1">
                             {resumable ? (
                               <Button
@@ -603,7 +740,7 @@ export function DatasetsPage() {
                                 nativeButton={false}
                                 render={
                                   <a
-                                    href={`#/search?dataset=${encodeURIComponent(dataset.id)}`}
+                                    href={`#/search?source=${encodeURIComponent(`index:${dataset.id}`)}`}
                                   />
                                 }
                                 size="sm"
@@ -634,10 +771,10 @@ export function DatasetsPage() {
                   <EmptyMedia variant="icon">
                     <UploadIcon />
                   </EmptyMedia>
-                  <EmptyTitle>No datasets</EmptyTitle>
+                  <EmptyTitle>No search sources</EmptyTitle>
                   <EmptyDescription>
-                    Index a source for fast repeated lookup, or scan files once
-                    without adding them.
+                    Save a huge source for on-demand scans, or build a
+                    persistent index for repeated lookup.
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
@@ -646,13 +783,12 @@ export function DatasetsPage() {
                     Choose files
                   </Button>
                   <Button
-                    nativeButton={false}
-                    render={<a href="#/search?surface=direct" />}
+                    onClick={() => void chooseLiveSource("files")}
                     size="sm"
                     variant="outline"
                   >
                     <FileSearchIcon data-icon="inline-start" />
-                    Scan without indexing
+                    Save Live source
                   </Button>
                 </EmptyContent>
               </Empty>
@@ -660,6 +796,96 @@ export function DatasetsPage() {
           </CardContent>
         </DashboardCard>
       </div>
+
+      <Dialog onOpenChange={setLiveDialogOpen} open={liveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save Live source</DialogTitle>
+            <DialogDescription>
+              Keep these locations in the workspace so every future search can
+              scan them without choosing the files again.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="live-source-name">Name</FieldLabel>
+              <Input
+                autoFocus
+                id="live-source-name"
+                onChange={(event) => setLiveSourceName(event.target.value)}
+                value={liveSourceName}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Locations</FieldLabel>
+              <div className="flex max-h-40 flex-col gap-2 overflow-y-auto border p-3">
+                {liveSourcePaths.map((path) => (
+                  <div className="flex min-w-0 items-center gap-2" key={path}>
+                    <FileSearchIcon className="shrink-0" />
+                    <span className="min-w-0 truncate font-mono text-xs">
+                      {path}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  onClick={() => void chooseLiveSource("folder")}
+                  size="sm"
+                  variant="outline"
+                >
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Choose folder
+                </Button>
+                <Button
+                  onClick={() => void chooseLiveSource("files")}
+                  size="sm"
+                  variant="outline"
+                >
+                  <FileSearchIcon data-icon="inline-start" />
+                  Choose files
+                </Button>
+              </div>
+            </Field>
+            <Field orientation="horizontal">
+              <div>
+                <FieldLabel>Include compressed archives</FieldLabel>
+                <p className="text-xs text-muted-foreground">
+                  Stream ZIP, RAR, and GZIP entries without extracting them.
+                </p>
+              </div>
+              <Switch
+                checked={liveSourceArchives}
+                onCheckedChange={setLiveSourceArchives}
+              />
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button
+              disabled={saveLiveSource.isPending}
+              onClick={() => setLiveDialogOpen(false)}
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                !liveSourceName.trim() ||
+                !liveSourcePaths.length ||
+                saveLiveSource.isPending
+              }
+              onClick={() => saveLiveSource.mutate()}
+            >
+              {saveLiveSource.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <ArchiveIcon data-icon="inline-start" />
+              )}
+              {saveLiveSource.isPending ? "Saving…" : "Save source"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog onOpenChange={setDialogOpen} open={dialogOpen}>
         <DialogContent className="sm:max-w-3xl">
@@ -683,14 +909,15 @@ export function DatasetsPage() {
                   </AlertDescription>
                   <div className="col-start-2 mt-2">
                     <Button
-                      nativeButton={false}
-                      onClick={() => setDialogOpen(false)}
-                      render={<a href="#/search?surface=direct" />}
+                      onClick={() => {
+                        setDialogOpen(false);
+                        void chooseLiveSource("folder");
+                      }}
                       size="sm"
                       variant="outline"
                     >
                       <FileSearchIcon data-icon="inline-start" />
-                      Switch to live scan
+                      Save a Live source
                     </Button>
                   </div>
                 </Alert>
@@ -872,6 +1099,49 @@ export function DatasetsPage() {
                 <Trash2Icon data-icon="inline-start" />
               )}
               {remove.isPending ? "Removing…" : "Remove dataset"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        onOpenChange={(open) => {
+          if (!open && !removeLiveSource.isPending) {
+            setLiveSourceToRemove(null);
+          }
+        }}
+        open={Boolean(liveSourceToRemove)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2Icon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Remove this Live source?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Aletheia will forget “{liveSourceToRemove?.name}”. The original
+              files and archives will not be changed or deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removeLiveSource.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={removeLiveSource.isPending || !liveSourceToRemove}
+              onClick={() => {
+                if (liveSourceToRemove) {
+                  removeLiveSource.mutate(liveSourceToRemove.id);
+                }
+              }}
+              variant="destructive"
+            >
+              {removeLiveSource.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Trash2Icon data-icon="inline-start" />
+              )}
+              {removeLiveSource.isPending ? "Removing…" : "Remove source"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

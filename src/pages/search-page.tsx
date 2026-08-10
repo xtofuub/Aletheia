@@ -5,7 +5,7 @@ import {
   ChevronDownIcon,
   DatabaseIcon,
   FileSearchIcon,
-  FolderOpenIcon,
+  FolderCogIcon,
   PauseIcon,
   PlayIcon,
   SaveIcon,
@@ -21,8 +21,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  CardContent,
   CardAction,
+  CardContent,
   CardDescription,
   CardFooter,
   CardHeader,
@@ -50,19 +50,11 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-  FieldTitle,
-} from "@/components/ui/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   InputGroup,
   InputGroupAddon,
-  InputGroupInput,
   InputGroupText,
   InputGroupTextarea,
 } from "@/components/ui/input-group";
@@ -76,6 +68,8 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -89,20 +83,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
   cancelDirectSearch,
   exportRecords,
   listDatasets,
+  listLiveSources,
   pauseDirectSearch,
   resumeDirectSearch,
   saveSearch,
   searchRecords,
-  selectDirectSearchSources,
   selectExportDestination,
   startDirectSearch,
   type FieldType,
+  type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
 import { formatBytes, formatDuration } from "@/lib/format";
@@ -156,98 +150,198 @@ function detectQueryKind(value: string) {
   return "Text";
 }
 
-function parseDirectQueries(value: string) {
+function parseQueries(value: string) {
   return [
     ...new Set(
       value
         .split(/\r?\n/)
-        .map((query) => query.trim())
+        .map((item) => item.trim())
         .filter(Boolean),
     ),
   ];
 }
 
+function indexedSourceKey(datasetId: string) {
+  return `index:${datasetId}`;
+}
+
+function liveSourceKey(sourceId: string) {
+  return `live:${sourceId}`;
+}
+
 export function SearchPage({
   initialQuery = "",
-  initialDatasetId = "all",
-  initialSurface = "index",
+  initialSource = "index:all",
+  initialMode = "contains",
+  initialField = "all",
 }: {
   initialQuery?: string;
-  initialDatasetId?: string;
-  initialSurface?: "index" | "direct";
+  initialSource?: string;
+  initialMode?: SearchMode;
+  initialField?: string;
 }) {
-  const [surface, setSurface] = useState<"index" | "direct">(initialSurface);
   const [query, setQuery] = useState(initialQuery);
+  const [sourceKey, setSourceKey] = useState(initialSource);
   const [submittedQuery, setSubmittedQuery] = useState(initialQuery);
-  const [mode, setMode] = useState<SearchMode>("contains");
-  const [field, setField] = useState("all");
-  const [datasetId, setDatasetId] = useState(initialDatasetId);
+  const [submittedSourceKey, setSubmittedSourceKey] = useState(initialSource);
+  const [mode, setMode] = useState<SearchMode>(initialMode);
+  const [submittedMode, setSubmittedMode] = useState<SearchMode>(initialMode);
+  const [field, setField] = useState(initialField);
+  const [submittedField, setSubmittedField] = useState(initialField);
   const [offset, setOffset] = useState(0);
   const [limit, setLimit] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saveName, setSaveName] = useState("");
   const [notice, setNotice] = useState("");
-  const [sourcePaths, setSourcePaths] = useState<string[]>([]);
-  const [directQuery, setDirectQuery] = useState("");
-  const [directMode, setDirectMode] = useState<SearchMode>("contains");
-  const [includeArchives, setIncludeArchives] = useState(true);
-  const [directWorkerLimit, setDirectWorkerLimit] = useState(1);
-  const [directMaxResults, setDirectMaxResults] = useState(2_000);
+  const [includeArchivesOverride, setIncludeArchivesOverride] = useState<
+    boolean | null
+  >(null);
+  const [workerLimit, setWorkerLimit] = useState(1);
+  const [maxResults, setMaxResults] = useState(2_000);
   const [directOffset, setDirectOffset] = useState(0);
   const [directError, setDirectError] = useState("");
+  const [directSourceId, setDirectSourceId] = useState<string | null>(null);
   const { begin: beginDirectSearch, progress: directProgress } =
     useDirectSearchProgress();
   const queryClient = useQueryClient();
 
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
+  const liveSources = useQuery({
+    queryKey: ["live-sources"],
+    queryFn: listLiveSources,
+  });
+  const selectedLiveSource = useMemo(
+    () =>
+      (liveSources.data ?? []).find(
+        (source) => liveSourceKey(source.id) === sourceKey,
+      ) ?? null,
+    [liveSources.data, sourceKey],
+  );
+  const isLive = sourceKey.startsWith("live:");
+  const submittedDatasetId = submittedSourceKey.startsWith("index:")
+    ? submittedSourceKey.slice("index:".length)
+    : "all";
   const indexed = useQuery({
-    queryKey: ["search", submittedQuery, mode, field, datasetId, offset, limit],
+    queryKey: [
+      "search",
+      submittedQuery,
+      submittedMode,
+      submittedField,
+      submittedDatasetId,
+      offset,
+      limit,
+    ],
     queryFn: () =>
       searchRecords({
         query: submittedQuery,
-        mode,
-        datasetId: datasetId === "all" ? null : datasetId,
-        fieldType: field === "all" ? null : (field as FieldType),
+        mode: submittedMode,
+        datasetId: submittedDatasetId === "all" ? null : submittedDatasetId,
+        fieldType:
+          submittedField === "all" ? null : (submittedField as FieldType),
         offset,
         limit,
       }),
-    enabled: submittedQuery.trim().length > 0,
+    enabled:
+      submittedQuery.trim().length > 0 &&
+      submittedSourceKey.startsWith("index:"),
   });
 
   const directSearch = useMutation({
-    mutationFn: () =>
+    mutationFn: ({
+      source,
+      value,
+    }: {
+      source: LiveSourceSummary;
+      value: string;
+    }) =>
       startDirectSearch({
-        paths: sourcePaths,
-        query: directQuery.trim(),
-        mode: directMode,
+        paths: source.paths,
+        query: value,
+        mode,
         caseSensitive: false,
-        includeArchives,
-        maxResults: directMaxResults,
-        workerLimit: directWorkerLimit,
+        includeArchives: includeArchivesOverride ?? source.includeArchives,
+        maxResults,
+        workerLimit,
       }),
-    onSuccess: (start) => {
+    onSuccess: (start, variables) => {
       setDirectError("");
+      setDirectSourceId(variables.source.id);
       beginDirectSearch(start);
     },
     onError: (error) => setDirectError(String(error)),
   });
 
-  const datasetItems = useMemo(
+  const indexedItems = useMemo(
     () => [
-      { label: "All datasets", value: "all" },
+      { label: "All indexed datasets", value: "index:all" },
       ...(datasets.data ?? []).map((dataset) => ({
         label: dataset.name,
-        value: dataset.id,
+        value: indexedSourceKey(dataset.id),
       })),
     ],
     [datasets.data],
   );
+  const liveItems = useMemo(
+    () =>
+      (liveSources.data ?? []).map((source) => ({
+        label: source.name,
+        value: liveSourceKey(source.id),
+      })),
+    [liveSources.data],
+  );
+  const sourceItems = useMemo(
+    () => [...indexedItems, ...liveItems],
+    [indexedItems, liveItems],
+  );
+  const queries = parseQueries(query);
+  const queryKind =
+    queries.length > 1 ? "Batch" : detectQueryKind(queries[0] ?? "");
+  const currentLiveProgress =
+    selectedLiveSource?.id === directSourceId ? directProgress : null;
+  const directPercent = currentLiveProgress?.totalBytes
+    ? Math.min(
+        100,
+        (currentLiveProgress.sourceBytesScanned /
+          currentLiveProgress.totalBytes) *
+          100,
+      )
+    : 0;
+  const visibleDirectHits = (currentLiveProgress?.hits ?? []).slice(
+    directOffset,
+    directOffset + limit,
+  );
+  const hits = indexed.data?.hits ?? [];
+  const allVisibleSelected =
+    hits.length > 0 && hits.every((hit) => selected.has(hit.recordId));
+  const liveBusy =
+    directSearch.isPending ||
+    ["running", "paused"].includes(currentLiveProgress?.status ?? "");
 
   function submitSearch() {
     const value = query.trim();
     if (!value) return;
+    setNotice("");
+    setDirectError("");
     setOffset(0);
+    setDirectOffset(0);
     setSelected(new Set());
+    if (isLive) {
+      if (!selectedLiveSource) {
+        setDirectError("Choose a saved Live source first.");
+        return;
+      }
+      directSearch.mutate({ source: selectedLiveSource, value });
+      return;
+    }
+    if (queries.length > 1) {
+      setDirectError(
+        "Indexed sources accept one query at a time. Choose a Live source to scan a batch.",
+      );
+      return;
+    }
+    setSubmittedSourceKey(sourceKey);
+    setSubmittedMode(mode);
+    setSubmittedField(field);
     setSubmittedQuery(value);
   }
 
@@ -265,133 +359,162 @@ export function SearchPage({
     await queryClient.invalidateQueries({ queryKey: ["exports"] });
   }
 
-  const hits = indexed.data?.hits ?? [];
-  const allVisibleSelected =
-    hits.length > 0 && hits.every((hit) => selected.has(hit.recordId));
-  const directPercent = directProgress?.totalBytes
-    ? Math.min(
-        100,
-        (directProgress.sourceBytesScanned / directProgress.totalBytes) * 100,
-      )
-    : 0;
-  const visibleDirectHits = (directProgress?.hits ?? []).slice(
-    directOffset,
-    directOffset + limit,
-  );
-  const indexedQueryKind = detectQueryKind(query);
-  const directQueries = parseDirectQueries(directQuery);
-  const directQueryKind =
-    directQueries.length > 1
-      ? "Batch"
-      : detectQueryKind(directQueries[0] ?? "");
+  const selectedSourceDescription = isLive
+    ? selectedLiveSource
+      ? `${selectedLiveSource.paths.length} saved ${
+          selectedLiveSource.paths.length === 1 ? "location" : "locations"
+        } · scans source files on demand`
+      : "Add a Live source on the Datasets page."
+    : sourceKey === "index:all"
+      ? "Fast lookup across every persistent index."
+      : "Fast lookup inside one persistent index.";
 
   return (
     <div>
       <PageHeader
-        description="Choose fast indexed lookup or a one-time scan of local files and archives."
+        description="Search a persistent index or scan a saved large source from the same place."
         title="Search"
       />
-      <Tabs
-        onValueChange={(value) => setSurface(value as "index" | "direct")}
-        value={surface}
-      >
-        <TabsList className="grid h-auto w-full grid-cols-1 gap-px rounded-none bg-border p-px group-data-horizontal/tabs:h-auto sm:grid-cols-2">
-          <TabsTrigger
-            className="h-auto min-w-0 items-start justify-start rounded-none bg-background p-4 text-left whitespace-normal data-active:bg-card"
-            value="index"
-          >
-            <DatabaseIcon />
-            <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-              <span>Indexed search</span>
-              <span className="text-xs font-normal text-muted-foreground">
-                Repeated lookup across smaller datasets you added.
-              </span>
-            </span>
-            <Badge variant="outline">Fast</Badge>
-          </TabsTrigger>
-          <TabsTrigger
-            className="h-auto min-w-0 items-start justify-start rounded-none bg-background p-4 text-left whitespace-normal data-active:bg-card"
-            value="direct"
-          >
-            <FileSearchIcon />
-            <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
-              <span>Live scan for large files</span>
-              <span className="text-xs font-normal text-muted-foreground">
-                Search TXT, ZIP, RAR, and GZIP without indexing first.
-              </span>
-            </span>
-            <Badge>Recommended for huge files</Badge>
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="index">
-          <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-4">
-            <DashboardCard className="lg:col-span-4">
-              <CardHeader>
-                <CardTitle>Indexed search</CardTitle>
-                <CardDescription>
-                  Searches the persistent local index. Best for repeated lookup.
-                </CardDescription>
-                <CardAction>
-                  <Badge variant="outline">Fast repeat lookup</Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent>
-                <form
-                  className="flex flex-col gap-3"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    submitSearch();
-                  }}
-                >
-                  <InputGroup>
-                    <InputGroupAddon>
-                      <SearchIcon />
-                    </InputGroupAddon>
-                    <InputGroupInput
-                      aria-label="Search query"
-                      autoFocus
-                      onChange={(event) => setQuery(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          submitSearch();
-                        }
-                      }}
-                      placeholder="Name, email, domain, username, phone, IP, or URL"
-                      value={query}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <Button
-                        disabled={indexed.isFetching}
-                        size="sm"
-                        type="submit"
-                      >
-                        {indexed.isFetching ? (
-                          <Spinner data-icon="inline-start" />
-                        ) : null}
-                        {indexed.isFetching ? "Searching…" : "Search"}
-                      </Button>
-                    </InputGroupAddon>
-                  </InputGroup>
-                  <div className="flex flex-wrap gap-2">
-                    <Select
-                      items={modeItems}
-                      onValueChange={(value) => setMode(value as SearchMode)}
-                      value={mode}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
+      <div className="flex flex-col gap-px bg-border p-px">
+        <DashboardCard className="gap-0">
+          <CardHeader className="border-b">
+            <CardTitle>Search workspace</CardTitle>
+            <CardDescription>{selectedSourceDescription}</CardDescription>
+            <CardAction>
+              <Badge variant={isLive ? "default" : "outline"}>
+                {isLive ? (
+                  <FileSearchIcon data-icon="inline-start" />
+                ) : (
+                  <DatabaseIcon data-icon="inline-start" />
+                )}
+                {isLive ? "Live source" : "Indexed"}
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4 p-4">
+            <form
+              className="flex flex-col gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitSearch();
+              }}
+            >
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(15rem,0.55fr)_minmax(0,1fr)]">
+                <Field>
+                  <FieldLabel>Search source</FieldLabel>
+                  <Select
+                    items={sourceItems}
+                    onValueChange={(value) => {
+                      setSourceKey(String(value));
+                      setIncludeArchivesOverride(null);
+                      setDirectError("");
+                    }}
+                    value={sourceKey}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Choose a search source" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectLabel>Persistent indexes</SelectLabel>
+                        {indexedItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            <DatabaseIcon />
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                      {liveItems.length ? <SelectSeparator /> : null}
+                      {liveItems.length ? (
                         <SelectGroup>
-                          {modeItems.map((item) => (
+                          <SelectLabel>Saved Live sources</SelectLabel>
+                          {liveItems.map((item) => (
                             <SelectItem key={item.value} value={item.value}>
+                              <FileSearchIcon />
                               {item.label}
                             </SelectItem>
                           ))}
                         </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                      ) : null}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="workspace-search-query">
+                    Query
+                  </FieldLabel>
+                  <InputGroup>
+                    <InputGroupTextarea
+                      aria-label="Search query"
+                      autoFocus
+                      id="workspace-search-query"
+                      onChange={(event) => setQuery(event.target.value)}
+                      placeholder={
+                        isLive
+                          ? "Search one value, or paste up to 512 values with one per line"
+                          : "Name, email, domain, username, phone, IP, or URL"
+                      }
+                      rows={1}
+                      value={query}
+                    />
+                    <InputGroupAddon align="inline-end">
+                      <Button
+                        disabled={
+                          !query.trim() ||
+                          directSearch.isPending ||
+                          currentLiveProgress?.status === "running" ||
+                          indexed.isFetching
+                        }
+                        size="sm"
+                        type="submit"
+                      >
+                        {directSearch.isPending || indexed.isFetching ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <SearchIcon data-icon="inline-start" />
+                        )}
+                        {directSearch.isPending || indexed.isFetching
+                          ? "Searching…"
+                          : "Search"}
+                      </Button>
+                    </InputGroupAddon>
+                    <InputGroupAddon align="block-end" className="border-t">
+                      <InputGroupText>
+                        {queries.length || 0}{" "}
+                        {queries.length === 1 ? "value" : "values"}
+                      </InputGroupText>
+                      {queryKind ? (
+                        <Badge variant="secondary">{queryKind}</Badge>
+                      ) : null}
+                    </InputGroupAddon>
+                  </InputGroup>
+                </Field>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <Field className="w-auto">
+                  <FieldLabel className="sr-only">Match mode</FieldLabel>
+                  <Select
+                    items={modeItems}
+                    onValueChange={(value) => setMode(value as SearchMode)}
+                    value={mode}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {modeItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                {!isLive ? (
+                  <Field className="w-auto">
+                    <FieldLabel className="sr-only">Search field</FieldLabel>
                     <Select
                       items={fieldItems}
                       onValueChange={(value) => setField(String(value))}
@@ -410,515 +533,163 @@ export function SearchPage({
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <Select
-                      items={datasetItems}
-                      onValueChange={(value) => setDatasetId(String(value))}
-                      value={datasetId}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {datasetItems.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <Select
-                      items={pageItems}
-                      onValueChange={(value) => {
-                        setLimit(Number(value));
-                        setOffset(0);
-                      }}
-                      value={String(limit)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {pageItems.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {indexedQueryKind ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary">
-                        Detected: {indexedQueryKind}
-                      </Badge>
-                      <p className="text-xs text-muted-foreground">
-                        Any safe field is enough. Narrow the field only when you
-                        need fewer matches.
-                      </p>
-                    </div>
-                  ) : null}
-                </form>
-              </CardContent>
-            </DashboardCard>
-
-            <DashboardCard className="gap-0 lg:col-span-4">
-              <CardHeader className="border-b">
-                <CardTitle>Results</CardTitle>
-                <CardDescription>
-                  {indexed.data
-                    ? `${indexed.data.total.toLocaleString()} matches`
-                    : "Search to load local evidence."}
-                </CardDescription>
-                {indexed.isFetching ? (
-                  <CardAction>
-                    <Badge variant="outline">
-                      <Spinner />
-                      Searching local index
-                    </Badge>
-                  </CardAction>
+                  </Field>
                 ) : null}
-              </CardHeader>
-              <CardContent className="px-0">
-                {hits.length ? (
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10 ps-4">
-                          <Checkbox
-                            aria-label="Select visible results"
-                            checked={allVisibleSelected}
-                            onCheckedChange={(checked) => {
-                              setSelected((current) => {
-                                const next = new Set(current);
-                                hits.forEach((hit) =>
-                                  checked
-                                    ? next.add(hit.recordId)
-                                    : next.delete(hit.recordId),
-                                );
-                                return next;
-                              });
-                            }}
-                          />
-                        </TableHead>
-                        <TableHead className="w-5/12">Evidence</TableHead>
-                        <TableHead className="w-1/6">Dataset</TableHead>
-                        <TableHead className="w-1/4">Source</TableHead>
-                        <TableHead className="pe-4">Match</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {hits.map((hit) => (
-                        <TableRow key={hit.recordId}>
-                          <TableCell className="ps-4">
-                            <Checkbox
-                              aria-label={`Select ${hit.recordId}`}
-                              checked={selected.has(hit.recordId)}
-                              onCheckedChange={(checked) =>
-                                setSelected((current) => {
-                                  const next = new Set(current);
-                                  if (checked) next.add(hit.recordId);
-                                  else next.delete(hit.recordId);
-                                  return next;
-                                })
-                              }
-                            />
-                          </TableCell>
-                          <TableCell className="min-w-0 whitespace-normal">
-                            <div className="flex flex-wrap gap-1">
-                              {hit.fields.slice(0, 6).map((item) => (
-                                <Badge
-                                  className="h-auto max-w-full min-w-0 whitespace-normal"
-                                  data-slot="search-field-value"
-                                  key={`${hit.recordId}-${item.name}`}
-                                  variant={
-                                    item.sensitive ? "secondary" : "outline"
-                                  }
-                                >
-                                  <span className="shrink-0">{item.name}:</span>
-                                  <span className="min-w-0 break-all text-left">
-                                    {formatSearchDisplay(item.displayValue)}
-                                  </span>
-                                </Badge>
-                              ))}
-                            </div>
-                          </TableCell>
-                          <TableCell className="min-w-0 whitespace-normal">
-                            <p className="break-all">{hit.datasetName}</p>
-                          </TableCell>
-                          <TableCell className="min-w-0 whitespace-normal">
-                            <p className="break-all text-xs">
-                              {hit.sourceFile}
-                            </p>
-                            <p className="break-all font-mono text-xs text-muted-foreground">
-                              {hit.sourceLocation}
-                            </p>
-                          </TableCell>
-                          <TableCell className="pe-4 text-xs break-words whitespace-normal text-muted-foreground">
-                            {hit.matchReason}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <Empty className="min-h-72 rounded-none border-0">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        {indexed.isFetching ? <Spinner /> : <SearchIcon />}
-                      </EmptyMedia>
-                      <EmptyTitle>
-                        {indexed.isFetching
-                          ? "Searching"
-                          : submittedQuery
-                            ? "No matches"
-                            : "Search the index"}
-                      </EmptyTitle>
-                      <EmptyDescription>
-                        Enter a value to search the local index.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </CardContent>
-              {indexed.data ? (
-                <PaginationControls
-                  label="search results"
-                  limit={limit}
-                  offset={offset}
-                  onOffsetChange={setOffset}
-                  total={indexed.data.total}
-                />
-              ) : null}
-              <CardFooter className="justify-between gap-2 rounded-none bg-background">
-                <p className="text-xs text-muted-foreground">
-                  {notice || `${selected.size} selected`}
-                </p>
-                <div className="flex gap-2">
-                  <Dialog>
-                    <DialogTrigger
-                      render={
-                        <Button
-                          disabled={!submittedQuery}
-                          size="sm"
-                          variant="outline"
-                        />
-                      }
-                    >
-                      <SaveIcon data-icon="inline-start" />
-                      Save view
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Save search view</DialogTitle>
-                        <DialogDescription>
-                          Store this query and its current filters locally.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <FieldGroup>
-                        <Field>
-                          <FieldLabel htmlFor="saved-search-name">
-                            Name
-                          </FieldLabel>
-                          <Input
-                            id="saved-search-name"
-                            onChange={(event) =>
-                              setSaveName(event.target.value)
-                            }
-                            value={saveName}
-                          />
-                        </Field>
-                      </FieldGroup>
-                      <DialogFooter>
-                        <Button
-                          disabled={!saveName.trim()}
-                          onClick={() =>
-                            void saveSearch(
-                              saveName.trim(),
-                              submittedQuery,
-                              JSON.stringify({ mode, field, datasetId }),
-                            ).then(() => {
-                              setNotice("Saved view created.");
-                              setSaveName("");
-                              void queryClient.invalidateQueries({
-                                queryKey: ["saved-searches"],
-                              });
-                            })
-                          }
-                        >
-                          Save
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                  <Button
-                    disabled={!selected.size}
-                    onClick={() => void exportSelected()}
-                    size="sm"
+                <Field className="w-auto">
+                  <FieldLabel className="sr-only">Page size</FieldLabel>
+                  <Select
+                    items={pageItems}
+                    onValueChange={(value) => {
+                      setLimit(Number(value));
+                      setOffset(0);
+                      setDirectOffset(0);
+                    }}
+                    value={String(limit)}
                   >
-                    Export selected
-                  </Button>
-                </div>
-              </CardFooter>
-            </DashboardCard>
-          </div>
-        </TabsContent>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {pageItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Button
+                  className="ms-auto"
+                  nativeButton={false}
+                  render={<a href="#/datasets" />}
+                  size="sm"
+                  variant="ghost"
+                >
+                  <FolderCogIcon data-icon="inline-start" />
+                  Manage sources
+                </Button>
+              </div>
+            </form>
 
-        <TabsContent value="direct">
-          <div className="flex flex-col gap-px bg-border p-px">
-            <DashboardCard className="gap-0">
-              <CardHeader className="border-b">
-                <CardTitle>Direct file scan</CardTitle>
-                <CardDescription>
-                  Stream files and compressed archives without adding a dataset
-                  or extracting them to disk.
-                </CardDescription>
-                <CardAction>
-                  <Badge variant="outline">
-                    {directProgress?.status === "paused"
-                      ? `Paused at ${directPercent.toFixed(0)}%`
-                      : directProgress?.status === "running"
-                        ? `${directPercent.toFixed(0)}% scanned`
-                        : "No index created"}
-                  </Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)]">
-                <div className="flex flex-col gap-3 bg-background p-4">
-                  <FieldGroup>
+            {isLive ? (
+              <Collapsible>
+                <CollapsibleTrigger
+                  render={<Button size="sm" variant="ghost" />}
+                >
+                  <SlidersHorizontalIcon data-icon="inline-start" />
+                  Live scan options
+                  <ChevronDownIcon data-icon="inline-end" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="pt-3">
+                  <div className="grid grid-cols-1 gap-3 border p-3 sm:grid-cols-3">
                     <Field>
-                      <FieldLabel>1. Choose files or a folder</FieldLabel>
-                      <div className="min-h-24 border bg-card p-3">
-                        {sourcePaths.length ? (
-                          <div className="flex flex-col gap-2">
-                            {sourcePaths.map((path) => (
-                              <div
-                                className="flex items-center gap-2"
-                                key={path}
-                              >
-                                <FileSearchIcon />
-                                <span className="min-w-0 truncate font-mono text-xs">
-                                  {path}
-                                </span>
-                              </div>
+                      <FieldLabel>Worker limit</FieldLabel>
+                      <Select
+                        items={workerItems}
+                        onValueChange={(value) => setWorkerLimit(Number(value))}
+                        value={String(workerLimit)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {workerItems.map((item) => (
+                              <SelectItem key={item.value} value={item.value}>
+                                {item.label}
+                              </SelectItem>
                             ))}
-                          </div>
-                        ) : (
-                          <div className="flex min-h-16 items-center justify-center text-xs text-muted-foreground">
-                            Choose files or a folder to define the scan scope.
-                          </div>
-                        )}
-                      </div>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
                     </Field>
-                  </FieldGroup>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      onClick={() =>
-                        void selectDirectSearchSources("files").then(
-                          setSourcePaths,
-                        )
-                      }
-                      size="sm"
-                      variant="outline"
-                    >
-                      <ArchiveIcon data-icon="inline-start" />
-                      Choose files
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        void selectDirectSearchSources("folder").then(
-                          setSourcePaths,
-                        )
-                      }
-                      size="sm"
-                      variant="outline"
-                    >
-                      <FolderOpenIcon data-icon="inline-start" />
-                      Choose folder
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-4 bg-background p-4">
-                  <FieldGroup>
                     <Field>
-                      <FieldLabel htmlFor="direct-scan-query">
-                        2. Enter values
-                      </FieldLabel>
-                      <InputGroup>
-                        <InputGroupTextarea
-                          aria-label="Direct scan query"
-                          id="direct-scan-query"
-                          onChange={(event) =>
-                            setDirectQuery(event.target.value)
-                          }
-                          placeholder="One value, or paste up to 512 values with one per line"
-                          rows={3}
-                          value={directQuery}
-                        />
-                        <InputGroupAddon align="block-end" className="border-t">
-                          <SearchIcon />
-                          <InputGroupText>
-                            {directQueries.length || 0}{" "}
-                            {directQueries.length === 1 ? "value" : "values"}
-                          </InputGroupText>
-                          <Select
-                            items={modeItems}
-                            onValueChange={(value) =>
-                              setDirectMode(value as SearchMode)
-                            }
-                            value={directMode}
-                          >
-                            <SelectTrigger size="sm">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {modeItems.map((item) => (
-                                  <SelectItem
-                                    key={item.value}
-                                    value={item.value}
-                                  >
-                                    {item.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
-                        </InputGroupAddon>
-                      </InputGroup>
+                      <FieldLabel>Result cap</FieldLabel>
+                      <Select
+                        items={resultCapItems}
+                        onValueChange={(value) => setMaxResults(Number(value))}
+                        value={String(maxResults)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {resultCapItems.map((item) => (
+                              <SelectItem key={item.value} value={item.value}>
+                                {item.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
                     </Field>
-                  </FieldGroup>
-                  {directQueryKind ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="secondary">
-                        Detected: {directQueryKind}
-                      </Badge>
-                      <p className="text-xs text-muted-foreground">
-                        {directQueryKind === "Batch"
-                          ? "Every value is matched in one pass, avoiding repeated scans of the same huge source."
-                          : directQueryKind === "Name"
-                            ? "All name tokens can match across columns or email separators."
-                            : "Contains matching works best for unknown source formats."}
-                      </p>
-                    </div>
-                  ) : null}
-                  {directError ? (
-                    <Alert variant="destructive">
-                      <AlertTitle>Scan could not start</AlertTitle>
-                      <AlertDescription>{directError}</AlertDescription>
-                    </Alert>
-                  ) : null}
-                  <Collapsible>
-                    <CollapsibleTrigger
-                      render={<Button size="sm" variant="ghost" />}
-                    >
-                      <SlidersHorizontalIcon data-icon="inline-start" />
-                      Scan options
-                      <ChevronDownIcon data-icon="inline-end" />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="pt-3">
-                      <FieldGroup>
-                        <Field orientation="horizontal">
-                          <FieldContent>
-                            <FieldTitle>Include archive entries</FieldTitle>
-                            <FieldDescription>
-                              Stream ZIP, RAR, and GZIP content without
-                              extracting it to disk.
-                            </FieldDescription>
-                          </FieldContent>
-                          <Switch
-                            checked={includeArchives}
-                            onCheckedChange={setIncludeArchives}
-                          />
-                        </Field>
-                        <Field orientation="horizontal">
-                          <FieldContent>
-                            <FieldTitle>Worker limit</FieldTitle>
-                            <FieldDescription>
-                              Use one worker for a physical HDD. Extra workers
-                              can cause slower random seeking.
-                            </FieldDescription>
-                          </FieldContent>
-                          <Select
-                            items={workerItems}
-                            onValueChange={(value) =>
-                              setDirectWorkerLimit(Number(value))
-                            }
-                            value={String(directWorkerLimit)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {workerItems.map((item) => (
-                                  <SelectItem
-                                    key={item.value}
-                                    value={item.value}
-                                  >
-                                    {item.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
-                        </Field>
-                        <Field orientation="horizontal">
-                          <FieldContent>
-                            <FieldTitle>Result cap</FieldTitle>
-                            <FieldDescription>
-                              Stop collecting rows after this many matches.
-                            </FieldDescription>
-                          </FieldContent>
-                          <Select
-                            items={resultCapItems}
-                            onValueChange={(value) =>
-                              setDirectMaxResults(Number(value))
-                            }
-                            value={String(directMaxResults)}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {resultCapItems.map((item) => (
-                                  <SelectItem
-                                    key={item.value}
-                                    value={item.value}
-                                  >
-                                    {item.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
-                        </Field>
-                      </FieldGroup>
-                    </CollapsibleContent>
-                  </Collapsible>
-                  {directProgress ? (
-                    <Progress value={directPercent}>
-                      <ProgressLabel className="flex items-center gap-2">
-                        {directProgress.status === "running" ? (
-                          <Spinner />
-                        ) : null}
-                        {directProgress.message}
-                      </ProgressLabel>
-                      <ProgressValue>
-                        {() => `${directPercent.toFixed(0)}%`}
-                      </ProgressValue>
-                    </Progress>
-                  ) : null}
-                  <div className="flex justify-end gap-2">
-                    {directProgress?.status === "running" ? (
+                    <Field orientation="horizontal">
+                      <div>
+                        <FieldLabel>Archive entries</FieldLabel>
+                        <p className="text-xs text-muted-foreground">
+                          ZIP, RAR, and GZIP
+                        </p>
+                      </div>
+                      <Switch
+                        checked={
+                          includeArchivesOverride ??
+                          selectedLiveSource?.includeArchives ??
+                          true
+                        }
+                        onCheckedChange={setIncludeArchivesOverride}
+                      />
+                    </Field>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            ) : null}
+
+            {directError ? (
+              <Alert variant="destructive">
+                <AlertTitle>Search could not start</AlertTitle>
+                <AlertDescription>{directError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {isLive && currentLiveProgress ? (
+              <div className="flex flex-col gap-3 border p-3">
+                <Progress value={directPercent}>
+                  <ProgressLabel className="flex items-center gap-2">
+                    {currentLiveProgress.status === "running" ? (
+                      <Spinner />
+                    ) : null}
+                    {currentLiveProgress.message}
+                  </ProgressLabel>
+                  <ProgressValue>
+                    {() => `${directPercent.toFixed(0)}%`}
+                  </ProgressValue>
+                </Progress>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">
+                    {formatBytes(currentLiveProgress.bytesPerSecond)}/s
+                  </Badge>
+                  <Badge variant="outline">
+                    {currentLiveProgress.filesScanned.toLocaleString()} /{" "}
+                    {currentLiveProgress.sourceCount.toLocaleString()} files
+                  </Badge>
+                  <Badge variant="outline">
+                    {currentLiveProgress.matches.toLocaleString()} matches
+                  </Badge>
+                  <Badge variant="outline">
+                    {currentLiveProgress.status === "completed"
+                      ? "Done"
+                      : `${formatDuration(
+                          currentLiveProgress.estimatedRemainingMs,
+                        )} remaining`}
+                  </Badge>
+                  <div className="ms-auto flex gap-2">
+                    {currentLiveProgress.status === "running" ? (
                       <Button
                         onClick={() =>
-                          void pauseDirectSearch(directProgress.jobId)
+                          void pauseDirectSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"
@@ -927,10 +698,10 @@ export function SearchPage({
                         Pause
                       </Button>
                     ) : null}
-                    {directProgress?.status === "paused" ? (
+                    {currentLiveProgress.status === "paused" ? (
                       <Button
                         onClick={() =>
-                          void resumeDirectSearch(directProgress.jobId)
+                          void resumeDirectSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"
@@ -939,11 +710,12 @@ export function SearchPage({
                         Resume
                       </Button>
                     ) : null}
-                    {directProgress &&
-                    ["running", "paused"].includes(directProgress.status) ? (
+                    {["running", "paused"].includes(
+                      currentLiveProgress.status,
+                    ) ? (
                       <Button
                         onClick={() =>
-                          void cancelDirectSearch(directProgress.jobId)
+                          void cancelDirectSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"
@@ -952,152 +724,286 @@ export function SearchPage({
                         Cancel
                       </Button>
                     ) : null}
-                    <Button
-                      disabled={
-                        !sourcePaths.length ||
-                        !directQuery.trim() ||
-                        ["running", "paused"].includes(
-                          directProgress?.status ?? "",
-                        ) ||
-                        directSearch.isPending
-                      }
-                      onClick={() => {
-                        setDirectOffset(0);
-                        directSearch.mutate();
-                      }}
-                      size="sm"
-                    >
-                      {directSearch.isPending ? (
-                        <Spinner data-icon="inline-start" />
-                      ) : (
-                        <SearchIcon data-icon="inline-start" />
-                      )}
-                      {directSearch.isPending ? "Starting…" : "Start scan"}
-                    </Button>
                   </div>
                 </div>
-              </CardContent>
-            </DashboardCard>
+              </div>
+            ) : null}
+          </CardContent>
+        </DashboardCard>
 
-            <div className="grid grid-cols-2 gap-px sm:grid-cols-3 xl:grid-cols-6">
-              {[
-                [
-                  "Source progress",
-                  `${formatBytes(directProgress?.sourceBytesScanned ?? 0)} / ${formatBytes(directProgress?.totalBytes ?? 0)}`,
-                ],
-                [
-                  "Decoded content",
-                  formatBytes(directProgress?.contentBytesScanned ?? 0),
-                ],
-                [
-                  "Throughput",
-                  `${formatBytes(directProgress?.bytesPerSecond ?? 0)}/s`,
-                ],
-                [
-                  "Time remaining",
-                  directProgress?.status === "completed"
-                    ? "Done"
-                    : formatDuration(
-                        directProgress?.estimatedRemainingMs ?? null,
-                      ),
-                ],
-                [
-                  "Files visited",
-                  `${directProgress?.filesScanned ?? 0} / ${directProgress?.sourceCount ?? 0}`,
-                ],
-                ["Matches", String(directProgress?.matches ?? 0)],
-              ].map(([label, value]) => (
-                <DashboardCard key={label}>
-                  <CardHeader>
-                    <CardDescription>{label}</CardDescription>
-                    <CardTitle className="font-mono text-xl tabular-nums">
-                      {value}
-                    </CardTitle>
-                  </CardHeader>
-                </DashboardCard>
-              ))}
-            </div>
-
-            <DashboardCard className="gap-0">
-              <CardHeader className="border-b">
-                <CardTitle>Direct scan results</CardTitle>
-                <CardDescription>
-                  Matching source lines and archive entries. Nothing is added to
-                  the permanent index.
-                </CardDescription>
-                <CardAction>
-                  <Badge variant="outline">
-                    {directProgress?.hits.length ?? 0} shown
-                  </Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent className="px-0">
-                {visibleDirectHits.length ? (
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-1/4 ps-6">Source</TableHead>
-                        <TableHead className="w-1/6">Location</TableHead>
-                        <TableHead className="w-5/12">Excerpt</TableHead>
-                        <TableHead className="pe-6">Match</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {visibleDirectHits.map((hit) => (
-                        <TableRow key={hit.id}>
-                          <TableCell className="min-w-0 ps-6 whitespace-normal">
-                            <p className="break-all">
-                              {hit.archiveEntry ?? hit.sourceFile}
-                            </p>
-                            {hit.archiveEntry ? (
-                              <p className="break-all text-xs text-muted-foreground">
-                                {hit.sourceFile}
-                              </p>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs break-all whitespace-normal">
-                            {hit.sourceLocation}
-                          </TableCell>
-                          <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
-                            {formatSearchDisplay(hit.excerpt)}
-                          </TableCell>
-                          <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
-                            <p className="break-all font-mono text-foreground">
-                              {hit.matchedQuery}
-                            </p>
-                            <p className="break-words">{hit.matchReason}</p>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <Empty className="min-h-56 rounded-none border-0">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <FileSearchIcon />
-                      </EmptyMedia>
-                      <EmptyTitle>No direct scan results</EmptyTitle>
-                      <EmptyDescription>
-                        Choose a source, enter a value, then start the scan.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                )}
-              </CardContent>
-              {directProgress?.hits.length ? (
-                <PaginationControls
-                  label="direct scan results"
-                  limit={limit}
-                  offset={directOffset}
-                  onOffsetChange={setDirectOffset}
-                  total={directProgress.hits.length}
-                />
+        <DashboardCard className="gap-0">
+          <CardHeader className="border-b">
+            <CardTitle>Results</CardTitle>
+            <CardDescription>
+              {isLive
+                ? currentLiveProgress
+                  ? `${currentLiveProgress.hits.length.toLocaleString()} rows collected`
+                  : "Search the selected Live source to stream matching rows."
+                : indexed.data
+                  ? `${indexed.data.total.toLocaleString()} matches`
+                  : "Search the selected index to load local evidence."}
+            </CardDescription>
+            <CardAction>
+              {isLive ? (
+                <Badge variant="outline">
+                  <ArchiveIcon data-icon="inline-start" />
+                  No index required
+                </Badge>
+              ) : indexed.isFetching ? (
+                <Badge variant="outline">
+                  <Spinner />
+                  Searching index
+                </Badge>
               ) : null}
-            </DashboardCard>
-          </div>
-        </TabsContent>
-      </Tabs>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="px-0">
+            {isLive ? (
+              visibleDirectHits.length ? (
+                <Table className="table-fixed">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-1/4 ps-6">Source</TableHead>
+                      <TableHead className="w-1/6">Location</TableHead>
+                      <TableHead className="w-5/12">Row</TableHead>
+                      <TableHead className="pe-6">Match</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visibleDirectHits.map((hit) => (
+                      <TableRow key={hit.id}>
+                        <TableCell className="min-w-0 ps-6 whitespace-normal">
+                          <p className="break-all">
+                            {hit.archiveEntry ?? hit.sourceFile}
+                          </p>
+                          {hit.archiveEntry ? (
+                            <p className="break-all text-xs text-muted-foreground">
+                              {hit.sourceFile}
+                            </p>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs break-all whitespace-normal">
+                          {hit.sourceLocation}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
+                          {formatSearchDisplay(hit.excerpt)}
+                        </TableCell>
+                        <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
+                          <p className="break-all font-mono text-foreground">
+                            {hit.matchedQuery}
+                          </p>
+                          <p className="break-words">{hit.matchReason}</p>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <Empty className="min-h-72 rounded-none border-0">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      {liveBusy ? <Spinner /> : <FileSearchIcon />}
+                    </EmptyMedia>
+                    <EmptyTitle>
+                      {liveBusy ? "Scanning saved source" : "No live results"}
+                    </EmptyTitle>
+                    <EmptyDescription>
+                      Select a saved Live source, enter a value, and search.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              )
+            ) : hits.length ? (
+              <Table className="table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10 ps-4">
+                      <Checkbox
+                        aria-label="Select visible results"
+                        checked={allVisibleSelected}
+                        onCheckedChange={(checked) => {
+                          setSelected((current) => {
+                            const next = new Set(current);
+                            hits.forEach((hit) =>
+                              checked
+                                ? next.add(hit.recordId)
+                                : next.delete(hit.recordId),
+                            );
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableHead>
+                    <TableHead className="w-5/12">Evidence</TableHead>
+                    <TableHead className="w-1/6">Dataset</TableHead>
+                    <TableHead className="w-1/4">Source</TableHead>
+                    <TableHead className="pe-4">Match</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {hits.map((hit) => (
+                    <TableRow key={hit.recordId}>
+                      <TableCell className="ps-4">
+                        <Checkbox
+                          aria-label={`Select ${hit.recordId}`}
+                          checked={selected.has(hit.recordId)}
+                          onCheckedChange={(checked) =>
+                            setSelected((current) => {
+                              const next = new Set(current);
+                              if (checked) next.add(hit.recordId);
+                              else next.delete(hit.recordId);
+                              return next;
+                            })
+                          }
+                        />
+                      </TableCell>
+                      <TableCell className="min-w-0 whitespace-normal">
+                        <div className="flex flex-wrap gap-1">
+                          {hit.fields.slice(0, 6).map((item) => (
+                            <Badge
+                              className="h-auto max-w-full min-w-0 whitespace-normal"
+                              data-slot="search-field-value"
+                              key={`${hit.recordId}-${item.name}`}
+                              variant={item.sensitive ? "secondary" : "outline"}
+                            >
+                              <span className="shrink-0">{item.name}:</span>
+                              <span className="min-w-0 break-all text-left">
+                                {formatSearchDisplay(item.displayValue)}
+                              </span>
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="min-w-0 whitespace-normal">
+                        <p className="break-all">{hit.datasetName}</p>
+                      </TableCell>
+                      <TableCell className="min-w-0 whitespace-normal">
+                        <p className="break-all text-xs">{hit.sourceFile}</p>
+                        <p className="break-all font-mono text-xs text-muted-foreground">
+                          {hit.sourceLocation}
+                        </p>
+                      </TableCell>
+                      <TableCell className="pe-4 text-xs break-words whitespace-normal text-muted-foreground">
+                        {hit.matchReason}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <Empty className="min-h-72 rounded-none border-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    {indexed.isFetching ? <Spinner /> : <SearchIcon />}
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    {indexed.isFetching
+                      ? "Searching"
+                      : submittedQuery
+                        ? "No matches"
+                        : "Search the index"}
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    Enter a value to search the selected index.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+          </CardContent>
+          {isLive && currentLiveProgress?.hits.length ? (
+            <PaginationControls
+              label="live scan results"
+              limit={limit}
+              offset={directOffset}
+              onOffsetChange={setDirectOffset}
+              total={currentLiveProgress.hits.length}
+            />
+          ) : null}
+          {!isLive && indexed.data ? (
+            <PaginationControls
+              label="search results"
+              limit={limit}
+              offset={offset}
+              onOffsetChange={setOffset}
+              total={indexed.data.total}
+            />
+          ) : null}
+          {!isLive ? (
+            <CardFooter className="justify-between gap-2 rounded-none bg-background">
+              <p className="text-xs text-muted-foreground">
+                {notice || `${selected.size} selected`}
+              </p>
+              <div className="flex gap-2">
+                <Dialog>
+                  <DialogTrigger
+                    render={
+                      <Button
+                        disabled={!submittedQuery}
+                        size="sm"
+                        variant="outline"
+                      />
+                    }
+                  >
+                    <SaveIcon data-icon="inline-start" />
+                    Save view
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Save search view</DialogTitle>
+                      <DialogDescription>
+                        Store this query and its current filters locally.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <FieldGroup>
+                      <Field>
+                        <FieldLabel htmlFor="saved-search-name">
+                          Name
+                        </FieldLabel>
+                        <Input
+                          id="saved-search-name"
+                          onChange={(event) => setSaveName(event.target.value)}
+                          value={saveName}
+                        />
+                      </Field>
+                    </FieldGroup>
+                    <DialogFooter>
+                      <Button
+                        disabled={!saveName.trim()}
+                        onClick={() =>
+                          void saveSearch(
+                            saveName.trim(),
+                            submittedQuery,
+                            JSON.stringify({
+                              mode: submittedMode,
+                              field: submittedField,
+                              sourceKey: submittedSourceKey,
+                            }),
+                          ).then(() => {
+                            setNotice("Saved view created.");
+                            setSaveName("");
+                            void queryClient.invalidateQueries({
+                              queryKey: ["saved-searches"],
+                            });
+                          })
+                        }
+                      >
+                        Save
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                <Button
+                  disabled={!selected.size}
+                  onClick={() => void exportSelected()}
+                  size="sm"
+                >
+                  Export selected
+                </Button>
+              </div>
+            </CardFooter>
+          ) : null}
+        </DashboardCard>
+      </div>
     </div>
   );
 }

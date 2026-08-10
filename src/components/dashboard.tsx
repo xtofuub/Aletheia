@@ -12,29 +12,43 @@ import {
   getSystemStatus,
   listDatasets,
   listExports,
+  listLiveSources,
 } from "@/lib/desktop";
 
 export function Dashboard() {
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: async () => {
-      const [datasets, stats, system, exports] = await Promise.all([
-        listDatasets(),
-        getOverviewStats(),
-        getSystemStatus(),
-        listExports(),
-      ]);
-      return { datasets, stats, system, exports };
+      const [datasets, liveSources, stats, system, exports] = await Promise.all(
+        [
+          listDatasets(),
+          listLiveSources(),
+          getOverviewStats(),
+          getSystemStatus(),
+          listExports(),
+        ],
+      );
+      return {
+        datasets,
+        liveSourceCount: liveSources.length,
+        stats,
+        system,
+        exports,
+      };
     },
     refetchInterval: 5_000,
   });
 
   if (!overview.data) return <DashboardSkeleton />;
 
-  const { datasets, stats, system, exports } = overview.data;
+  const { datasets, liveSourceCount, stats, system, exports } = overview.data;
   return (
     <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2 lg:grid-cols-4">
-      <DashboardStats datasets={datasets} stats={stats} />
+      <DashboardStats
+        datasets={datasets}
+        liveSourceCount={liveSourceCount}
+        stats={stats}
+      />
       <NetRevenueChart datasets={datasets} />
       <ChannelSalesChart datasets={datasets} />
       <DashboardInvoices datasets={datasets} />

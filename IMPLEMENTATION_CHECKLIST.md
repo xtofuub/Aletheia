@@ -148,6 +148,8 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Reduce SQLite write amplification with UUIDv7 keys and batched counters
 - [x] Add read-only aggregate RAR metadata and streaming probes
 - [x] Add end-to-end coverage for batch scan and index-profile selection
+- [x] Persist removable Live-source catalogs without modifying source files
+- [x] Merge indexed and Live lookup into one source-aware Search workflow
 
 ## Signed update reliability
 

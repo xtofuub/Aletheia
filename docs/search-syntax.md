@@ -4,14 +4,16 @@
 
 Automatic mode is the default. Enter a value normally; no field prefix is required. Aletheia recognizes email addresses, domains, URLs, IP addresses, phone numbers, service IDs, and person names, then chooses a safe field and match strategy. Other input is treated as text or a username.
 
-Indexed searches try normalized exact matching first for identifiers and fall back to literal containment when needed. Live domain searches use containment because a domain may be embedded in an email address, URL, or subdomain. Search still starts only when the user presses Enter or the Search/Scan button, so selecting a terabyte-scale folder never triggers an accidental scan on each keystroke.
+Indexed searches try normalized exact matching first for identifiers and fall back to literal containment when needed. Live domain searches use containment because a domain may be embedded in an email address, URL, or subdomain. Search starts only when the user presses the Search button, so selecting a terabyte-scale source never triggers an accidental scan on each keystroke.
 
 Contains searches split a likely person name into meaningful tokens. A query such as `Jane Doe` can therefore match separate first/last-name fields or common email-local-part separators such as `jane.doe`, `jane_doe`, and `jane-doe`. All name tokens must be present; token order does not matter.
 
 ## Search scopes
 
-- **Indexed** searches an existing Tantivy index. Use it for fast repeated queries, paging, saved views, redacted export, domain analysis, and identity grouping.
-- **Live files** scans selected TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR sources directly. Archives are streamed in memory and are never extracted beside the source. Results appear while the scan is running and remain masked.
+- **Indexed** searches an existing Tantivy index. Use it for fast repeated queries, paging, saved views, export, domain analysis, and identity grouping.
+- **Saved Live source** scans cataloged TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR paths directly. Archives are streamed in memory and are never extracted beside the source. Saving a source records only its local paths and preferences; removing it does not touch the original data.
+
+The Search page uses one query control and one source selector. Choosing an indexed dataset or saved Live source automatically selects the matching engine.
 
 Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, cancellation, and paginated results. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker. Streamed result batches remain available after the completion event.
 

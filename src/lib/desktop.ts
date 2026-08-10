@@ -169,6 +169,20 @@ export interface DatasetSummary {
   lastIndexedAt: string | null;
 }
 
+export interface CreateLiveSourceInput {
+  name: string;
+  paths: string[];
+  includeArchives: boolean;
+}
+
+export interface LiveSourceSummary {
+  id: string;
+  name: string;
+  paths: string[];
+  includeArchives: boolean;
+  createdAt: string;
+}
+
 export interface OverviewStats {
   identityGroupCount: number;
   parentDomainCount: number;
@@ -781,6 +795,49 @@ export async function deleteDataset(datasetId: string): Promise<void> {
   window.localStorage.setItem(
     "aletheia.browser.datasets",
     JSON.stringify(datasets.filter((dataset) => dataset.id !== datasetId)),
+  );
+}
+
+const browserLiveSourcesKey = "aletheia.browser.live-sources";
+
+export async function listLiveSources(): Promise<LiveSourceSummary[]> {
+  if (isTauriRuntime()) {
+    return invoke<LiveSourceSummary[]>("list_live_sources");
+  }
+  const stored = window.localStorage.getItem(browserLiveSourcesKey);
+  return stored ? (JSON.parse(stored) as LiveSourceSummary[]) : [];
+}
+
+export async function createLiveSource(
+  input: CreateLiveSourceInput,
+): Promise<LiveSourceSummary> {
+  if (isTauriRuntime()) {
+    return invoke<LiveSourceSummary>("create_live_source", { input });
+  }
+  const source: LiveSourceSummary = {
+    id: crypto.randomUUID(),
+    name: input.name.trim(),
+    paths: input.paths,
+    includeArchives: input.includeArchives,
+    createdAt: new Date().toISOString(),
+  };
+  const current = await listLiveSources();
+  window.localStorage.setItem(
+    browserLiveSourcesKey,
+    JSON.stringify([source, ...current]),
+  );
+  return source;
+}
+
+export async function deleteLiveSource(id: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("delete_live_source", { id });
+    return;
+  }
+  const current = await listLiveSources();
+  window.localStorage.setItem(
+    browserLiveSourcesKey,
+    JSON.stringify(current.filter((source) => source.id !== id)),
   );
 }
 
@@ -1437,6 +1494,7 @@ export async function cleanupGenerated(request: CleanupRequest): Promise<void> {
   }
   if (request.allGenerated) {
     window.localStorage.removeItem("aletheia.browser.datasets");
+    window.localStorage.removeItem(browserLiveSourcesKey);
     window.localStorage.removeItem("aletheia.browser.saved-searches");
     window.localStorage.removeItem(browserExportsKey);
     window.localStorage.removeItem(browserSearchHistoryKey);
