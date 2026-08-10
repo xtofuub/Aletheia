@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -124,6 +125,16 @@ export function SavedViewsPage() {
                     Save a useful query from Search.
                   </EmptyDescription>
                 </EmptyHeader>
+                <EmptyContent>
+                  <Button
+                    nativeButton={false}
+                    render={<a href="#/search" />}
+                    size="sm"
+                    variant="outline"
+                  >
+                    Open Search
+                  </Button>
+                </EmptyContent>
               </Empty>
             )}
           </CardContent>

@@ -145,8 +145,8 @@ export function DomainsPage() {
           {repairNotice}
         </p>
       ) : null}
-      <div className="grid grid-cols-1 gap-px bg-border p-px xl:grid-cols-[22rem_1fr]">
-        <DashboardCard className="gap-0">
+      <div className="grid grid-cols-1 gap-px bg-border p-px xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+        <DashboardCard className="min-w-0 gap-0">
           <CardHeader className="border-b">
             <CardTitle>Domain groups</CardTitle>
             <CardDescription>
@@ -213,7 +213,7 @@ export function DomainsPage() {
           ) : null}
         </DashboardCard>
 
-        <DashboardCard className="gap-0">
+        <DashboardCard className="min-w-0 gap-0">
           <CardHeader className="border-b">
             <CardTitle>{activeDomain ?? "Domain evidence"}</CardTitle>
             <CardDescription>
@@ -344,10 +344,14 @@ export function DomainsPage() {
                   <Table className="table-fixed">
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-52 ps-6">Source line</TableHead>
-                        <TableHead className="w-44">Dataset</TableHead>
+                        <TableHead className="w-48 ps-6">Source line</TableHead>
+                        <TableHead className="hidden w-44 2xl:table-cell">
+                          Dataset
+                        </TableHead>
                         <TableHead>Line contents</TableHead>
-                        <TableHead className="w-44 pe-6">Parser</TableHead>
+                        <TableHead className="hidden w-44 pe-6 2xl:table-cell">
+                          Parser
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -360,8 +364,22 @@ export function DomainsPage() {
                             <p className="truncate font-mono text-xs text-muted-foreground">
                               {record.sourceLocation}
                             </p>
+                            <div className="mt-1 min-w-0 2xl:hidden">
+                              <p
+                                className="truncate text-xs text-muted-foreground"
+                                title={record.datasetName}
+                              >
+                                {record.datasetName}
+                              </p>
+                              <p
+                                className="truncate font-mono text-[11px] text-muted-foreground"
+                                title={record.parser}
+                              >
+                                {record.parser}
+                              </p>
+                            </div>
                           </TableCell>
-                          <TableCell className="min-w-0">
+                          <TableCell className="hidden min-w-0 2xl:table-cell">
                             <p className="truncate" title={record.datasetName}>
                               {record.datasetName}
                             </p>
@@ -382,7 +400,7 @@ export function DomainsPage() {
                               ))}
                             </div>
                           </TableCell>
-                          <TableCell className="min-w-0 pe-6 font-mono text-xs text-muted-foreground">
+                          <TableCell className="hidden min-w-0 pe-6 font-mono text-xs text-muted-foreground 2xl:table-cell">
                             <p className="truncate" title={record.parser}>
                               {record.parser}
                             </p>

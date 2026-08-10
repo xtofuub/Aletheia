@@ -40,7 +40,9 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   await expect(page.getByText("synthetic@example.test").first()).toBeVisible();
 
   await page.goto("/#/overview");
-  const liveMatchNote = page.getByText("latest live matches", { exact: true });
+  const liveMatchNote = page.getByText("matches in the latest Live scan", {
+    exact: true,
+  });
   await expect(liveMatchNote).toBeVisible();
   await expect(liveMatchNote.locator("..")).toContainText("2");
   await expect(

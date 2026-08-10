@@ -22,7 +22,7 @@ export function OverviewPage() {
             Refresh
           </Button>
         }
-        description="A precise view of local indexing, grouped evidence, and storage health."
+        description="Local indexes, Live scans, grouped evidence, and workspace health."
         title="Overview"
       />
       <Dashboard />

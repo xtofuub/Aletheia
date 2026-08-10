@@ -5,7 +5,6 @@ import type {
   OverviewStats,
 } from "@/lib/desktop";
 import { formatCount } from "@/lib/format";
-import { Delta, DeltaIcon, DeltaValue } from "@/components/delta";
 import { DashboardCard } from "@/components/dashboard-card";
 import {
   CardContent,
@@ -35,26 +34,26 @@ export function DashboardStats({
     {
       label: "Indexed records",
       value: formatCount(records),
-      signal: latestLiveMatches,
-      note: "latest live matches",
+      detailValue: formatCount(latestLiveMatches),
+      detailLabel: "matches in the latest Live scan",
     },
     {
       label: "Search sources",
       value: formatCount(datasets.length + liveSources.length),
-      signal: liveSources.length,
-      note: `live · ${formatCount(ready)} indexed ready`,
+      detailValue: formatCount(liveSources.length),
+      detailLabel: `Live, ${formatCount(ready)} indexed ready`,
     },
     {
       label: "Parent domains",
       value: formatCount(stats.parentDomainCount),
-      signal: stats.parentDomainCount,
-      note: "normalized groups",
+      detailValue: formatCount(stats.parentDomainCount),
+      detailLabel: "normalized domain groups",
     },
     {
       label: "Identities",
       value: formatCount(stats.identityGroupCount),
-      signal: stats.identityGroupCount,
-      note: "grouped identities",
+      detailValue: formatCount(stats.identityGroupCount),
+      detailLabel: "linked identity groups",
     },
   ];
 
@@ -70,12 +69,13 @@ export function DashboardStats({
           <CardContent className="flex flex-row items-center gap-2">
             <p className="font-semibold text-2xl tabular-nums">{item.value}</p>
           </CardContent>
-          <CardFooter className="gap-1 rounded-none bg-background text-xs">
-            <Delta value={item.signal}>
-              <DeltaIcon />
-              <DeltaValue precision={0} suffix="" />
-            </Delta>
-            <span className="text-muted-foreground">{item.note}</span>
+          <CardFooter className="gap-1.5 rounded-none bg-background text-xs">
+            <span className="font-mono text-foreground tabular-nums">
+              {item.detailValue}
+            </span>
+            <span className="truncate text-muted-foreground">
+              {item.detailLabel}
+            </span>
           </CardFooter>
         </DashboardCard>
       ))}

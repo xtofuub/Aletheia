@@ -755,10 +755,10 @@ export function DatasetsPage() {
                         {source.paths.length}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        —
+                        On scan
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        —
+                        On scan
                       </TableCell>
                       <TableCell className="hidden text-xs text-muted-foreground 2xl:table-cell">
                         {formatDateTime(source.createdAt)}
@@ -1090,7 +1090,7 @@ export function DatasetsPage() {
                 </FieldDescription>
                 {estimatedIndexBytes ? (
                   <FieldDescription>
-                    Plan roughly {formatBytes(estimatedIndexBytes.low)}–
+                    Plan roughly {formatBytes(estimatedIndexBytes.low)} to{" "}
                     {formatBytes(estimatedIndexBytes.high)} of generated
                     storage. Actual size depends on field lengths and
                     repetition.
@@ -1159,7 +1159,8 @@ export function DatasetsPage() {
                             {file.encoding}
                           </TableCell>
                           <TableCell className="font-mono text-xs tabular-nums">
-                            {file.estimatedRecords?.toLocaleString() ?? "—"}
+                            {file.estimatedRecords?.toLocaleString() ??
+                              "Unknown"}
                           </TableCell>
                           <TableCell className="pe-4 text-right font-mono text-xs">
                             {formatBytes(file.fileSize)}
