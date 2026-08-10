@@ -71,11 +71,11 @@ read-only file
 
 Backpressure is provided by the synchronous parser-to-batch callback: the reader cannot advance while a bounded SQLite/Tantivy batch is being committed. Jobs expose running, paused, cancelled, interrupted, completed, and failed states. Cancellation is checked between records and every 64 KiB while discarding an oversized record. Cancelled and interrupted jobs preserve a resumable plan and source position. Parser errors are counted and sanitized; raw record values are never logged.
 
-Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 64 MiB, and Tantivy receives between 64 MiB and 2 GiB. The worker limit controls one Tantivy writer's indexing threads, and only one import writer runs at a time. Tantivy and sanitized job checkpoints are committed every 1,000,000 records and at every file boundary. Identity and record-to-domain links are materialized incrementally inside each batch instead of accumulating the dataset in memory. All byte and record totals use 64-bit counters for multi-terabyte inputs.
+Import heap use is based on the configured memory budget rather than source size. The reader retains at most one 1 MiB record, in-memory record batches are capped between 4 and 64 MiB, and Tantivy receives between 64 MiB and 2 GiB. The worker limit controls one Tantivy writer's indexing threads, and only one import writer runs at a time. Record IDs use time-ordered UUIDv7 keys, dataset counters commit inside the batch transaction, and bounded SQLite page-cache/WAL windows avoid random B-tree churn and tiny checkpoints during long imports. Tantivy and sanitized job checkpoints are committed every 1,000,000 records and at every file boundary. Identity and record-to-domain links are materialized incrementally inside each batch instead of accumulating the dataset in memory. All byte and record totals use 64-bit counters for multi-terabyte inputs.
 
 Supported indexed inputs are TXT, CSV, TSV, JSONL, NDJSON, and GZIP-wrapped variants. Format detection uses a small byte sample, not the extension alone. The parser enforces maximum sample, line, field, and decompression sizes.
 
-The import wizard offers two explicit plans. **Fast index** stores searchable fields and source offsets while skipping deduplication, URL/domain materialization, and automatic identity grouping. **Deep analysis** enables that relationship work when the user needs the Domains and Identities views. Both plans reuse prepared SQLite statements for each batch. This keeps indexing available for small and medium databases without making it the only way to search a very large corpus.
+The import wizard offers two explicit plans. **Fast index** stores searchable fields and source offsets while skipping deduplication, URL/domain materialization, and automatic identity grouping. **Relationship index** enables that relationship work when the user needs the Domains and Identities views. Both plans reuse prepared SQLite statements for each batch. This keeps indexing available for small and medium databases without making it the only way to search a very large corpus.
 
 ## Metadata model
 
@@ -97,7 +97,7 @@ Raw records are not copied into SQLite. Recognized field values needed for detai
 Aletheia exposes two search scopes behind one command deck:
 
 - **Indexed** compiles a bounded request into Tantivy and joins masked, traceable view models from SQLite. It is best for repeated investigations, paging, saved views, exports, identities, and domain analysis.
-- **Live files** opens authorized files read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. It is best for one-off lookup across very large archives.
+- **Live files** opens authorized files read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. Up to 512 newline-separated queries share one Aho-Corasick matcher and one physical read pass. It is best for one-off or batched lookup across very large archives.
 
 Automatic mode recognizes common query shapes. Email, IP, phone, and service-ID queries use field-boundary matching; indexed domain queries use normalized domain links with an exact-first fallback, while live domain queries use literal containment so matches inside emails, URLs, and subdomains are not missed. Advanced mode exposes exact, contains, prefix, dataset, field, archive, case, worker, and result-limit controls.
 
@@ -111,7 +111,7 @@ before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
 
-The live path precompiles ASCII literal matching once per scan, checks cancellation between bounded reads, emits results in small batches, and stops the whole worker set at the configured result cap. Per-worker memory is bounded by a 1 MiB line buffer plus decoder state. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Raw lines are masked in Rust before events reach React.
+The live path precompiles literal matching once per scan, checks pause and cancellation between bounded reads, emits results in small batches, and stops the whole worker set at the configured result cap. It emits throttled progress after every 1 MiB of decoded content, tracks physical source bytes separately from expanded archive bytes, and calculates an estimated remaining time from physical progress. Per-worker memory is bounded by a 1 MiB line buffer plus decoder state. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Raw lines are masked in Rust before events reach React.
 
 Result pages support 25, 50, 100, or 200 records with explicit ranges and
 navigation. Search hit metadata and fields are loaded in batches instead of one

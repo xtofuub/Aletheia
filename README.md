@@ -22,7 +22,7 @@
 
 Aletheia has two search paths so a multi-million-row file does not always need a permanent index.
 
-- **Live scan** streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR sources with bounded memory. Archives are read directly without extraction. This is the recommended first step for one-off searches, multi-gigabyte files, and HDD-based collections.
+- **Live scan** streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR sources with bounded memory. Archives are read directly without extraction. Paste up to 512 values to find them in one physical pass instead of rereading a huge collection for every query.
 - **Persistent index** stores a reusable Tantivy index for fast repeated searches, pagination, domain grouping, and identity workflows. Imports are cancellable, resumable, and report throughput.
 - **Flexible name lookup** finds first and last names across separate fields and common email separators, so `Jane Doe` can match values such as `jane.doe@example.com`.
 
@@ -44,7 +44,7 @@ All screenshots use synthetic fixtures with reserved example domains and documen
 ## Investigation features
 
 - Exact, contains, prefix, field-specific, and flexible name search with pagination.
-- Direct sequential search inside text files, GZIP streams, ZIP entries, and RAR entries.
+- Direct sequential batch search inside text files, GZIP streams, ZIP entries, and RAR entries, with pause, resume, ETA, decoded throughput, and physical-source progress.
 - Parent-domain and subdomain navigation with linked source evidence.
 - Automatic deterministic identity groups plus manually reviewed bundles from indexed records or selected live-scan evidence.
 - Dataset, file, archive-entry, parser, line, and record provenance.
@@ -68,14 +68,14 @@ The release also includes `aletheia_<version>_x64.exe`, a standalone binary for 
 
 ## Performance guidance
 
-| Use case                                   | Recommended path                                               |
-| ------------------------------------------ | -------------------------------------------------------------- |
-| One search across a huge file or archive   | Live scan                                                      |
-| Hundreds of gigabytes on an HDD            | Live sequential scan; keep the workspace on an SSD if possible |
-| Frequent searches across a curated dataset | Persistent index                                               |
-| Domain and automatic identity grouping     | Persistent index with deep analysis enabled                    |
+| Use case                                      | Recommended path                                                 |
+| --------------------------------------------- | ---------------------------------------------------------------- |
+| Up to 512 lookups across huge files/archives  | One batch Live scan                                              |
+| Hundreds of gigabytes on a physical HDD       | Live scan with 1 worker; keep generated workspace data on an SSD |
+| Frequent searches across a curated collection | Persistent **Fast index**                                        |
+| Domain and automatic identity grouping        | Persistent **Relationship index**                                |
 
-The import pipeline uses streaming readers, fixed memory ceilings, resumable checkpoints, bounded queues, and 64-bit counters. Real throughput depends on disk speed, compression, line length, parser complexity, and workspace capacity. Terabyte-scale operation still requires enough local storage and should be validated against the target hardware before production use.
+The import pipeline uses streaming readers, fixed memory ceilings, resumable checkpoints, bounded queues, and 64-bit counters. Live scanning normally wins for a one-off lookup because it avoids writing a much larger reusable structure. Index only the sources you will search repeatedly or need for Domains and automatic Identities. Real throughput depends on disk speed, compression, line length, parser complexity, and workspace capacity. Terabyte-scale operation still requires enough local storage and should be validated against the target hardware before production use.
 
 ## Privacy and safety
 

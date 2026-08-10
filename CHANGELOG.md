@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added one-pass batch Live scan for up to 512 values, pause and resume controls, physical-source progress, decoded throughput, and ETA so very large TXT, ZIP, RAR, and GZIP collections remain observable without indexing.
+- Added explicit Fast and Relationship index profiles, generated storage estimates, HDD-aware worker guidance, and scalable synthetic performance soaks for large-corpus validation.
+- Switched imported record keys to time-ordered UUIDv7 values, folded dataset counters into batch transactions, and tuned bounded SQLite cache/WAL windows to reduce write amplification during multi-million-row imports.
 - Enlarged the dashboard brand mark and tightened the Windows icon artwork so Aletheia stays legible in the sidebar, title bar, taskbar, and installer.
 - Added reviewed identity bundles built directly from live TXT, ZIP, RAR, and GZIP scan results, preserving selected masked source snapshots without requiring a full persistent index.
 - Fixed streamed live-search batches disappearing on completion and paginated direct-scan result rendering so thousands of matches do not freeze the interface.

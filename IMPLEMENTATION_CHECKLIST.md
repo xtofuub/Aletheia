@@ -136,3 +136,15 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Precompile direct literal matching and reuse SQLite batch statements
 - [x] Add synthetic ZIP/RAR, profile, automatic-domain, and end-to-end coverage
 - [x] Pass formatting, lint, type checking, frontend tests, Rust tests, Clippy, benchmarks, browser flows, screenshots, and data safety checks
+
+## Very large corpus pass
+
+- [x] Scan up to 512 lookup values in one physical read pass
+- [x] Add live-scan pause, resume, ETA, decoded throughput, and physical-byte progress
+- [x] Default direct scans to one worker for physical HDD collections
+- [x] Split persistent imports into Fast and Relationship index profiles
+- [x] Add generated 1 GiB direct-scan and 50-million-record-capable index soaks
+- [x] Complete a 4.2-million-record Fast index reliability soak
+- [x] Reduce SQLite write amplification with UUIDv7 keys and batched counters
+- [x] Add read-only aggregate RAR metadata and streaming probes
+- [x] Add end-to-end coverage for batch scan and index-profile selection

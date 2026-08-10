@@ -32,7 +32,7 @@ Never create a fixture from a real record.
 - `co.uk`, IP, and subdomain resolution;
 - SQLite migrations;
 - Tantivy exact, contains, and prefix queries;
-- precompiled direct matching plus synthetic ZIP and RAR streaming without extraction;
+- precompiled single-pass batch matching plus synthetic ZIP and RAR streaming without extraction;
 - redacted export rendering;
 - generated cleanup target restrictions and source-file preservation;
 - a complete synthetic CSV import into SQLite, Tantivy, domains, and identities;
@@ -55,7 +55,19 @@ $env:ALETHEIA_INDEX_SOAK_RECORDS = "100000"
 cargo test --manifest-path src-tauri/Cargo.toml generated_full_index_pipeline_soak --release -- --ignored --nocapture
 ```
 
-Raise `ALETHEIA_INDEX_SOAK_RECORDS` up to `5000000`. The generated source and index live only in a temporary test directory.
+Use `ALETHEIA_INDEX_SOAK_PROFILE=fast` for the large-corpus path, and optionally set `ALETHEIA_INDEX_SOAK_WORKERS` and `ALETHEIA_INDEX_SOAK_MEMORY_MB`. Raise `ALETHEIA_INDEX_SOAK_RECORDS` up to `50000000`. The generated source and index live only in a temporary test directory.
+
+The large-source release gate has also been exercised with `4200000` generated records, the Fast profile, 2 workers, and a 512 MiB writer budget. This is a reliability soak, not a universal speed claim; hardware and field shape materially change throughput.
+
+The direct scanner soak generates bytes in memory and can exercise the 512-query matcher without creating a source fixture:
+
+```powershell
+$env:ALETHEIA_DIRECT_SOAK_GIB = "1"
+$env:ALETHEIA_DIRECT_SOAK_QUERIES = "512"
+cargo test --manifest-path src-tauri/Cargo.toml generated_direct_scan_soak --release -- --ignored --nocapture
+```
+
+Authorized archive probes accept a local archive path through `ALETHEIA_RAR_PROBE_PATH`. They print only aggregate sizes and throughput; they never print or copy record contents.
 
 ## Benchmarks
 

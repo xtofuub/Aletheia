@@ -53,6 +53,12 @@ jobs:
       - name: Test frontend
         run: pnpm test
 
+      - name: Install browser test runtime
+        run: pnpm exec playwright install chromium
+
+      - name: Test complete browser workflows
+        run: pnpm test:e2e
+
       - name: Build frontend
         run: pnpm build
 
