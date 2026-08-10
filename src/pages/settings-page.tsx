@@ -288,7 +288,8 @@ export function SettingsPage() {
                 <FieldContent>
                   <FieldTitle>Worker limit</FieldTitle>
                   <FieldDescription>
-                    Tantivy writer threads. More workers use more CPU.
+                    Tantivy writer threads. Start with 1–2 on an HDD; extra
+                    workers help only when storage can keep up.
                   </FieldDescription>
                 </FieldContent>
                 <Select
@@ -320,7 +321,8 @@ export function SettingsPage() {
                 <FieldContent>
                   <FieldTitle>Memory limit</FieldTitle>
                   <FieldDescription>
-                    Import and writer budget. More memory reduces flushes.
+                    Import and writer budget. More memory reduces index flushes,
+                    but source and metadata I/O can still be the bottleneck.
                   </FieldDescription>
                 </FieldContent>
                 <Select
@@ -538,7 +540,7 @@ export function SettingsPage() {
               )}
               {switchWorkspace.isPending
                 ? "Switching workspace…"
-                : "Switch workspace"}
+                : "Open or switch workspace"}
             </Button>
           </CardFooter>
         </DashboardCard>
@@ -674,7 +676,7 @@ export function SettingsPage() {
             <AlertDialogMedia>
               <HardDriveIcon />
             </AlertDialogMedia>
-            <AlertDialogTitle>Switch Aletheia workspace?</AlertDialogTitle>
+            <AlertDialogTitle>Open this Aletheia workspace?</AlertDialogTitle>
             <AlertDialogDescription>
               Indexed datasets stay in the current workspace and are not moved
               or deleted. Select their original workspace to reconnect them, or
@@ -695,7 +697,7 @@ export function SettingsPage() {
                 }
               }}
             >
-              Switch workspace
+              Open workspace
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

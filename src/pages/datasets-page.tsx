@@ -6,7 +6,9 @@ import {
   FilePlus2Icon,
   FileSearchIcon,
   FolderOpenIcon,
+  GaugeIcon,
   MonitorIcon,
+  NetworkIcon,
   PauseIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -70,6 +72,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
 import { Separator } from "@/components/ui/separator";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Table,
   TableBody,
@@ -101,18 +104,35 @@ import {
   formatBytes,
   formatCount,
   formatDateTime,
+  formatDuration,
   formatRate,
 } from "@/lib/format";
 
-const defaultOptions: ImportOptions = {
+type ImportProfile = "fast" | "analysis";
+
+const fastIndexOptions: ImportOptions = {
   skipInvalidRows: true,
   stopOnSevereError: true,
-  extractUrls: true,
-  extractDomains: true,
-  groupIdentities: true,
+  extractUrls: false,
+  extractDomains: false,
+  groupIdentities: false,
   deduplicate: false,
   storeOffsets: true,
 };
+
+const analysisIndexOptions: ImportOptions = {
+  ...fastIndexOptions,
+  extractUrls: true,
+  extractDomains: true,
+  groupIdentities: true,
+};
+
+function isLargeInspection(result: InspectionResult) {
+  return (
+    result.totalBytes >= 1024 ** 3 ||
+    result.files.some((file) => (file.estimatedRecords ?? 0) >= 4_000_000)
+  );
+}
 
 export function DatasetsPage() {
   const queryClient = useQueryClient();
@@ -120,7 +140,8 @@ export function DatasetsPage() {
   const [inspection, setInspection] = useState<InspectionResult | null>(null);
   const [datasetLabel, setDatasetLabel] = useState("");
   const [authorizationNote, setAuthorizationNote] = useState("");
-  const [options, setOptions] = useState(defaultOptions);
+  const [importProfile, setImportProfile] = useState<ImportProfile>("analysis");
+  const [options, setOptions] = useState(analysisIndexOptions);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [recordsPerSecond, setRecordsPerSecond] = useState(0);
   const [bytesPerSecond, setBytesPerSecond] = useState(0);
@@ -132,6 +153,7 @@ export function DatasetsPage() {
     null,
   );
   const previous = useRef<{
+    jobId: string;
     at: number;
     records: number;
     bytes: number;
@@ -152,19 +174,32 @@ export function DatasetsPage() {
     let unlisten: (() => void) | undefined;
     void listenImportProgress((next) => {
       const now = performance.now();
-      if (previous.current && previous.current.at < now) {
+      if (
+        previous.current &&
+        previous.current.jobId === next.jobId &&
+        previous.current.at < now
+      ) {
         const seconds = (now - previous.current.at) / 1_000;
-        setRecordsPerSecond(
-          Math.max(
-            0,
-            (next.recordsProcessed - previous.current.records) / seconds,
-          ),
+        const recordRate = Math.max(
+          0,
+          (next.recordsProcessed - previous.current.records) / seconds,
         );
-        setBytesPerSecond(
-          Math.max(0, (next.bytesRead - previous.current.bytes) / seconds),
+        const byteRate = Math.max(
+          0,
+          (next.bytesRead - previous.current.bytes) / seconds,
         );
+        setRecordsPerSecond((current) =>
+          current > 0 ? current * 0.7 + recordRate * 0.3 : recordRate,
+        );
+        setBytesPerSecond((current) =>
+          current > 0 ? current * 0.7 + byteRate * 0.3 : byteRate,
+        );
+      } else {
+        setRecordsPerSecond(0);
+        setBytesPerSecond(0);
       }
       previous.current = {
+        jobId: next.jobId,
         at: now,
         records: next.recordsProcessed,
         bytes: next.bytesRead,
@@ -196,6 +231,13 @@ export function DatasetsPage() {
       if (!result) return;
       setActionError("");
       setInspection(result);
+      const recommendedProfile: ImportProfile = isLargeInspection(result)
+        ? "fast"
+        : "analysis";
+      setImportProfile(recommendedProfile);
+      setOptions(
+        recommendedProfile === "fast" ? fastIndexOptions : analysisIndexOptions,
+      );
       setDatasetLabel(
         result.files[0]?.fileName.replace(/\.[^.]+$/, "") ??
           "Authorized dataset",
@@ -283,13 +325,17 @@ export function DatasetsPage() {
   const percent = progress?.totalBytes
     ? Math.min(100, (progress.bytesRead / progress.totalBytes) * 100)
     : 0;
-  const largeInspection = Boolean(
-    inspection &&
-    (inspection.totalBytes >= 1024 ** 3 ||
-      inspection.files.some(
-        (file) => (file.estimatedRecords ?? 0) >= 4_000_000,
-      )),
-  );
+  const largeInspection = Boolean(inspection && isLargeInspection(inspection));
+  const estimatedIndexBytes = inspection
+    ? {
+        low: inspection.totalBytes * (importProfile === "fast" ? 0.35 : 0.8),
+        high: inspection.totalBytes * (importProfile === "fast" ? 0.8 : 1.8),
+      }
+    : null;
+  const importEtaMs =
+    progress && bytesPerSecond > 0 && progress.bytesRead < progress.totalBytes
+      ? ((progress.totalBytes - progress.bytesRead) / bytesPerSecond) * 1_000
+      : null;
 
   return (
     <div>
@@ -429,11 +475,17 @@ export function DatasetsPage() {
                 </ProgressLabel>
                 <ProgressValue>{() => `${percent.toFixed(0)}%`}</ProgressValue>
               </Progress>
-              <div className="grid grid-cols-2 gap-px bg-border p-px sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-px bg-border p-px sm:grid-cols-5">
                 {[
                   ["Indexed", formatCount(progress.recordsIndexed)],
                   ["Record speed", formatRate(recordsPerSecond)],
                   ["Read speed", `${formatBytes(bytesPerSecond)}/s`],
+                  [
+                    "Time remaining",
+                    progress.status === "completed"
+                      ? "Done"
+                      : formatDuration(importEtaMs),
+                  ],
                   ["Invalid", formatCount(progress.invalidRecords)],
                 ].map(([label, value]) => (
                   <div className="bg-background p-3" key={label}>
@@ -624,9 +676,10 @@ export function DatasetsPage() {
                   <FileSearchIcon />
                   <AlertTitle>Live scan is faster to start</AlertTitle>
                   <AlertDescription>
-                    This selection is at least 1 GB or contains an estimated 4
-                    million rows. Use live scan for immediate lookup; build an
-                    index only when you need repeated searches and grouping.
+                    This is a large selection. Use one-pass live scan for
+                    immediate lookup. Build an index only when repeated search
+                    speed or relationship analysis justifies the extra time and
+                    disk space.
                   </AlertDescription>
                   <div className="col-start-2 mt-2">
                     <Button
@@ -642,6 +695,46 @@ export function DatasetsPage() {
                   </div>
                 </Alert>
               ) : null}
+              <Field>
+                <FieldLabel>Index profile</FieldLabel>
+                <ToggleGroup
+                  onValueChange={(values) => {
+                    const profile = values[0] as ImportProfile | undefined;
+                    if (!profile) return;
+                    setImportProfile(profile);
+                    setOptions(
+                      profile === "fast"
+                        ? fastIndexOptions
+                        : analysisIndexOptions,
+                    );
+                  }}
+                  size="sm"
+                  value={[importProfile]}
+                  variant="outline"
+                >
+                  <ToggleGroupItem value="fast">
+                    <GaugeIcon data-icon="inline-start" />
+                    Fast index
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="analysis">
+                    <NetworkIcon data-icon="inline-start" />
+                    Relationship index
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>
+                  {importProfile === "fast"
+                    ? "Searchable records and source locations only. Domains and automatic identities stay off."
+                    : "Adds domains and automatic identity candidates. This requires more CPU, disk, and time."}
+                </FieldDescription>
+                {estimatedIndexBytes ? (
+                  <FieldDescription>
+                    Plan roughly {formatBytes(estimatedIndexBytes.low)}–
+                    {formatBytes(estimatedIndexBytes.high)} of generated
+                    storage. Actual size depends on field lengths and
+                    repetition.
+                  </FieldDescription>
+                ) : null}
+              </Field>
               <FieldGroup>
                 <Field>
                   <FieldLabel htmlFor="dataset-label">Dataset name</FieldLabel>
@@ -695,16 +788,6 @@ export function DatasetsPage() {
               <FieldGroup>
                 {(
                   [
-                    [
-                      "extractDomains",
-                      "Group domains",
-                      "Normalize domains and subdomains for lookup.",
-                    ],
-                    [
-                      "groupIdentities",
-                      "Build identities",
-                      "Create automatic exact-identifier groups.",
-                    ],
                     [
                       "deduplicate",
                       "Deduplicate records",

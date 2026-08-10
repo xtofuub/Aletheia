@@ -144,6 +144,12 @@ pub fn open_database(storage_root: &Path) -> Result<Connection, StorageError> {
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
+    // Keep bulk imports from checkpointing a tiny WAL every few thousand rows.
+    // These are bounded connection-local caches, not source-sized allocations.
+    connection.pragma_update(None, "cache_size", -32_768_i64)?;
+    connection.pragma_update(None, "mmap_size", 128_i64 * 1024 * 1024)?;
+    connection.pragma_update(None, "wal_autocheckpoint", 32_768_i64)?;
+    connection.pragma_update(None, "journal_size_limit", 128_i64 * 1024 * 1024)?;
     connection.busy_timeout(Duration::from_secs(10))?;
     apply_migrations(&mut connection)?;
     seed_defaults(&connection)?;

@@ -1653,7 +1653,9 @@ fn process_record(
         });
     }
     Ok(ProcessedRecord {
-        id: Uuid::new_v4().to_string(),
+        // UUIDv7 keeps the records and field-value indexes mostly append-only
+        // during large imports while preserving globally unique public IDs.
+        id: Uuid::now_v7().to_string(),
         source_location,
         byte_offset,
         fingerprint: fingerprint.finalize().to_hex().to_string(),
@@ -1835,11 +1837,7 @@ fn flush_batch(
             .map_err(sanitized)?;
         counters.records_indexed += 1;
     }
-    drop(field_statement);
-    drop(record_statement);
-    drop(duplicate_statement);
-    transaction.commit().map_err(sanitized)?;
-    connection
+    transaction
         .execute(
             "UPDATE datasets
              SET record_count = ?2, warning_count = ?3,
@@ -1852,6 +1850,10 @@ fn flush_batch(
             ],
         )
         .map_err(sanitized)?;
+    drop(field_statement);
+    drop(record_statement);
+    drop(duplicate_statement);
+    transaction.commit().map_err(sanitized)?;
     Ok(())
 }
 
@@ -2224,6 +2226,7 @@ mod tests {
     };
 
     use flate2::{Compression, write::GzEncoder};
+    use rusqlite::OptionalExtension;
     use tempfile::tempdir;
 
     use super::{
@@ -2634,7 +2637,19 @@ mod tests {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(100_000)
-            .clamp(10_000, 5_000_000);
+            .clamp(10_000, 50_000_000);
+        let analysis_profile = std::env::var("ALETHEIA_INDEX_SOAK_PROFILE")
+            .is_ok_and(|value| value.eq_ignore_ascii_case("analysis"));
+        let worker_limit = std::env::var("ALETHEIA_INDEX_SOAK_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(2)
+            .clamp(1, 8);
+        let memory_limit_mb = std::env::var("ALETHEIA_INDEX_SOAK_MEMORY_MB")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or(512)
+            .clamp(128, 4_096);
         let workspace = tempdir().expect("temporary workspace");
         let source = workspace.path().join("generated-index-soak.csv");
         let mut writer = BufWriter::new(File::create(&source).expect("generated synthetic source"));
@@ -2656,10 +2671,10 @@ mod tests {
             options: ImportOptions {
                 skip_invalid_rows: true,
                 stop_on_severe_error: true,
-                extract_urls: true,
-                extract_domains: true,
-                group_identities: true,
-                deduplicate: true,
+                extract_urls: analysis_profile,
+                extract_domains: analysis_profile,
+                group_identities: analysis_profile,
+                deduplicate: false,
                 store_offsets: true,
             },
         };
@@ -2676,8 +2691,8 @@ mod tests {
             "job-soak",
             "dataset-soak",
             plan.files.iter().map(|file| file.file_size).sum(),
-            2,
-            512,
+            worker_limit,
+            memory_limit_mb,
             files,
             &plan,
             &JobControl::default(),
@@ -2704,8 +2719,9 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .expect("domain aggregate");
-        assert_eq!(domain_links as u64, record_count);
+            .optional()
+            .expect("domain aggregate")
+            .unwrap_or(0);
         let identity_candidates: i64 = database
             .lock()
             .expect("database")
@@ -2718,11 +2734,18 @@ mod tests {
             .expect("database")
             .query_row("SELECT COUNT(*) FROM identity_groups", [], |row| row.get(0))
             .expect("identity groups");
-        assert_eq!(identity_candidates as u64, record_count * 2);
+        if analysis_profile {
+            assert_eq!(domain_links as u64, record_count);
+            assert_eq!(identity_candidates as u64, record_count * 2);
+        } else {
+            assert_eq!(domain_links, 0);
+            assert_eq!(identity_candidates, 0);
+        }
         assert_eq!(identity_groups, 0);
         eprintln!(
-            "indexed {record_count} generated records in {:.2?}",
-            started.elapsed()
+            "indexed {record_count} generated records with {} profile, {worker_limit} workers, {memory_limit_mb} MiB in {:.2?}",
+            if analysis_profile { "analysis" } else { "fast" },
+            started.elapsed(),
         );
     }
 
