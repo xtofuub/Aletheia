@@ -21,9 +21,13 @@ $signingEnabled =
     -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -or
     -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH) -or
     (Test-Path -LiteralPath $localSigningKey -PathType Leaf)
+$requireSignedUpdater = $env:ALETHEIA_REQUIRE_SIGNED_UPDATE -eq "1"
 
 if (-not $version) {
     throw "package.json does not contain a version."
+}
+if ($requireSignedUpdater -and -not $signingEnabled) {
+    throw "A signed updater artifact is required, but no Tauri updater key is configured."
 }
 
 Push-Location $projectRoot
@@ -128,6 +132,17 @@ try {
         "$hash  $fileName"
     }
     Set-Content -LiteralPath (Join-Path $releaseRoot "SHA256SUMS.txt") -Value $checksums -Encoding ascii
+
+    if ($signingEnabled) {
+        & node "scripts/verify-updater-artifacts.mjs"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Signed updater artifact validation failed."
+        }
+        & cargo test --manifest-path "src-tauri/Cargo.toml" --test updater_signature signed_updater_matches_embedded_public_key -- --ignored --exact
+        if ($LASTEXITCODE -ne 0) {
+            throw "The updater signature does not match Aletheia's embedded public key."
+        }
+    }
 
     Write-Host "Windows release artifacts:"
     Get-ChildItem -LiteralPath $releaseRoot -File | Select-Object Name, Length

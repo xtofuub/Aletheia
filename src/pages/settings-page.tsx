@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  CircleAlertIcon,
   DatabaseIcon,
   DownloadIcon,
   GaugeIcon,
@@ -15,6 +16,7 @@ import {
 import { applyTheme } from "@/theme-provider";
 import { DashboardCard } from "@/components/dashboard-card";
 import { PageHeader } from "@/components/page-header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -100,6 +102,12 @@ const clipboardItems = [15, 30, 60, 120, 300, 600].map((value) => ({
   label: `${value} seconds`,
   value: String(value),
 }));
+const updateProgressLabels: Record<UpdateInstallProgress["state"], string> = {
+  checking: "Checking signed release",
+  downloading: "Downloading update",
+  installing: "Installing update",
+  restarting: "Restarting Aletheia",
+};
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
@@ -141,6 +149,20 @@ export function SettingsPage() {
       setForm(next);
       queryClient.setQueryData(["settings"], next);
       setNotice("Settings saved");
+    },
+  });
+
+  const installUpdate = useMutation({
+    mutationFn: () => downloadAndInstallUpdate(setInstallProgress),
+    onSuccess: (started) => {
+      if (!started) {
+        setInstallProgress(null);
+        setNotice("No signed update is currently available");
+      }
+    },
+    onError: () => {
+      setInstallProgress(null);
+      setNotice("Update failed; the current installation is unchanged");
     },
   });
 
@@ -616,20 +638,44 @@ export function SettingsPage() {
           <CardContent>
             {installProgress ? (
               <Progress value={updatePercent}>
-                <ProgressLabel>{installProgress.state}</ProgressLabel>
+                <ProgressLabel>
+                  {updateProgressLabels[installProgress.state]}
+                </ProgressLabel>
                 <ProgressValue>
-                  {() => `${updatePercent.toFixed(0)}%`}
+                  {() =>
+                    installProgress.totalBytes
+                      ? `${updatePercent.toFixed(0)}%`
+                      : installProgress.state === "restarting"
+                        ? "Ready"
+                        : "Working"
+                  }
                 </ProgressValue>
               </Progress>
+            ) : update.isError ? (
+              <Alert variant="destructive">
+                <CircleAlertIcon />
+                <AlertTitle>Update check failed</AlertTitle>
+                <AlertDescription>
+                  GitHub or the signed update manifest could not be reached.
+                  Your current installation is unchanged.
+                </AlertDescription>
+              </Alert>
+            ) : update.data ? (
+              <p className="text-sm text-muted-foreground">
+                {update.data.updateAvailable
+                  ? `Version ${update.data.latestVersion} is ready to install.`
+                  : "Aletheia is up to date."}
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Check for a signed Windows release without leaving the app.
+                Automatic checks run after startup when enabled. Updates are
+                downloaded only after you approve them.
               </p>
             )}
           </CardContent>
           <CardFooter className="flex-wrap justify-end gap-2 rounded-none bg-background">
             <Button
-              disabled={update.isFetching}
+              disabled={update.isFetching || installUpdate.isPending}
               onClick={() => void update.refetch()}
               size="sm"
               variant="outline"
@@ -652,13 +698,16 @@ export function SettingsPage() {
             ) : null}
             {update.data?.updateAvailable ? (
               <Button
-                onClick={() =>
-                  void downloadAndInstallUpdate(setInstallProgress)
-                }
+                disabled={installUpdate.isPending}
+                onClick={() => installUpdate.mutate()}
                 size="sm"
               >
-                <DownloadIcon data-icon="inline-start" />
-                Install update
+                {installUpdate.isPending ? (
+                  <Spinner data-icon="inline-start" />
+                ) : (
+                  <DownloadIcon data-icon="inline-start" />
+                )}
+                {installUpdate.isPending ? "Updating…" : "Update and restart"}
               </Button>
             ) : null}
           </CardFooter>

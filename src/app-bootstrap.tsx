@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense } from "react";
 
 import { AppShell } from "@/components/app-shell";
+import { ApplicationUpdatePrompt } from "@/components/application-update-prompt";
 import { DashboardSkeleton } from "@/components/dashboard-skeleton";
 import {
   Empty,
@@ -120,8 +121,11 @@ export function AppBootstrap() {
   }
 
   return (
-    <AppShell activeRoute={route}>
-      <Suspense fallback={<DashboardSkeleton />}>{page}</Suspense>
-    </AppShell>
+    <>
+      <AppShell activeRoute={route}>
+        <Suspense fallback={<DashboardSkeleton />}>{page}</Suspense>
+      </AppShell>
+      <ApplicationUpdatePrompt enabled={settings.data.automaticUpdateChecks} />
+    </>
   );
 }

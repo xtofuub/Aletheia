@@ -79,9 +79,13 @@ jobs:
 
       - name: Build Windows installers
         env:
+          ALETHEIA_REQUIRE_SIGNED_UPDATE: "1"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm dist:windows
+
+      - name: Verify signed updater artifacts
+        run: pnpm verify:updater-artifacts
 
       - name: Preserve release artifacts
         uses: actions/upload-artifact@v4

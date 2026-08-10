@@ -8,13 +8,13 @@ pub mod models;
 pub mod search_index;
 mod settings;
 mod storage;
-mod updater;
 
 use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -35,7 +35,6 @@ pub fn run() {
             settings::update_theme,
             settings::update_security_settings,
             settings::get_system_status,
-            updater::check_for_updates,
             detection::inspect_sources,
             direct_scan::start_direct_search,
             direct_scan::cancel_direct_search,

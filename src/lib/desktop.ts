@@ -33,10 +33,11 @@ export interface UpdateStatus {
   latestVersion: string;
   updateAvailable: boolean;
   releaseUrl: string;
+  releaseNotes: string | null;
 }
 
 export interface UpdateInstallProgress {
-  state: "checking" | "downloading" | "installing";
+  state: "checking" | "downloading" | "installing" | "restarting";
   downloadedBytes: number;
   totalBytes: number | null;
 }
@@ -497,13 +498,51 @@ export async function getSystemStatus(): Promise<SystemStatus> {
 
 export async function checkForUpdates(): Promise<UpdateStatus> {
   if (isTauriRuntime()) {
-    return invoke<UpdateStatus>("check_for_updates");
+    const [{ getVersion }, { check }] = await Promise.all([
+      import("@tauri-apps/api/app"),
+      import("@tauri-apps/plugin-updater"),
+    ]);
+    const currentVersion = await getVersion();
+    const update = await check({ timeout: 15_000 });
+    if (!update) {
+      return {
+        currentVersion,
+        latestVersion: currentVersion,
+        updateAvailable: false,
+        releaseUrl: "https://github.com/xtofuub/Aletheia/releases",
+        releaseNotes: null,
+      };
+    }
+    try {
+      const latestVersion = update.version;
+      const safeVersion = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(
+        latestVersion,
+      )
+        ? latestVersion
+        : null;
+      return {
+        currentVersion: update.currentVersion,
+        latestVersion,
+        updateAvailable: true,
+        releaseUrl: safeVersion
+          ? `https://github.com/xtofuub/Aletheia/releases/tag/v${encodeURIComponent(safeVersion)}`
+          : "https://github.com/xtofuub/Aletheia/releases",
+        releaseNotes: update.body?.trim().slice(0, 2_000) || null,
+      };
+    } finally {
+      try {
+        await update.close();
+      } catch {
+        // The completed check result is still safe to show.
+      }
+    }
   }
   return {
     currentVersion: "0.1.6",
     latestVersion: "0.1.6",
     updateAvailable: false,
     releaseUrl: "https://github.com/xtofuub/Aletheia/releases",
+    releaseNotes: null,
   };
 }
 
@@ -535,31 +574,49 @@ export async function downloadAndInstallUpdate(
 
   let downloadedBytes = 0;
   let totalBytes: number | null = null;
-  await update.downloadAndInstall((event) => {
-    if (event.event === "Started") {
-      totalBytes = event.data.contentLength ?? null;
-      onProgress({
-        state: "downloading",
-        downloadedBytes,
-        totalBytes,
-      });
-      return;
+  try {
+    await update.downloadAndInstall(
+      (event) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength ?? null;
+          onProgress({
+            state: "downloading",
+            downloadedBytes,
+            totalBytes,
+          });
+          return;
+        }
+        if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          onProgress({
+            state: "downloading",
+            downloadedBytes,
+            totalBytes,
+          });
+          return;
+        }
+        onProgress({
+          state: "installing",
+          downloadedBytes,
+          totalBytes,
+        });
+      },
+      { timeout: 120_000 },
+    );
+  } finally {
+    try {
+      await update.close();
+    } catch {
+      // The installer result matters more than releasing its finished handle.
     }
-    if (event.event === "Progress") {
-      downloadedBytes += event.data.chunkLength;
-      onProgress({
-        state: "downloading",
-        downloadedBytes,
-        totalBytes,
-      });
-      return;
-    }
-    onProgress({
-      state: "installing",
-      downloadedBytes,
-      totalBytes,
-    });
+  }
+  onProgress({
+    state: "restarting",
+    downloadedBytes,
+    totalBytes,
   });
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  await relaunch();
   return true;
 }
 
