@@ -82,27 +82,29 @@ try {
     }
 
     Add-Type -AssemblyName System.Drawing
-    $embeddedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($standaloneSource)
-    if ($null -eq $embeddedIcon -or $embeddedIcon.Width -lt 16 -or $embeddedIcon.Height -lt 16) {
-        throw "The standalone executable is missing its embedded application icon."
-    }
-    $embeddedBitmap = $embeddedIcon.ToBitmap()
-    try {
-        $transparentPixels = 0
-        for ($y = 0; $y -lt $embeddedBitmap.Height; $y++) {
-            for ($x = 0; $x -lt $embeddedBitmap.Width; $x++) {
-                if ($embeddedBitmap.GetPixel($x, $y).A -eq 0) {
-                    $transparentPixels++
+    foreach ($iconBearingExecutable in @($standaloneSource, $setupSource)) {
+        $embeddedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($iconBearingExecutable)
+        if ($null -eq $embeddedIcon -or $embeddedIcon.Width -lt 16 -or $embeddedIcon.Height -lt 16) {
+            throw "Executable is missing its embedded application icon: $iconBearingExecutable"
+        }
+        $embeddedBitmap = $embeddedIcon.ToBitmap()
+        try {
+            $transparentPixels = 0
+            for ($y = 0; $y -lt $embeddedBitmap.Height; $y++) {
+                for ($x = 0; $x -lt $embeddedBitmap.Width; $x++) {
+                    if ($embeddedBitmap.GetPixel($x, $y).A -eq 0) {
+                        $transparentPixels++
+                    }
                 }
             }
+            if ($transparentPixels -eq 0) {
+                throw "Executable icon lost transparency during resource embedding: $iconBearingExecutable"
+            }
         }
-        if ($transparentPixels -eq 0) {
-            throw "The standalone executable icon lost transparency during resource embedding."
+        finally {
+            $embeddedBitmap.Dispose()
+            $embeddedIcon.Dispose()
         }
-    }
-    finally {
-        $embeddedBitmap.Dispose()
-        $embeddedIcon.Dispose()
     }
 
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null

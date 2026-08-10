@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Bumped the next Windows build to 0.1.7 and made NSIS recreate legacy shortcuts with a dedicated transparent icon resource, then notify Explorer so stale desktop and Start Menu icon caches are refreshed.
 - Re-encoded Windows ICO frames as alpha-preserving bitmaps and added a release-build check that fails if the standalone executable regresses to an opaque black icon background.
 - Fixed stuck single-writer locks by guaranteeing import-job cleanup even if a background worker exits unexpectedly, and restored active indexing telemetry after page navigation so pause, continue, and cancel remain available.
 - Prevented a second index workflow from opening while an import or cancellation is active, replaced the technical writer error with actionable guidance, and made cancellation state immediate and explicit.

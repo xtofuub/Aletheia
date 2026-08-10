@@ -95,6 +95,7 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Complete the required documentation set and synthetic screenshots
 - [x] Pass frontend, Rust, end-to-end, native build, and safety gates
 - [x] Build the Windows executable and installer configuration
+- [x] Verify transparent icons in both the standalone executable and NSIS setup, and refresh legacy Windows shortcut caches during upgrades
 - [x] Publish changelog-backed release notes with setup guidance
 
 ## 0.1.5 reliability pass

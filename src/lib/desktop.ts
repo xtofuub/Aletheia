@@ -506,7 +506,7 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     indexedDocuments: 0,
     orphanedIndex: false,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.6",
+    appVersion: "0.1.7",
   };
 }
 
@@ -552,8 +552,8 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     }
   }
   return {
-    currentVersion: "0.1.6",
-    latestVersion: "0.1.6",
+    currentVersion: "0.1.7",
+    latestVersion: "0.1.7",
     updateAvailable: false,
     releaseUrl: "https://github.com/xtofuub/Aletheia/releases",
     releaseNotes: null,

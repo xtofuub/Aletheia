@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf};
+use std::{fs, fs::File, path::PathBuf};
 
 #[test]
 fn windows_icon_is_transparent_and_uses_the_canvas() {
@@ -56,4 +56,28 @@ fn windows_icon_is_transparent_and_uses_the_canvas() {
             coverage * 100.0
         );
     }
+}
+
+#[test]
+fn windows_installer_refreshes_legacy_shortcut_icons() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let config: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(manifest_dir.join("tauri.conf.json"))
+            .expect("Tauri config should exist"),
+    )
+    .expect("Tauri config should be valid JSON");
+
+    assert_eq!(
+        config["bundle"]["resources"]["icons/icon.ico"],
+        "resources/aletheia-icon-v2.ico"
+    );
+    assert_eq!(
+        config["bundle"]["windows"]["nsis"]["installerHooks"],
+        "windows/installer-hooks.nsh"
+    );
+
+    let hooks = fs::read_to_string(manifest_dir.join("windows/installer-hooks.nsh"))
+        .expect("NSIS installer hooks should exist");
+    assert!(hooks.contains("aletheia-icon-v2.ico"));
+    assert!(hooks.contains("SHChangeNotify"));
 }
