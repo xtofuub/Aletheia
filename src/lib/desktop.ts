@@ -765,6 +765,13 @@ export async function listenImportProgress(
   return () => undefined;
 }
 
+export async function getActiveImport(): Promise<ImportProgress | null> {
+  if (isTauriRuntime()) {
+    return invoke<ImportProgress | null>("get_active_import");
+  }
+  return null;
+}
+
 export async function pauseImport(jobId: string): Promise<void> {
   if (isTauriRuntime()) await invoke("pause_import", { jobId });
 }

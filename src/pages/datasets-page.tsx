@@ -87,6 +87,7 @@ import {
   createLiveSource,
   deleteDataset,
   deleteLiveSource,
+  getActiveImport,
   getSystemStatus,
   inspectSources,
   isTauriRuntime,
@@ -184,6 +185,11 @@ export function DatasetsPage() {
     queryKey: ["datasets"],
     queryFn: listDatasets,
     refetchInterval: 3_000,
+  });
+  const activeImport = useQuery({
+    queryKey: ["active-import"],
+    queryFn: getActiveImport,
+    refetchInterval: progress ? false : 1_000,
   });
   const liveSources = useQuery({
     queryKey: ["live-sources"],
@@ -395,11 +401,75 @@ export function DatasetsPage() {
     }
   }
 
+  async function requestPause(jobId: string) {
+    try {
+      await pauseImport(jobId);
+      setActionError("");
+      setProgress((current) => {
+        const snapshot = current ?? activeImport.data ?? null;
+        return snapshot?.jobId === jobId
+          ? { ...snapshot, status: "paused", message: "Import paused" }
+          : current;
+      });
+    } catch (error) {
+      setActionError(String(error));
+    }
+  }
+
+  async function requestContinue(jobId: string) {
+    try {
+      await resumeImport(jobId);
+      setActionError("");
+      setProgress((current) => {
+        const snapshot = current ?? activeImport.data ?? null;
+        return snapshot?.jobId === jobId
+          ? {
+              ...snapshot,
+              status: "running",
+              message: "Indexing local records",
+            }
+          : current;
+      });
+    } catch (error) {
+      setActionError(String(error));
+    }
+  }
+
+  async function requestCancel(jobId: string) {
+    try {
+      await cancelImport(jobId);
+      setActionError("");
+      setProgress((current) => {
+        const snapshot = current ?? activeImport.data ?? null;
+        return snapshot?.jobId === jobId
+          ? {
+              ...snapshot,
+              status: "cancelling",
+              message: "Finishing cancellation safely",
+            }
+          : current;
+      });
+    } catch (error) {
+      setActionError(String(error));
+    }
+  }
+
+  const visibleProgress = progress ?? activeImport.data ?? null;
   const active =
-    progress &&
-    ["queued", "running", "paused", "cancelling"].includes(progress.status);
-  const percent = progress?.totalBytes
-    ? Math.min(100, (progress.bytesRead / progress.totalBytes) * 100)
+    visibleProgress &&
+    ["queued", "running", "paused", "cancelling"].includes(
+      visibleProgress.status,
+    );
+  const workspaceImportActive =
+    Boolean(active) ||
+    (datasets.data ?? []).some((dataset) =>
+      ["queued", "indexing", "paused", "cancelling"].includes(dataset.status),
+    );
+  const percent = visibleProgress?.totalBytes
+    ? Math.min(
+        100,
+        (visibleProgress.bytesRead / visibleProgress.totalBytes) * 100,
+      )
     : 0;
   const largeInspection = Boolean(inspection && isLargeInspection(inspection));
   const estimatedIndexBytes = inspection
@@ -409,8 +479,12 @@ export function DatasetsPage() {
       }
     : null;
   const importEtaMs =
-    progress && bytesPerSecond > 0 && progress.bytesRead < progress.totalBytes
-      ? ((progress.totalBytes - progress.bytesRead) / bytesPerSecond) * 1_000
+    visibleProgress &&
+    bytesPerSecond > 0 &&
+    visibleProgress.bytesRead < visibleProgress.totalBytes
+      ? ((visibleProgress.totalBytes - visibleProgress.bytesRead) /
+          bytesPerSecond) *
+        1_000
       : null;
 
   return (
@@ -517,7 +591,7 @@ export function DatasetsPage() {
             <Separator />
             <div className="mt-auto flex flex-wrap items-center justify-end gap-2">
               <Button
-                disabled={inspect.isPending}
+                disabled={inspect.isPending || workspaceImportActive}
                 onClick={() => inspect.mutate("folder")}
                 size="sm"
                 variant="outline"
@@ -527,10 +601,14 @@ export function DatasetsPage() {
                 ) : (
                   <FolderOpenIcon data-icon="inline-start" />
                 )}
-                {inspect.isPending ? "Reading…" : "Index folder"}
+                {inspect.isPending
+                  ? "Reading…"
+                  : workspaceImportActive
+                    ? "Indexing active"
+                    : "Index folder"}
               </Button>
               <Button
-                disabled={inspect.isPending}
+                disabled={inspect.isPending || workspaceImportActive}
                 onClick={() => inspect.mutate("files")}
                 size="sm"
                 variant="outline"
@@ -540,7 +618,11 @@ export function DatasetsPage() {
                 ) : (
                   <FilePlus2Icon data-icon="inline-start" />
                 )}
-                {inspect.isPending ? "Reading…" : "Index files"}
+                {inspect.isPending
+                  ? "Reading…"
+                  : workspaceImportActive
+                    ? "Indexing active"
+                    : "Index files"}
               </Button>
             </div>
           </CardContent>
@@ -548,31 +630,31 @@ export function DatasetsPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-4">
-        {progress ? (
+        {visibleProgress ? (
           <DashboardCard className="lg:col-span-4">
             <CardHeader>
               <CardTitle>Indexing telemetry</CardTitle>
-              <CardDescription>{progress.message}</CardDescription>
+              <CardDescription>{visibleProgress.message}</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <Progress value={percent}>
                 <ProgressLabel>
-                  {progress.currentFile ?? progress.status}
+                  {visibleProgress.currentFile ?? visibleProgress.status}
                 </ProgressLabel>
                 <ProgressValue>{() => `${percent.toFixed(0)}%`}</ProgressValue>
               </Progress>
               <div className="grid grid-cols-2 gap-px bg-border p-px sm:grid-cols-5">
                 {[
-                  ["Indexed", formatCount(progress.recordsIndexed)],
+                  ["Indexed", formatCount(visibleProgress.recordsIndexed)],
                   ["Record speed", formatRate(recordsPerSecond)],
                   ["Read speed", `${formatBytes(bytesPerSecond)}/s`],
                   [
                     "Time remaining",
-                    progress.status === "completed"
+                    visibleProgress.status === "completed"
                       ? "Done"
                       : formatDuration(importEtaMs),
                   ],
-                  ["Invalid", formatCount(progress.invalidRecords)],
+                  ["Invalid", formatCount(visibleProgress.invalidRecords)],
                 ].map(([label, value]) => (
                   <div className="bg-background p-3" key={label}>
                     <p className="text-xs text-muted-foreground">{label}</p>
@@ -585,9 +667,14 @@ export function DatasetsPage() {
             </CardContent>
             {active ? (
               <CardFooter className="justify-end gap-2 rounded-none bg-background">
-                {progress.status === "paused" ? (
+                {visibleProgress.status === "cancelling" ? (
+                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Spinner />
+                    Finishing cancellation before another index can start
+                  </span>
+                ) : visibleProgress.status === "paused" ? (
                   <Button
-                    onClick={() => void resumeImport(progress.jobId)}
+                    onClick={() => void requestContinue(visibleProgress.jobId)}
                     size="sm"
                     variant="outline"
                   >
@@ -596,7 +683,7 @@ export function DatasetsPage() {
                   </Button>
                 ) : (
                   <Button
-                    onClick={() => void pauseImport(progress.jobId)}
+                    onClick={() => void requestPause(visibleProgress.jobId)}
                     size="sm"
                     variant="outline"
                   >
@@ -604,14 +691,16 @@ export function DatasetsPage() {
                     Pause
                   </Button>
                 )}
-                <Button
-                  onClick={() => void cancelImport(progress.jobId)}
-                  size="sm"
-                  variant="outline"
-                >
-                  <SquareIcon data-icon="inline-start" />
-                  Cancel
-                </Button>
+                {visibleProgress.status !== "cancelling" ? (
+                  <Button
+                    onClick={() => void requestCancel(visibleProgress.jobId)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <SquareIcon data-icon="inline-start" />
+                    Cancel
+                  </Button>
+                ) : null}
               </CardFooter>
             ) : null}
           </DashboardCard>
@@ -734,7 +823,10 @@ export function DatasetsPage() {
                           <div className="flex justify-end gap-1">
                             {resumable ? (
                               <Button
-                                disabled={resumingDatasetId === dataset.id}
+                                disabled={
+                                  workspaceImportActive ||
+                                  resumingDatasetId === dataset.id
+                                }
                                 onClick={() => void continueDataset(dataset)}
                                 size="sm"
                                 variant="outline"
@@ -791,7 +883,11 @@ export function DatasetsPage() {
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
-                  <Button onClick={() => inspect.mutate("files")} size="sm">
+                  <Button
+                    disabled={workspaceImportActive}
+                    onClick={() => inspect.mutate("files")}
+                    size="sm"
+                  >
                     <FilePlus2Icon data-icon="inline-start" />
                     Choose files
                   </Button>
@@ -1117,7 +1213,9 @@ export function DatasetsPage() {
           ) : null}
           <DialogFooter>
             <Button
-              disabled={!datasetLabel.trim() || start.isPending}
+              disabled={
+                !datasetLabel.trim() || start.isPending || workspaceImportActive
+              }
               onClick={() => start.mutate()}
             >
               {start.isPending ? (

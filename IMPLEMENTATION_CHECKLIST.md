@@ -152,6 +152,8 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Merge indexed and Live lookup into one source-aware Search workflow
 - [x] Show every selected file in Review import before starting a multi-file index
 - [x] Recursively discover supported files when indexing a folder
+- [x] Recover active import telemetry after navigation and prevent stale writer locks
+- [x] Block a second index while the current import or cancellation is active
 
 ## Signed update reliability
 

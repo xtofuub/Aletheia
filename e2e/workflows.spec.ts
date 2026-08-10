@@ -100,3 +100,34 @@ test("folder indexing reviews supported files recursively", async ({
   await expect(dialog.getByText(/nested\\records_two\.txt/)).toBeVisible();
   await expect(dialog.getByText("records_three.jsonl")).toBeVisible();
 });
+
+test("an active index blocks a second writer before file selection", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "aletheia.browser.datasets",
+      JSON.stringify([
+        {
+          id: "dataset-active",
+          name: "Active synthetic index",
+          status: "indexing",
+          recordCount: 10,
+          fileCount: 1,
+          totalBytes: 4096,
+          warningCount: 0,
+          createdAt: new Date().toISOString(),
+          lastIndexedAt: null,
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/datasets");
+
+  const blockedActions = page.getByRole("button", {
+    name: "Indexing active",
+  });
+  await expect(blockedActions).toHaveCount(2);
+  await expect(blockedActions.first()).toBeDisabled();
+  await expect(blockedActions.last()).toBeDisabled();
+});

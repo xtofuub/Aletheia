@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed stuck single-writer locks by guaranteeing import-job cleanup even if a background worker exits unexpectedly, and restored active indexing telemetry after page navigation so pause, continue, and cancel remain available.
+- Prevented a second index workflow from opening while an import or cancellation is active, replaced the technical writer error with actionable guidance, and made cancellation state immediate and explicit.
 - Rebuilt Review import around a dedicated scrollable file table so every selected or recursively discovered file is visible before indexing, with totals, relative paths, formats, estimated rows, and skipped-file feedback.
 - Added native and browser coverage proving that Index folder recursively discovers supported files in subfolders while leaving archives for the Live scan workflow.
 - Added persistent, removable Live-source catalogs and merged indexed lookup and live scanning into one source-aware Search workflow; source removal never deletes original files.

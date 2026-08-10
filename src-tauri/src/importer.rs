@@ -1,8 +1,9 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     mem,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -179,6 +180,56 @@ struct BoundedLineRead {
     exceeded_limit: bool,
 }
 
+struct JobRegistryGuard {
+    jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    job_id: String,
+}
+
+impl JobRegistryGuard {
+    fn new(jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>, job_id: String) -> Self {
+        Self { jobs, job_id }
+    }
+}
+
+impl Drop for JobRegistryGuard {
+    fn drop(&mut self) {
+        if let Ok(mut registry) = self.jobs.lock() {
+            registry.remove(&self.job_id);
+        }
+    }
+}
+
+fn active_import_error(database: &Arc<Mutex<Connection>>, active_job_id: &str) -> String {
+    let status = load_import_progress(database, active_job_id)
+        .ok()
+        .flatten()
+        .map(|progress| progress.status)
+        .unwrap_or_else(|| "running".to_string());
+    if status == "cancelling" {
+        "The previous index is finishing cancellation. Wait for it to finish before starting another index.".to_string()
+    } else {
+        "An index is already active. Use Indexing telemetry to pause or cancel it before starting another index.".to_string()
+    }
+}
+
+fn reserve_import_job(
+    database: &Arc<Mutex<Connection>>,
+    jobs: &Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    job_id: &str,
+    control: Arc<JobControl>,
+) -> Result<JobRegistryGuard, String> {
+    let mut registry = jobs
+        .lock()
+        .map_err(|_| "import job registry is unavailable".to_string())?;
+    if let Some(active_job_id) = registry.keys().next().cloned() {
+        drop(registry);
+        return Err(active_import_error(database, &active_job_id));
+    }
+    registry.insert(job_id.to_string(), control);
+    drop(registry);
+    Ok(JobRegistryGuard::new(jobs.clone(), job_id.to_string()))
+}
+
 #[tauri::command]
 pub async fn start_import(
     plan: ImportPlan,
@@ -187,78 +238,58 @@ pub async fn start_import(
 ) -> Result<ImportStartResult, String> {
     validate_plan(&plan)?;
     let (worker_limit, memory_limit_mb) = import_resource_limits(&state.database)?;
-    if !state
-        .jobs
-        .lock()
-        .map_err(|_| "import job registry is unavailable".to_string())?
-        .is_empty()
-    {
-        return Err(
-            "another import is active; Aletheia uses one writer with multiple index workers"
-                .to_string(),
-        );
-    }
-    let dataset_id = Uuid::new_v4().to_string();
-    let job_id = Uuid::new_v4().to_string();
-    let total_bytes = total_source_bytes(&plan);
-    let worker_files = prepare_database_rows(&state.database, &dataset_id, &job_id, &plan)?;
-    let control = Arc::new(JobControl::default());
-    state
-        .jobs
-        .lock()
-        .map_err(|_| "import job registry is unavailable".to_string())?
-        .insert(job_id.clone(), control.clone());
-
-    let database = state.database.clone();
     let storage_root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
-    let jobs = state.jobs.clone();
+    let dataset_id = Uuid::new_v4().to_string();
+    let job_id = Uuid::new_v4().to_string();
+    let control = Arc::new(JobControl::default());
+    let registry_guard =
+        reserve_import_job(&state.database, &state.jobs, &job_id, control.clone())?;
+    let total_bytes = total_source_bytes(&plan);
+    let worker_files = prepare_database_rows(&state.database, &dataset_id, &job_id, &plan)?;
+
+    let database = state.database.clone();
     let result = ImportStartResult {
         job_id: job_id.clone(),
         dataset_id: dataset_id.clone(),
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let run_result = open_database(&storage_root)
-            .map_err(|_| "metadata database worker could not start".to_string())
-            .and_then(|worker_connection| {
-                prepare_import_database(&worker_connection)?;
-                let worker_database = Arc::new(Mutex::new(worker_connection));
-                run_import(
-                    Some(&app),
-                    &worker_database,
-                    &storage_root,
-                    &job_id,
-                    &dataset_id,
-                    total_bytes,
-                    worker_limit,
-                    memory_limit_mb,
-                    worker_files,
-                    &plan,
-                    &control,
-                )
-            });
-        if let Err(error) = run_result {
-            mark_failed(&database, &job_id, &dataset_id);
-            let _ = app.emit(
-                "import-progress",
-                ImportProgress {
-                    job_id: job_id.clone(),
-                    dataset_id: dataset_id.clone(),
-                    status: "failed".to_string(),
-                    current_file: None,
-                    bytes_read: 0,
-                    total_bytes,
-                    records_processed: 0,
-                    records_indexed: 0,
-                    invalid_records: 0,
-                    duplicate_records: 0,
-                    message: error,
-                },
-            );
-        }
-        if let Ok(mut registry) = jobs.lock() {
-            registry.remove(&job_id);
+        let _registry_guard = registry_guard;
+        let run_result = catch_unwind(AssertUnwindSafe(|| {
+            open_database(&storage_root)
+                .map_err(|_| "metadata database worker could not start".to_string())
+                .and_then(|worker_connection| {
+                    prepare_import_database(&worker_connection)?;
+                    let worker_database = Arc::new(Mutex::new(worker_connection));
+                    run_import(
+                        Some(&app),
+                        &worker_database,
+                        &storage_root,
+                        &job_id,
+                        &dataset_id,
+                        total_bytes,
+                        worker_limit,
+                        memory_limit_mb,
+                        worker_files,
+                        &plan,
+                        &control,
+                    )
+                })
+        }));
+        match run_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                report_import_failure(&app, &database, &job_id, &dataset_id, total_bytes, error)
+            }
+            Err(_) => report_import_failure(
+                &app,
+                &database,
+                &job_id,
+                &dataset_id,
+                total_bytes,
+                "Import worker stopped unexpectedly; saved progress can be resumed.".to_string(),
+            ),
         }
     });
     Ok(result)
@@ -274,14 +305,9 @@ pub async fn resume_dataset_import(
         return Err("dataset identifier is invalid".to_string());
     }
     let (worker_limit, memory_limit_mb) = import_resource_limits(&state.database)?;
-    if !state
-        .jobs
-        .lock()
-        .map_err(|_| "import job registry is unavailable".to_string())?
-        .is_empty()
-    {
-        return Err("another import is already active".to_string());
-    }
+    let storage_root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
 
     let (job_id, mut plan) = load_resume_plan(&state.database, &dataset_id)?;
     validate_plan(&plan)?;
@@ -292,6 +318,9 @@ pub async fn resume_dataset_import(
     let total_bytes = total_source_bytes(&plan);
     let plan_json =
         serde_json::to_string(&plan).map_err(|_| "saved import plan is invalid".to_string())?;
+    let control = Arc::new(JobControl::default());
+    let registry_guard =
+        reserve_import_job(&state.database, &state.jobs, &job_id, control.clone())?;
     {
         let connection = state
             .database
@@ -313,65 +342,65 @@ pub async fn resume_dataset_import(
             .map_err(sanitized)?;
     }
 
-    let control = Arc::new(JobControl::default());
-    state
-        .jobs
-        .lock()
-        .map_err(|_| "import job registry is unavailable".to_string())?
-        .insert(job_id.clone(), control.clone());
     let database = state.database.clone();
-    let storage_root = state
-        .current_storage_root()
-        .map_err(|_| "storage location is unavailable".to_string())?;
-    let jobs = state.jobs.clone();
     let result = ImportStartResult {
         job_id: job_id.clone(),
         dataset_id: dataset_id.clone(),
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let run_result = open_database(&storage_root)
-            .map_err(|_| "metadata database worker could not start".to_string())
-            .and_then(|worker_connection| {
-                prepare_import_database(&worker_connection)?;
-                let worker_database = Arc::new(Mutex::new(worker_connection));
-                run_import(
-                    Some(&app),
-                    &worker_database,
-                    &storage_root,
-                    &job_id,
-                    &dataset_id,
-                    total_bytes,
-                    worker_limit,
-                    memory_limit_mb,
-                    worker_files,
-                    &plan,
-                    &control,
-                )
-            });
-        if let Err(error) = run_result {
-            mark_failed(&database, &job_id, &dataset_id);
-            let _ = app.emit(
-                "import-progress",
-                ImportProgress {
-                    job_id: job_id.clone(),
-                    dataset_id: dataset_id.clone(),
-                    status: "failed".to_string(),
-                    current_file: None,
-                    bytes_read: 0,
-                    total_bytes,
-                    records_processed: 0,
-                    records_indexed: 0,
-                    invalid_records: 0,
-                    duplicate_records: 0,
-                    message: error,
-                },
-            );
-        }
-        if let Ok(mut registry) = jobs.lock() {
-            registry.remove(&job_id);
+        let _registry_guard = registry_guard;
+        let run_result = catch_unwind(AssertUnwindSafe(|| {
+            open_database(&storage_root)
+                .map_err(|_| "metadata database worker could not start".to_string())
+                .and_then(|worker_connection| {
+                    prepare_import_database(&worker_connection)?;
+                    let worker_database = Arc::new(Mutex::new(worker_connection));
+                    run_import(
+                        Some(&app),
+                        &worker_database,
+                        &storage_root,
+                        &job_id,
+                        &dataset_id,
+                        total_bytes,
+                        worker_limit,
+                        memory_limit_mb,
+                        worker_files,
+                        &plan,
+                        &control,
+                    )
+                })
+        }));
+        match run_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                report_import_failure(&app, &database, &job_id, &dataset_id, total_bytes, error)
+            }
+            Err(_) => report_import_failure(
+                &app,
+                &database,
+                &job_id,
+                &dataset_id,
+                total_bytes,
+                "Import worker stopped unexpectedly; saved progress can be resumed.".to_string(),
+            ),
         }
     });
     Ok(result)
+}
+
+#[tauri::command]
+pub fn get_active_import(state: State<'_, AppState>) -> Result<Option<ImportProgress>, String> {
+    let job_id = state
+        .jobs
+        .lock()
+        .map_err(|_| "import job registry is unavailable".to_string())?
+        .keys()
+        .next()
+        .cloned();
+    match job_id {
+        Some(job_id) => load_import_progress(&state.database, &job_id),
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -2086,6 +2115,84 @@ fn emit_progress(
     }
 }
 
+fn load_import_progress(
+    database: &Arc<Mutex<Connection>>,
+    job_id: &str,
+) -> Result<Option<ImportProgress>, String> {
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    connection
+        .query_row(
+            "SELECT j.dataset_id, j.status, sf.relative_path,
+                    j.bytes_read, j.total_bytes, j.records_processed,
+                    j.records_indexed, j.invalid_records, j.duplicate_records
+             FROM import_jobs j
+             LEFT JOIN source_files sf ON sf.id = j.current_file_id
+             WHERE j.id = ?1",
+            [job_id],
+            |row| {
+                let status = row.get::<_, String>(1)?;
+                let message = match status.as_str() {
+                    "queued" => "Import queued",
+                    "paused" => "Import paused",
+                    "cancelling" => "Finishing cancellation",
+                    _ => "Indexing local records",
+                };
+                Ok(ImportProgress {
+                    job_id: job_id.to_string(),
+                    dataset_id: row.get(0)?,
+                    status,
+                    current_file: row.get(2)?,
+                    bytes_read: row.get::<_, i64>(3)?.max(0) as u64,
+                    total_bytes: row.get::<_, i64>(4)?.max(0) as u64,
+                    records_processed: row.get::<_, i64>(5)?.max(0) as u64,
+                    records_indexed: row.get::<_, i64>(6)?.max(0) as u64,
+                    invalid_records: row.get::<_, i64>(7)?.max(0) as u64,
+                    duplicate_records: row.get::<_, i64>(8)?.max(0) as u64,
+                    message: message.to_string(),
+                })
+            },
+        )
+        .optional()
+        .map_err(sanitized)
+}
+
+fn report_import_failure(
+    app: &AppHandle,
+    database: &Arc<Mutex<Connection>>,
+    job_id: &str,
+    dataset_id: &str,
+    total_bytes: u64,
+    error: String,
+) {
+    mark_failed(database, job_id, dataset_id);
+    let progress = load_import_progress(database, job_id)
+        .ok()
+        .flatten()
+        .unwrap_or(ImportProgress {
+            job_id: job_id.to_string(),
+            dataset_id: dataset_id.to_string(),
+            status: "failed".to_string(),
+            current_file: None,
+            bytes_read: 0,
+            total_bytes,
+            records_processed: 0,
+            records_indexed: 0,
+            invalid_records: 0,
+            duplicate_records: 0,
+            message: String::new(),
+        });
+    let _ = app.emit(
+        "import-progress",
+        ImportProgress {
+            status: "failed".to_string(),
+            message: error,
+            ..progress
+        },
+    );
+}
+
 fn mark_file(
     database: &Arc<Mutex<Connection>>,
     job_id: &str,
@@ -2219,6 +2326,7 @@ fn sanitized(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         fs::{self, File, OpenOptions},
         io::{self, BufReader, BufWriter, Cursor, Read, Write},
         sync::{Arc, Mutex},
@@ -2230,13 +2338,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        BATCH_RECORDS, Counters, INDEX_CHECKPOINT_RECORDS, JobControl, MAX_LINE_BYTES,
-        batch_byte_limit, decompression_limit, delete_dataset_from_workspace,
+        BATCH_RECORDS, Counters, INDEX_CHECKPOINT_RECORDS, JobControl, JobRegistryGuard,
+        MAX_LINE_BYTES, batch_byte_limit, decompression_limit, delete_dataset_from_workspace,
         extract_embedded_domains, extract_embedded_identifiers, finish_cancelled, flush_batch,
-        load_resume_plan, normalize_value, prepare_database_rows, prepare_import_database,
-        prepare_resume_files, process_record, read_bounded_line, rebuild_domain_groups,
-        rebuild_identity_groups, run_import, store_identity, stream_file, validate_plan,
-        writer_memory_budget,
+        load_import_progress, load_resume_plan, normalize_value, prepare_database_rows,
+        prepare_import_database, prepare_resume_files, process_record, read_bounded_line,
+        rebuild_domain_groups, rebuild_identity_groups, run_import, store_identity, stream_file,
+        validate_plan, writer_memory_budget,
     };
     use crate::{
         detection::inspect_paths,
@@ -2249,6 +2357,53 @@ mod tests {
         pattern: Vec<u8>,
         pattern_offset: usize,
         remaining: u64,
+    }
+
+    #[test]
+    fn job_registry_guard_releases_the_writer_slot() {
+        let jobs = Arc::new(Mutex::new(HashMap::new()));
+        jobs.lock()
+            .expect("registry")
+            .insert("job-guard".to_string(), Arc::new(JobControl::default()));
+        {
+            let _guard = JobRegistryGuard::new(jobs.clone(), "job-guard".to_string());
+        }
+        assert!(jobs.lock().expect("registry").is_empty());
+    }
+
+    #[test]
+    fn active_import_progress_can_be_recovered_after_navigation() {
+        let directory = tempdir().expect("workspace");
+        let connection = open_database(directory.path()).expect("database");
+        connection
+            .execute(
+                "INSERT INTO datasets(
+                    id, name, status, total_bytes, parser_version
+                 ) VALUES ('dataset-active', 'Synthetic', 'indexing', 4096, 'test')",
+                [],
+            )
+            .expect("dataset");
+        connection
+            .execute(
+                "INSERT INTO import_jobs(
+                    id, dataset_id, status, bytes_read, total_bytes,
+                    records_processed, records_indexed
+                 ) VALUES (
+                    'job-active', 'dataset-active', 'paused', 1024, 4096, 12, 10
+                 )",
+                [],
+            )
+            .expect("job");
+        let database = Arc::new(Mutex::new(connection));
+
+        let progress = load_import_progress(&database, "job-active")
+            .expect("progress")
+            .expect("active job");
+
+        assert_eq!(progress.status, "paused");
+        assert_eq!(progress.bytes_read, 1024);
+        assert_eq!(progress.records_indexed, 10);
+        assert_eq!(progress.message, "Import paused");
     }
 
     #[test]

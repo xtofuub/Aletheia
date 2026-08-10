@@ -42,6 +42,7 @@ pub fn run() {
             direct_scan::pause_direct_search,
             direct_scan::resume_direct_search,
             importer::start_import,
+            importer::get_active_import,
             importer::resume_dataset_import,
             importer::rebuild_identities,
             importer::rebuild_domains,
