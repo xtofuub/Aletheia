@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRightIcon,
+  DatabaseIcon,
   FilePlus2Icon,
   FileSearchIcon,
   FolderOpenIcon,
+  MonitorIcon,
   PauseIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -79,7 +81,9 @@ import {
 import {
   cancelImport,
   deleteDataset,
+  getSystemStatus,
   inspectSources,
+  isTauriRuntime,
   listDatasets,
   listenImportProgress,
   pauseImport,
@@ -138,6 +142,11 @@ export function DatasetsPage() {
     queryFn: listDatasets,
     refetchInterval: 3_000,
   });
+  const system = useQuery({
+    queryKey: ["system-status"],
+    queryFn: getSystemStatus,
+  });
+  const nativeRuntime = isTauriRuntime();
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -288,6 +297,30 @@ export function DatasetsPage() {
         description="Scan very large sources immediately, or index smaller collections you search repeatedly."
         title="Datasets"
       />
+
+      {!nativeRuntime ? (
+        <Alert className="mb-4">
+          <MonitorIcon />
+          <AlertTitle>Browser preview uses sample data</AlertTitle>
+          <AlertDescription>
+            Localhost cannot open the native SQLite and Tantivy workspace. Open
+            the installed desktop app to see datasets you indexed previously.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {system.data?.orphanedIndex ? (
+        <Alert className="mb-4" variant="destructive">
+          <DatabaseIcon />
+          <AlertTitle>Indexed documents are missing their metadata</AlertTitle>
+          <AlertDescription>
+            This folder contains {formatCount(system.data.indexedDocuments)}
+            indexed documents but no dataset catalog. Select the original
+            workspace in Settings, or re-index the source files. Source files
+            were not changed. <a href="#/settings">Open storage settings.</a>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {actionError ? (
         <Alert className="mb-4" variant="destructive">

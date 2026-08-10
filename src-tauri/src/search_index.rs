@@ -62,6 +62,12 @@ impl SearchIndex {
             .map_err(sanitized)
     }
 
+    pub fn document_count(&self) -> Result<u64, String> {
+        let reader = self.reader()?;
+        reader.reload().map_err(sanitized)?;
+        Ok(reader.searcher().num_docs())
+    }
+
     pub fn delete_dataset(&self, dataset_id: &str) -> Result<(), String> {
         let mut writer = self.writer()?;
         writer.delete_term(Term::from_field_text(self.fields.dataset_id, dataset_id));
@@ -318,6 +324,7 @@ mod tests {
             ))
             .expect("name document");
         writer.commit().expect("commit");
+        assert_eq!(search.document_count().expect("document count"), 2);
 
         for (query, mode) in [
             ("email:person@example.com", SearchMode::Exact),

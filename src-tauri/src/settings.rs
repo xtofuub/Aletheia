@@ -4,7 +4,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::State;
 
-use crate::storage::AppState;
+use crate::{search_index::SearchIndex, storage::AppState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +44,9 @@ pub struct SystemStatus {
     pub offline: bool,
     pub metadata_bytes: u64,
     pub index_bytes: u64,
+    pub dataset_count: u64,
+    pub indexed_documents: u64,
+    pub orphaned_index: bool,
     pub storage_root: String,
     pub app_version: String,
 }
@@ -205,15 +208,37 @@ pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatus, Str
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     let index_bytes = directory_size(&storage_root.join("search-index")).unwrap_or(0);
+    let dataset_count = state
+        .database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?
+        .query_row("SELECT COUNT(*) FROM datasets", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(sanitize)? as u64;
+    let indexed_documents = if storage_root.join("search-index").join("meta.json").exists() {
+        SearchIndex::open_or_create(&storage_root)
+            .and_then(|index| index.document_count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
 
     Ok(SystemStatus {
         database_ready: true,
         offline: true,
         metadata_bytes,
         index_bytes,
+        dataset_count,
+        indexed_documents,
+        orphaned_index: is_orphaned_index(dataset_count, indexed_documents),
         storage_root: storage_root.to_string_lossy().into_owned(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
     })
+}
+
+fn is_orphaned_index(dataset_count: u64, indexed_documents: u64) -> bool {
+    dataset_count == 0 && indexed_documents > 0
 }
 
 fn directory_size(root: &std::path::Path) -> Result<u64, std::io::Error> {
@@ -239,4 +264,16 @@ fn directory_size(root: &std::path::Path) -> Result<u64, std::io::Error> {
 fn sanitize(error: impl std::fmt::Display) -> String {
     let _ = error;
     "local settings operation failed".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_orphaned_index;
+
+    #[test]
+    fn orphan_detection_requires_documents_without_a_dataset_catalog() {
+        assert!(is_orphaned_index(0, 42));
+        assert!(!is_orphaned_index(1, 42));
+        assert!(!is_orphaned_index(0, 0));
+    }
 }

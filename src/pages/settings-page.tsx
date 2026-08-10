@@ -118,6 +118,9 @@ export function SettingsPage() {
   });
   const [formOverride, setForm] = useState<Settings | null>(null);
   const [notice, setNotice] = useState("");
+  const [pendingStorageRoot, setPendingStorageRoot] = useState<string | null>(
+    null,
+  );
   const [installProgress, setInstallProgress] =
     useState<UpdateInstallProgress | null>(null);
 
@@ -139,6 +142,28 @@ export function SettingsPage() {
       queryClient.setQueryData(["settings"], next);
       setNotice("Settings saved");
     },
+  });
+
+  const switchWorkspace = useMutation({
+    mutationFn: (storageRoot: string) =>
+      saveOnboarding({
+        authorizationConfirmed: true,
+        storageRoot,
+      }),
+    onSuccess: async (next) => {
+      setForm(next);
+      setPendingStorageRoot(null);
+      setNotice("Workspace switched");
+      queryClient.setQueryData(["settings"], next);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["system-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["datasets"] }),
+        queryClient.invalidateQueries({ queryKey: ["overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["domains"] }),
+        queryClient.invalidateQueries({ queryKey: ["identities"] }),
+      ]);
+    },
+    onError: (error) => setNotice(`Workspace switch failed: ${String(error)}`),
   });
 
   async function changeTheme(theme: Theme) {
@@ -493,26 +518,27 @@ export function SettingsPage() {
           </CardContent>
           <CardFooter className="rounded-none bg-background">
             <Button
+              disabled={switchWorkspace.isPending}
               onClick={() =>
                 void selectStorageFolder(form.storageRoot).then(
-                  async (storageRoot) => {
-                    const next = await saveOnboarding({
-                      authorizationConfirmed: true,
-                      storageRoot,
-                    });
-                    setForm(next);
-                    queryClient.setQueryData(["settings"], next);
-                    await queryClient.invalidateQueries({
-                      queryKey: ["system-status"],
-                    });
+                  (storageRoot) => {
+                    if (storageRoot !== form.storageRoot) {
+                      setPendingStorageRoot(storageRoot);
+                    }
                   },
                 )
               }
               size="sm"
               variant="outline"
             >
-              <HardDriveIcon data-icon="inline-start" />
-              Change folder
+              {switchWorkspace.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <HardDriveIcon data-icon="inline-start" />
+              )}
+              {switchWorkspace.isPending
+                ? "Switching workspace…"
+                : "Switch workspace"}
             </Button>
           </CardFooter>
         </DashboardCard>
@@ -636,6 +662,44 @@ export function SettingsPage() {
           </CardFooter>
         </DashboardCard>
       </div>
+
+      <AlertDialog
+        onOpenChange={(open) => {
+          if (!open && !switchWorkspace.isPending) setPendingStorageRoot(null);
+        }}
+        open={Boolean(pendingStorageRoot)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <HardDriveIcon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Switch Aletheia workspace?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Indexed datasets stay in the current workspace and are not moved
+              or deleted. Select their original workspace to reconnect them, or
+              choose an empty folder to start a separate workspace.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {pendingStorageRoot ? (
+            <p className="break-all font-mono text-xs text-muted-foreground">
+              {pendingStorageRoot}
+            </p>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep current workspace</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingStorageRoot) {
+                  switchWorkspace.mutate(pendingStorageRoot);
+                }
+              }}
+            >
+              Switch workspace
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

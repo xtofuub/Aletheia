@@ -21,6 +21,9 @@ export interface SystemStatus {
   offline: boolean;
   metadataBytes: number;
   indexBytes: number;
+  datasetCount: number;
+  indexedDocuments: number;
+  orphanedIndex: boolean;
   storageRoot: string;
   appVersion: string;
 }
@@ -466,6 +469,9 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     offline: true,
     metadataBytes: 0,
     indexBytes: 0,
+    datasetCount: 0,
+    indexedDocuments: 0,
+    orphanedIndex: false,
     storageRoot: settings.storageRoot,
     appVersion: "0.1.6",
   };
