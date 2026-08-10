@@ -227,6 +227,7 @@ export interface DirectSearchStart {
 
 export interface DirectSearchHit {
   id: string;
+  sourcePath: string;
   sourceFile: string;
   archiveEntry: string | null;
   sourceLocation: string;
@@ -310,8 +311,10 @@ export interface IdentitySummary {
 
 export interface IdentityMember {
   recordId: string;
+  origin: "indexed" | "live";
   datasetName: string;
   sourceFile: string;
+  sourcePath: string | null;
   sourceLocation: string;
   userStatus: string;
   fields: SearchField[];
@@ -333,6 +336,16 @@ export interface IdentityActionInput {
 export interface ManualIdentityInput {
   name: string;
   recordIds: string[];
+  liveEvidence: LiveIdentityEvidenceInput[];
+}
+
+export interface LiveIdentityEvidenceInput {
+  sourcePath: string;
+  sourceFile: string;
+  archiveEntry: string | null;
+  sourceLocation: string;
+  excerpt: string;
+  matchReason: string;
 }
 
 export interface SavedSearch {
@@ -842,6 +855,7 @@ export async function startDirectSearch(
   const sourceCount = Math.max(1, request.paths.length);
   const syntheticHit: DirectSearchHit = {
     id: crypto.randomUUID(),
+    sourcePath: "C:\\Synthetic\\Authorized corpus\\synthetic.zip",
     sourceFile: "synthetic-authorized-source.txt",
     archiveEntry: request.includeArchives ? "records/synthetic.txt" : null,
     sourceLocation: "line 42",
@@ -853,6 +867,13 @@ export async function startDirectSearch(
           ? "Field prefix match"
           : "Line contains query",
   };
+  const syntheticSecondHit: DirectSearchHit = {
+    ...syntheticHit,
+    id: crypto.randomUUID(),
+    archiveEntry: request.includeArchives ? "records/synthetic-2.txt" : null,
+    sourceLocation: "line 84",
+    excerpt: "s***@example.com:account-1002:service.example.com",
+  };
   window.setTimeout(() => {
     const progress: DirectSearchProgress = {
       jobId,
@@ -862,12 +883,12 @@ export async function startDirectSearch(
       filesScanned: sourceCount,
       totalBytes: 128 * 1024 * 1024,
       contentBytesScanned: 384 * 1024 * 1024,
-      matches: 1,
+      matches: 2,
       elapsedMs: Math.max(1, Math.round(performance.now() - started)),
       bytesPerSecond: 196 * 1024 * 1024,
       truncated: false,
       message: "Live search complete",
-      hits: [syntheticHit],
+      hits: [syntheticHit, syntheticSecondHit],
     };
     browserDirectSearchListeners.forEach((listener) => listener(progress));
   }, 220);
@@ -1093,11 +1114,24 @@ export async function listIdentityMembers(
       revealValues,
     });
   }
+  const storedMembers = window.localStorage.getItem(
+    `aletheia.browser.identity-members.${groupId}`,
+  );
+  if (storedMembers) {
+    const values = JSON.parse(storedMembers) as IdentityMember[];
+    return {
+      total: values.length,
+      offset,
+      members: values.slice(offset, offset + limit),
+    };
+  }
   const members = [
     {
       recordId: "record-synthetic",
+      origin: "indexed" as const,
       datasetName: "Authorized synthetic fixture",
       sourceFile: "records_valid.csv",
+      sourcePath: "C:\\Synthetic\\records_valid.csv",
       sourceLocation: "line 2",
       userStatus: "automatic",
       fields: [
@@ -1125,8 +1159,10 @@ export async function listIdentityMembers(
     },
     {
       recordId: "record-synthetic-2",
+      origin: "indexed" as const,
       datasetName: "Authorized synthetic fixture",
       sourceFile: "records_valid.csv",
+      sourcePath: "C:\\Synthetic\\records_valid.csv",
       sourceLocation: "line 3",
       userStatus: "automatic",
       fields: [
@@ -1178,15 +1214,50 @@ export async function createManualIdentity(
     id,
     displayLabel: input.name,
     confidenceLevel: "user-confirmed",
-    memberCount: input.recordIds.length,
-    linkType: "manual_bundle",
-    explanation: "manual_search_bundle",
+    memberCount: input.recordIds.length + input.liveEvidence.length,
+    linkType: input.liveEvidence.length
+      ? input.recordIds.length
+        ? "mixed_evidence_bundle"
+        : "live_scan_bundle"
+      : "manual_bundle",
+    explanation: input.liveEvidence.length
+      ? input.recordIds.length
+        ? "reviewed_index_and_live_evidence"
+        : "reviewed_live_scan_evidence"
+      : "manual_search_bundle",
     userStatus: "confirmed",
   });
   window.localStorage.setItem(
     "aletheia.browser.identities",
     JSON.stringify(manual),
   );
+  if (input.liveEvidence.length) {
+    const members: IdentityMember[] = input.liveEvidence.map(
+      (evidence, index) => ({
+        recordId: `live:${id}:${index}`,
+        origin: "live",
+        datasetName: "Live scan",
+        sourceFile: evidence.archiveEntry
+          ? `${evidence.sourceFile} > ${evidence.archiveEntry}`
+          : evidence.sourceFile,
+        sourcePath: evidence.sourcePath,
+        sourceLocation: evidence.sourceLocation,
+        userStatus: "confirmed",
+        fields: [
+          {
+            name: evidence.matchReason,
+            fieldType: "unknown",
+            displayValue: evidence.excerpt,
+            sensitive: false,
+          },
+        ],
+      }),
+    );
+    window.localStorage.setItem(
+      `aletheia.browser.identity-members.${id}`,
+      JSON.stringify(members),
+    );
+  }
   return id;
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArchiveIcon,
@@ -85,17 +85,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
   cancelDirectSearch,
   exportRecords,
   listDatasets,
-  listenDirectSearchProgress,
   saveSearch,
   searchRecords,
   selectDirectSearchSources,
   selectExportDestination,
   startDirectSearch,
-  type DirectSearchProgress,
   type FieldType,
   type SearchMode,
 } from "@/lib/desktop";
@@ -173,8 +172,9 @@ export function SearchPage({
   const [includeArchives, setIncludeArchives] = useState(true);
   const [directWorkerLimit, setDirectWorkerLimit] = useState(2);
   const [directMaxResults, setDirectMaxResults] = useState(2_000);
-  const [directProgress, setDirectProgress] =
-    useState<DirectSearchProgress | null>(null);
+  const [directOffset, setDirectOffset] = useState(0);
+  const { begin: beginDirectSearch, progress: directProgress } =
+    useDirectSearchProgress();
   const queryClient = useQueryClient();
 
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
@@ -192,14 +192,6 @@ export function SearchPage({
     enabled: submittedQuery.trim().length > 0,
   });
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenDirectSearchProgress(setDirectProgress).then((value) => {
-      unlisten = value;
-    });
-    return () => unlisten?.();
-  }, []);
-
   const directSearch = useMutation({
     mutationFn: () =>
       startDirectSearch({
@@ -211,23 +203,7 @@ export function SearchPage({
         maxResults: directMaxResults,
         workerLimit: directWorkerLimit,
       }),
-    onSuccess: (result) => {
-      setDirectProgress({
-        jobId: result.jobId,
-        status: "running",
-        currentSource: null,
-        sourceCount: result.sourceCount,
-        filesScanned: 0,
-        totalBytes: result.totalBytes,
-        contentBytesScanned: 0,
-        matches: 0,
-        elapsedMs: 0,
-        bytesPerSecond: 0,
-        truncated: false,
-        message: "Scanning local sources",
-        hits: [],
-      });
-    },
+    onSuccess: beginDirectSearch,
   });
 
   const datasetItems = useMemo(
@@ -272,6 +248,10 @@ export function SearchPage({
         (directProgress.contentBytesScanned / directProgress.totalBytes) * 100,
       )
     : 0;
+  const visibleDirectHits = (directProgress?.hits ?? []).slice(
+    directOffset,
+    directOffset + limit,
+  );
   const indexedQueryKind = detectQueryKind(query);
   const directQueryKind = detectQueryKind(directQuery);
 
@@ -900,7 +880,10 @@ export function SearchPage({
                         directProgress?.status === "running" ||
                         directSearch.isPending
                       }
-                      onClick={() => directSearch.mutate()}
+                      onClick={() => {
+                        setDirectOffset(0);
+                        directSearch.mutate();
+                      }}
                       size="sm"
                     >
                       {directSearch.isPending ? (
@@ -953,7 +936,7 @@ export function SearchPage({
                 </CardAction>
               </CardHeader>
               <CardContent className="px-0">
-                {directProgress?.hits.length ? (
+                {visibleDirectHits.length ? (
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -964,7 +947,7 @@ export function SearchPage({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {directProgress.hits.map((hit) => (
+                      {visibleDirectHits.map((hit) => (
                         <TableRow key={hit.id}>
                           <TableCell className="max-w-64 ps-6">
                             <p className="truncate">
@@ -1003,6 +986,15 @@ export function SearchPage({
                   </Empty>
                 )}
               </CardContent>
+              {directProgress?.hits.length ? (
+                <PaginationControls
+                  label="direct scan results"
+                  limit={limit}
+                  offset={directOffset}
+                  onOffsetChange={setDirectOffset}
+                  total={directProgress.hits.length}
+                />
+              ) : null}
             </DashboardCard>
           </div>
         </TabsContent>
