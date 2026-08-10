@@ -106,6 +106,7 @@ import {
   type SearchMode,
 } from "@/lib/desktop";
 import { formatBytes, formatDuration } from "@/lib/format";
+import { formatSearchDisplay } from "@/lib/search-display";
 
 const modeItems = [
   { label: "Contains", value: "contains" },
@@ -260,7 +261,7 @@ export function SearchPage({
       recordIds: [...selected],
       maskEmailLocalPart: true,
     });
-    setNotice(`Exported ${result.recordCount} redacted records.`);
+    setNotice(`Exported ${result.recordCount} records.`);
     await queryClient.invalidateQueries({ queryKey: ["exports"] });
   }
 
@@ -470,7 +471,7 @@ export function SearchPage({
                 <CardDescription>
                   {indexed.data
                     ? `${indexed.data.total.toLocaleString()} matches`
-                    : "Search to load masked evidence."}
+                    : "Search to load local evidence."}
                 </CardDescription>
                 {indexed.isFetching ? (
                   <CardAction>
@@ -483,7 +484,7 @@ export function SearchPage({
               </CardHeader>
               <CardContent className="px-0">
                 {hits.length ? (
-                  <Table>
+                  <Table className="table-fixed">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="w-10 ps-4">
@@ -503,9 +504,9 @@ export function SearchPage({
                             }}
                           />
                         </TableHead>
-                        <TableHead>Evidence</TableHead>
-                        <TableHead>Dataset</TableHead>
-                        <TableHead>Source</TableHead>
+                        <TableHead className="w-5/12">Evidence</TableHead>
+                        <TableHead className="w-1/6">Dataset</TableHead>
+                        <TableHead className="w-1/4">Source</TableHead>
                         <TableHead className="pe-4">Match</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -526,32 +527,37 @@ export function SearchPage({
                               }
                             />
                           </TableCell>
-                          <TableCell className="max-w-xl">
+                          <TableCell className="min-w-0 whitespace-normal">
                             <div className="flex flex-wrap gap-1">
                               {hit.fields.slice(0, 6).map((item) => (
                                 <Badge
+                                  className="h-auto max-w-full min-w-0 whitespace-normal"
+                                  data-slot="search-field-value"
                                   key={`${hit.recordId}-${item.name}`}
                                   variant={
                                     item.sensitive ? "secondary" : "outline"
                                   }
                                 >
-                                  {item.name}: {item.displayValue}
+                                  <span className="shrink-0">{item.name}:</span>
+                                  <span className="min-w-0 break-all text-left">
+                                    {formatSearchDisplay(item.displayValue)}
+                                  </span>
                                 </Badge>
                               ))}
                             </div>
                           </TableCell>
-                          <TableCell className="max-w-44 truncate">
-                            {hit.datasetName}
+                          <TableCell className="min-w-0 whitespace-normal">
+                            <p className="break-all">{hit.datasetName}</p>
                           </TableCell>
-                          <TableCell>
-                            <p className="max-w-48 truncate text-xs">
+                          <TableCell className="min-w-0 whitespace-normal">
+                            <p className="break-all text-xs">
                               {hit.sourceFile}
                             </p>
-                            <p className="font-mono text-xs text-muted-foreground">
+                            <p className="break-all font-mono text-xs text-muted-foreground">
                               {hit.sourceLocation}
                             </p>
                           </TableCell>
-                          <TableCell className="pe-4 text-xs text-muted-foreground">
+                          <TableCell className="pe-4 text-xs break-words whitespace-normal text-muted-foreground">
                             {hit.matchReason}
                           </TableCell>
                         </TableRow>
@@ -572,7 +578,7 @@ export function SearchPage({
                             : "Search the index"}
                       </EmptyTitle>
                       <EmptyDescription>
-                        Results remain masked in the interface.
+                        Enter a value to search the local index.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -1016,7 +1022,7 @@ export function SearchPage({
               <CardHeader className="border-b">
                 <CardTitle>Direct scan results</CardTitle>
                 <CardDescription>
-                  Masked source lines and archive entries. Nothing is added to
+                  Matching source lines and archive entries. Nothing is added to
                   the permanent index.
                 </CardDescription>
                 <CardAction>
@@ -1027,39 +1033,39 @@ export function SearchPage({
               </CardHeader>
               <CardContent className="px-0">
                 {visibleDirectHits.length ? (
-                  <Table>
+                  <Table className="table-fixed">
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="ps-6">Source</TableHead>
-                        <TableHead>Location</TableHead>
-                        <TableHead>Excerpt</TableHead>
+                        <TableHead className="w-1/4 ps-6">Source</TableHead>
+                        <TableHead className="w-1/6">Location</TableHead>
+                        <TableHead className="w-5/12">Excerpt</TableHead>
                         <TableHead className="pe-6">Match</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {visibleDirectHits.map((hit) => (
                         <TableRow key={hit.id}>
-                          <TableCell className="max-w-64 ps-6">
-                            <p className="truncate">
+                          <TableCell className="min-w-0 ps-6 whitespace-normal">
+                            <p className="break-all">
                               {hit.archiveEntry ?? hit.sourceFile}
                             </p>
                             {hit.archiveEntry ? (
-                              <p className="truncate text-xs text-muted-foreground">
+                              <p className="break-all text-xs text-muted-foreground">
                                 {hit.sourceFile}
                               </p>
                             ) : null}
                           </TableCell>
-                          <TableCell className="font-mono text-xs">
+                          <TableCell className="font-mono text-xs break-all whitespace-normal">
                             {hit.sourceLocation}
                           </TableCell>
-                          <TableCell className="max-w-xl font-mono text-xs break-all">
-                            {hit.excerpt}
+                          <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
+                            {formatSearchDisplay(hit.excerpt)}
                           </TableCell>
-                          <TableCell className="pe-6 text-xs text-muted-foreground">
-                            <p className="max-w-64 break-all font-mono text-foreground">
+                          <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
+                            <p className="break-all font-mono text-foreground">
                               {hit.matchedQuery}
                             </p>
-                            <p>{hit.matchReason}</p>
+                            <p className="break-words">{hit.matchReason}</p>
                           </TableCell>
                         </TableRow>
                       ))}

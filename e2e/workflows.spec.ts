@@ -33,6 +33,24 @@ test("batch live scan searches many values in one pass", async ({ page }) => {
   await expect(page.getByText("synthetic@example.test").first()).toBeVisible();
 });
 
+test("indexed results use neutral protected values and wrap safely", async ({
+  page,
+}) => {
+  await page.goto("/#/search");
+  await page.getByLabel("Search query").fill("example.com");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+
+  await expect(page.getByText("••••••").first()).toBeVisible();
+  await expect(page.getByText(/redact/i)).toHaveCount(0);
+  await expect(page.locator("table").first()).toHaveCSS(
+    "table-layout",
+    "fixed",
+  );
+  await expect(
+    page.locator('[data-slot="search-field-value"]').first(),
+  ).not.toHaveCSS("white-space", "nowrap");
+});
+
 test("large-source index profiles explain their cost", async ({ page }) => {
   await page.goto("/#/datasets");
   await page.getByRole("button", { name: "Index files" }).click();
