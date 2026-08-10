@@ -39,6 +39,19 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   await expect(page.getByText("Batch value found").first()).toBeVisible();
   await expect(page.getByText("synthetic@example.test").first()).toBeVisible();
 
+  await page.goto("/#/overview");
+  const liveMatchNote = page.getByText("latest live matches", { exact: true });
+  await expect(liveMatchNote).toBeVisible();
+  await expect(liveMatchNote.locator("..")).toContainText("2");
+  await expect(
+    page.getByRole("row", {
+      name: /Authorized corpus .* Live on demand 1 location/,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Authorized corpus · 2 Live matches"),
+  ).toBeVisible();
+
   await page.goto("/#/datasets");
   await page.getByRole("button", { name: "Remove Authorized corpus" }).click();
   await page.getByRole("button", { name: "Remove source" }).click();

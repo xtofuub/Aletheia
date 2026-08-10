@@ -85,10 +85,12 @@ import {
   listIdentityMembers,
   listLiveSources,
   pauseDirectSearch,
+  recordLiveSearchActivity,
   rebuildIdentities,
   resumeDirectSearch,
   searchIdentityRecords,
   startDirectSearch,
+  type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
 import { formatBytes, formatCount } from "@/lib/format";
@@ -103,6 +105,8 @@ const identitySearchModes: Array<{ label: string; value: SearchMode }> = [
 export function IdentitiesPage() {
   const queryClient = useQueryClient();
   const automaticRebuildStarted = useRef(false);
+  const liveSearchSource = useRef<LiveSourceSummary | null>(null);
+  const recordedLiveJobId = useRef<string | null>(null);
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
   const [identityFilter, setIdentityFilter] = useState("");
   const [memberOffset, setMemberOffset] = useState(0);
@@ -205,17 +209,20 @@ export function IdentitiesPage() {
     onError: (error) => setNotice(`Identity analysis failed: ${String(error)}`),
   });
   const liveSearch = useMutation({
-    mutationFn: () =>
+    mutationFn: (source: LiveSourceSummary) =>
       startDirectSearch({
-        paths: selectedLiveSource?.paths ?? [],
+        paths: source.paths,
         query: liveQuery.trim(),
         mode: liveMode,
         caseSensitive: false,
-        includeArchives: selectedLiveSource?.includeArchives ?? true,
+        includeArchives: source.includeArchives,
         maxResults: 2_000,
         workerLimit: 1,
       }),
-    onSuccess: beginLiveSearch,
+    onSuccess: (start, source) => {
+      liveSearchSource.current = source;
+      beginLiveSearch(start);
+    },
     onError: (error) => setNotice(`Live scan failed: ${String(error)}`),
   });
   const liveHitsById = useMemo(
@@ -251,6 +258,29 @@ export function IdentitiesPage() {
   });
 
   const rebuildGroups = rebuild.mutate;
+  useEffect(() => {
+    const source = liveSearchSource.current;
+    if (
+      liveProgress?.status !== "completed" ||
+      liveProgress.jobId === recordedLiveJobId.current ||
+      !source
+    ) {
+      return;
+    }
+    recordedLiveJobId.current = liveProgress.jobId;
+    void recordLiveSearchActivity({
+      jobId: liveProgress.jobId,
+      sourceId: source.id,
+      sourceName: source.name,
+      matches: liveProgress.matches,
+      filesScanned: liveProgress.filesScanned,
+      bytesScanned: liveProgress.sourceBytesScanned,
+      completedAt: new Date().toISOString(),
+    })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["overview"] }))
+      .catch(() => undefined);
+  }, [liveProgress, queryClient]);
+
   useEffect(() => {
     if (
       !identities.isSuccess ||
@@ -966,7 +996,9 @@ export function IdentitiesPage() {
                             setLiveOffset(0);
                             setLiveSelection(new Set());
                             clearLiveSearch();
-                            liveSearch.mutate();
+                            if (selectedLiveSource) {
+                              liveSearch.mutate(selectedLiveSource);
+                            }
                           }}
                           size="sm"
                         >

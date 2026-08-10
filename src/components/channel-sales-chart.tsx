@@ -1,6 +1,6 @@
 import { CartesianGrid, Line, LineChart, XAxis } from "recharts";
 
-import type { DatasetSummary } from "@/lib/desktop";
+import type { DatasetSummary, LiveSearchActivity } from "@/lib/desktop";
 import { DashboardCard } from "@/components/dashboard-card";
 import {
   CardContent,
@@ -16,37 +16,49 @@ import {
 } from "@/components/ui/chart";
 
 const chartConfig = {
-  records: { label: "Records", color: "var(--chart-2)" },
-  files: { label: "Files", color: "var(--chart-1)" },
+  records: { label: "Indexed records", color: "var(--chart-2)" },
+  liveMatches: { label: "Live matches", color: "var(--chart-1)" },
 } satisfies ChartConfig;
 
 export function ChannelSalesChart({
   datasets,
+  liveSearches,
 }: {
   datasets: DatasetSummary[];
+  liveSearches: LiveSearchActivity[];
 }) {
-  const rows = datasets
-    .slice()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const rows = [
+    ...datasets.map((dataset) => ({
+      timestamp: dataset.lastIndexedAt ?? dataset.createdAt,
+      records: dataset.recordCount,
+      liveMatches: 0,
+    })),
+    ...liveSearches.map((activity) => ({
+      timestamp: activity.completedAt,
+      records: 0,
+      liveMatches: activity.matches,
+    })),
+  ]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
     .slice(-8)
-    .map((dataset) => ({
-      label: new Date(dataset.createdAt).toLocaleDateString("en-US", {
+    .map((item) => ({
+      label: new Date(item.timestamp).toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
       }),
-      records: dataset.recordCount,
-      files: dataset.fileCount,
+      records: item.records,
+      liveMatches: item.liveMatches,
     }));
   const chartRows = rows.length
     ? rows
-    : [{ label: "Now", records: 0, files: 0 }];
+    : [{ label: "Now", records: 0, liveMatches: 0 }];
 
   return (
     <DashboardCard className="gap-0 md:col-span-2">
       <CardHeader>
-        <CardTitle>Import activity</CardTitle>
+        <CardTitle>Search activity</CardTitle>
         <CardDescription>
-          Records and source files by recent dataset.
+          Indexed records and Live matches from recent jobs.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -88,9 +100,9 @@ export function ChannelSalesChart({
             />
             <Line
               activeDot={{ r: 4 }}
-              dataKey="files"
+              dataKey="liveMatches"
               dot={{ r: 2 }}
-              stroke="var(--color-files)"
+              stroke="var(--color-liveMatches)"
               strokeWidth={2}
               type="step"
             />

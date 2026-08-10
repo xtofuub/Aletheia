@@ -1,4 +1,9 @@
-import type { DatasetSummary, OverviewStats } from "@/lib/desktop";
+import type {
+  DatasetSummary,
+  LiveSearchActivity,
+  LiveSourceSummary,
+  OverviewStats,
+} from "@/lib/desktop";
 import { formatCount } from "@/lib/format";
 import { Delta, DeltaIcon, DeltaValue } from "@/components/delta";
 import { DashboardCard } from "@/components/dashboard-card";
@@ -11,11 +16,13 @@ import {
 
 export function DashboardStats({
   datasets,
-  liveSourceCount,
+  liveSearches,
+  liveSources,
   stats,
 }: {
   datasets: DatasetSummary[];
-  liveSourceCount: number;
+  liveSearches: LiveSearchActivity[];
+  liveSources: LiveSourceSummary[];
   stats: OverviewStats;
 }) {
   const records = datasets.reduce(
@@ -23,21 +30,19 @@ export function DashboardStats({
     0,
   );
   const ready = datasets.filter((dataset) => dataset.status === "ready").length;
-  const latestDataset = datasets
-    .slice()
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const latestLiveMatches = liveSearches[0]?.matches ?? 0;
   const items = [
     {
       label: "Indexed records",
       value: formatCount(records),
-      signal: latestDataset?.recordCount ?? 0,
-      note: "from latest dataset",
+      signal: latestLiveMatches,
+      note: "latest live matches",
     },
     {
       label: "Search sources",
-      value: formatCount(datasets.length + liveSourceCount),
-      signal: ready + liveSourceCount,
-      note: "ready to search",
+      value: formatCount(datasets.length + liveSources.length),
+      signal: liveSources.length,
+      note: `live · ${formatCount(ready)} indexed ready`,
     },
     {
       label: "Parent domains",

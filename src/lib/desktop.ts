@@ -183,6 +183,16 @@ export interface LiveSourceSummary {
   createdAt: string;
 }
 
+export interface LiveSearchActivity {
+  jobId: string;
+  sourceId: string;
+  sourceName: string;
+  matches: number;
+  filesScanned: number;
+  bytesScanned: number;
+  completedAt: string;
+}
+
 export interface OverviewStats {
   identityGroupCount: number;
   parentDomainCount: number;
@@ -812,6 +822,7 @@ export async function deleteDataset(datasetId: string): Promise<void> {
 }
 
 const browserLiveSourcesKey = "aletheia.browser.live-sources";
+const browserLiveSearchActivityKey = "aletheia.browser.live-search-activity";
 
 export async function listLiveSources(): Promise<LiveSourceSummary[]> {
   if (isTauriRuntime()) {
@@ -851,6 +862,34 @@ export async function deleteLiveSource(id: string): Promise<void> {
   window.localStorage.setItem(
     browserLiveSourcesKey,
     JSON.stringify(current.filter((source) => source.id !== id)),
+  );
+}
+
+export async function listLiveSearchActivity(): Promise<LiveSearchActivity[]> {
+  const stored = window.localStorage.getItem(browserLiveSearchActivityKey);
+  if (!stored) return [];
+  try {
+    const activity = JSON.parse(stored) as unknown;
+    return Array.isArray(activity)
+      ? (activity as LiveSearchActivity[]).slice(0, 50)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function recordLiveSearchActivity(
+  activity: LiveSearchActivity,
+): Promise<void> {
+  const current = await listLiveSearchActivity();
+  window.localStorage.setItem(
+    browserLiveSearchActivityKey,
+    JSON.stringify(
+      [
+        activity,
+        ...current.filter((item) => item.jobId !== activity.jobId),
+      ].slice(0, 50),
+    ),
   );
 }
 
@@ -1501,6 +1540,9 @@ export async function listExports(): Promise<ExportHistoryItem[]> {
 }
 
 export async function cleanupGenerated(request: CleanupRequest): Promise<void> {
+  if (request.allGenerated || request.searchHistory) {
+    window.localStorage.removeItem(browserLiveSearchActivityKey);
+  }
   if (isTauriRuntime()) {
     await invoke("cleanup_generated", { request });
     return;

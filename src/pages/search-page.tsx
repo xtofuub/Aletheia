@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArchiveIcon,
@@ -92,6 +92,7 @@ import {
   listDatasets,
   listLiveSources,
   pauseDirectSearch,
+  recordLiveSearchActivity,
   resumeDirectSearch,
   saveSearch,
   searchRecords,
@@ -203,6 +204,7 @@ export function SearchPage({
   const [directOffset, setDirectOffset] = useState(0);
   const [directError, setDirectError] = useState("");
   const [directSourceId, setDirectSourceId] = useState<string | null>(null);
+  const recordedDirectJobId = useRef<string | null>(null);
   const { begin: beginDirectSearch, progress: directProgress } =
     useDirectSearchProgress();
   const queryClient = useQueryClient();
@@ -318,6 +320,32 @@ export function SearchPage({
   const liveBusy =
     directSearch.isPending ||
     ["running", "paused"].includes(currentLiveProgress?.status ?? "");
+
+  useEffect(() => {
+    if (
+      directProgress?.status !== "completed" ||
+      directProgress.jobId === recordedDirectJobId.current ||
+      !directSourceId
+    ) {
+      return;
+    }
+    const source = (liveSources.data ?? []).find(
+      (item) => item.id === directSourceId,
+    );
+    if (!source) return;
+    recordedDirectJobId.current = directProgress.jobId;
+    void recordLiveSearchActivity({
+      jobId: directProgress.jobId,
+      sourceId: source.id,
+      sourceName: source.name,
+      matches: directProgress.matches,
+      filesScanned: directProgress.filesScanned,
+      bytesScanned: directProgress.sourceBytesScanned,
+      completedAt: new Date().toISOString(),
+    })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["overview"] }))
+      .catch(() => undefined);
+  }, [directProgress, directSourceId, liveSources.data, queryClient]);
 
   function submitSearch() {
     const value = query.trim();

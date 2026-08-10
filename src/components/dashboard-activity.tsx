@@ -1,7 +1,17 @@
-import { DatabaseIcon, DownloadIcon } from "lucide-react";
+import {
+  DatabaseIcon,
+  DownloadIcon,
+  FileSearchIcon,
+  FolderIcon,
+} from "lucide-react";
 
-import type { DatasetSummary, ExportHistoryItem } from "@/lib/desktop";
-import { formatDateTime } from "@/lib/format";
+import type {
+  DatasetSummary,
+  ExportHistoryItem,
+  LiveSearchActivity,
+  LiveSourceSummary,
+} from "@/lib/desktop";
+import { formatCount, formatDateTime } from "@/lib/format";
 import { DashboardCard } from "@/components/dashboard-card";
 import {
   CardContent,
@@ -19,24 +29,42 @@ import {
 export function DashboardActivity({
   datasets,
   exports,
+  liveSearches,
+  liveSources,
 }: {
   datasets: DatasetSummary[];
   exports: ExportHistoryItem[];
+  liveSearches: LiveSearchActivity[];
+  liveSources: LiveSourceSummary[];
 }) {
   const items = [
-    ...datasets.slice(0, 3).map((dataset) => ({
+    ...datasets.map((dataset) => ({
       id: `dataset-${dataset.id}`,
       title: `${dataset.name} · ${dataset.status}`,
-      time: formatDateTime(dataset.lastIndexedAt ?? dataset.createdAt),
+      timestamp: dataset.lastIndexedAt ?? dataset.createdAt,
       icon: <DatabaseIcon />,
     })),
-    ...exports.slice(0, 2).map((item) => ({
+    ...liveSearches.map((activity) => ({
+      id: `live-search-${activity.jobId}`,
+      title: `${activity.sourceName} · ${formatCount(activity.matches)} Live matches`,
+      timestamp: activity.completedAt,
+      icon: <FileSearchIcon />,
+    })),
+    ...liveSources.map((source) => ({
+      id: `live-source-${source.id}`,
+      title: `${source.name} · Live source saved`,
+      timestamp: source.createdAt,
+      icon: <FolderIcon />,
+    })),
+    ...exports.map((item) => ({
       id: `export-${item.id}`,
       title: `${item.format.toUpperCase()} export · ${item.recordCount} records`,
-      time: formatDateTime(item.createdAt),
+      timestamp: item.createdAt,
       icon: <DownloadIcon />,
     })),
-  ].slice(0, 5);
+  ]
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .slice(0, 5);
 
   return (
     <DashboardCard className="gap-0">
@@ -56,8 +84,12 @@ export function DashboardActivity({
                   {item.icon}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">{item.title}</p>
-                  <p className="text-xs text-muted-foreground">{item.time}</p>
+                  <p className="truncate text-sm" title={item.title}>
+                    {item.title}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDateTime(item.timestamp)}
+                  </p>
                 </div>
               </li>
             ))}
@@ -67,7 +99,7 @@ export function DashboardActivity({
             <EmptyHeader>
               <EmptyTitle>No activity</EmptyTitle>
               <EmptyDescription>
-                Imports and exports will appear here.
+                Imports, Live scans, and exports will appear here.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

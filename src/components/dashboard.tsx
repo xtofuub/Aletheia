@@ -12,6 +12,7 @@ import {
   getSystemStatus,
   listDatasets,
   listExports,
+  listLiveSearchActivity,
   listLiveSources,
 } from "@/lib/desktop";
 
@@ -19,18 +20,19 @@ export function Dashboard() {
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: async () => {
-      const [datasets, liveSources, stats, system, exports] = await Promise.all(
-        [
+      const [datasets, liveSources, liveSearches, stats, system, exports] =
+        await Promise.all([
           listDatasets(),
           listLiveSources(),
+          listLiveSearchActivity(),
           getOverviewStats(),
           getSystemStatus(),
           listExports(),
-        ],
-      );
+        ]);
       return {
         datasets,
-        liveSourceCount: liveSources.length,
+        liveSources,
+        liveSearches,
         stats,
         system,
         exports,
@@ -41,19 +43,26 @@ export function Dashboard() {
 
   if (!overview.data) return <DashboardSkeleton />;
 
-  const { datasets, liveSourceCount, stats, system, exports } = overview.data;
+  const { datasets, liveSources, liveSearches, stats, system, exports } =
+    overview.data;
   return (
     <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2 lg:grid-cols-4">
       <DashboardStats
         datasets={datasets}
-        liveSourceCount={liveSourceCount}
+        liveSearches={liveSearches}
+        liveSources={liveSources}
         stats={stats}
       />
       <NetRevenueChart datasets={datasets} />
-      <ChannelSalesChart datasets={datasets} />
-      <DashboardInvoices datasets={datasets} />
+      <ChannelSalesChart datasets={datasets} liveSearches={liveSearches} />
+      <DashboardInvoices datasets={datasets} liveSources={liveSources} />
       <BillingHealth system={system} />
-      <DashboardActivity datasets={datasets} exports={exports} />
+      <DashboardActivity
+        datasets={datasets}
+        exports={exports}
+        liveSearches={liveSearches}
+        liveSources={liveSources}
+      />
     </div>
   );
 }
