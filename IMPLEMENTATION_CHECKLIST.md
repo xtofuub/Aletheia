@@ -148,3 +148,12 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Reduce SQLite write amplification with UUIDv7 keys and batched counters
 - [x] Add read-only aggregate RAR metadata and streaming probes
 - [x] Add end-to-end coverage for batch scan and index-profile selection
+
+## Signed update reliability
+
+- [x] Check the signed GitHub update manifest automatically after startup
+- [x] Show one in-app approval dialog without downloading automatically
+- [x] Download, verify, install, and relaunch after explicit approval
+- [x] Keep offline automatic checks quiet and show manual check failures
+- [x] Fail release CI when the updater signing key is missing
+- [x] Validate updater URL, checksums, and signature against the embedded public key before publishing

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added automatic signed GitHub update detection with an in-app approval dialog, verified download progress, passive installation, and application relaunch; release CI now fails closed without signing material and validates updater artifacts before publishing.
 - Added one-pass batch Live scan for up to 512 values, pause and resume controls, physical-source progress, decoded throughput, and ETA so very large TXT, ZIP, RAR, and GZIP collections remain observable without indexing.
 - Added explicit Fast and Relationship index profiles, generated storage estimates, HDD-aware worker guidance, and scalable synthetic performance soaks for large-corpus validation.
 - Switched imported record keys to time-ordered UUIDv7 values, folded dataset counters into batch transactions, and tuned bounded SQLite cache/WAL windows to reduce write amplification during multi-million-row imports.

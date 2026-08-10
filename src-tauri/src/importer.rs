@@ -2219,7 +2219,7 @@ fn sanitized(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs::File,
+        fs::{self, File, OpenOptions},
         io::{self, BufReader, BufWriter, Cursor, Read, Write},
         sync::{Arc, Mutex},
         time::Instant,
@@ -2872,6 +2872,41 @@ mod tests {
             )
             .expect("exact domain search");
         assert!(!domain_record_ids.is_empty());
+    }
+
+    #[test]
+    fn resume_rejects_a_source_that_changed_after_inspection() {
+        let workspace = tempdir().expect("temporary workspace");
+        let source_dir = tempdir().expect("temporary source directory");
+        let source = source_dir.path().join("synthetic.csv");
+        fs::write(
+            &source,
+            b"email,url\nfirst@example.test,https://first.example.test\n",
+        )
+        .expect("synthetic source");
+        let inspection = inspect_paths(std::slice::from_ref(&source)).expect("inspection");
+        let mut plan = synthetic_plan(inspection.files);
+        let database = Arc::new(Mutex::new(
+            open_database(workspace.path()).expect("database"),
+        ));
+        prepare_database_rows(&database, "dataset-changed", "job-changed", &plan)
+            .expect("database rows");
+
+        OpenOptions::new()
+            .append(true)
+            .open(&source)
+            .expect("open synthetic source")
+            .write_all(b"second@example.test,https://second.example.test\n")
+            .expect("change synthetic source");
+
+        let error = match prepare_resume_files(&database, "dataset-changed", &mut plan) {
+            Ok(_) => panic!("changed source must not resume"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            "an original source changed; resume was stopped safely"
+        );
     }
 
     #[test]

@@ -50,7 +50,7 @@ All screenshots use synthetic fixtures with reserved example domains and documen
 - Dataset, file, archive-entry, parser, line, and record provenance.
 - Redacted CSV, JSON, JSONL, and Markdown exports with sidecar manifests.
 - Configurable workers, memory ceilings, inactivity locking, update checks, and generated-data cleanup.
-- Signed in-app update checks against official GitHub releases.
+- Automatic signed update checks after startup, with an in-app approval prompt, download progress, verified installation, and restart.
 
 Aletheia does not test credentials, automate logins, contact people, scrape websites, send telemetry, or enrich records through remote services.
 

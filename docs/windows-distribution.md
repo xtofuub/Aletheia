@@ -18,6 +18,9 @@ The setup executable may require internet access if WebView2 is missing because 
 - `aletheia_<version>_x64.msi` is retained as an alternate enterprise deployment artifact.
 - `aletheia_<version>_x64-setup.exe.sig` lets the in-app updater verify the NSIS installer.
 - `latest.json` is the signed update manifest consumed by installed copies of Aletheia.
+
+Installed copies check this signed manifest after startup when automatic checks are enabled. If a newer version exists, Aletheia shows an approval dialog with release notes. The app downloads nothing until the user selects **Update and restart**. It then verifies the installer signature, installs in passive mode, and relaunches itself. The same workflow is available manually under Settings.
+
 - `SHA256SUMS.txt` contains SHA-256 checksums for every binary artifact.
 
 Release binaries are currently unsigned. Windows SmartScreen may show an unrecognized-app warning until the project uses a trusted code-signing certificate. Verify the checksum and download only from the official repository.
@@ -56,6 +59,6 @@ Maintainer builds use the updater key at `%USERPROFILE%\.tauri\aletheia.key` whe
 
 The `Windows release` GitHub Actions workflow repeats the quality gates on a clean Windows runner, builds the installers, preserves all artifacts, and publishes the tagged GitHub release. The tag must exactly match the configured version.
 
-The repository must define `TAURI_SIGNING_PRIVATE_KEY` as a GitHub Actions secret. The optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret is needed only when the updater key has a password. Losing this key prevents future installed versions from accepting updates signed by a replacement key.
+The repository must define `TAURI_SIGNING_PRIVATE_KEY` as a GitHub Actions secret. The release workflow now fails closed when that key is missing. The optional `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret is needed only when the updater key has a password. Losing this key prevents future installed versions from accepting updates signed by a replacement key.
 
 Do not commit generated release files, datasets, indexes, exports, secrets, or local application state.

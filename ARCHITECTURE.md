@@ -155,6 +155,10 @@ The app uses a persistent left rail, top command/search bar, route workspace, op
 
 The interface uses `@efferd/dashboard-2` as its canonical composition base: neutral surfaces, one-pixel `DashboardGrid` separators, square `DashboardCard` surfaces, compact controls, restrained green signal accents, and mono type only for technical values. Aletheia adapts the content, not the component language. Status includes text or icons so color is never the only signal. Dense screens use shared table, tab, badge, switch, select, and pagination primitives instead of unrelated page-specific patterns.
 
+## Application updates
+
+When automatic checks are enabled, the desktop client asks the Tauri updater for the latest signed `latest.json` manifest after startup. A missing network connection stays quiet. A newer signed version opens one Shadcn dialog; nothing downloads until the user approves it. The updater verifies the NSIS signature, installs in passive mode, and relaunches Aletheia through the narrowly scoped process restart permission. Release CI refuses to publish when the updater signing key is missing, checks the manifest URL and SHA-256 checksums, and cryptographically verifies the NSIS artifact against the public key embedded in the app before upload.
+
 ## Quality gates
 
 Each development phase must leave the app runnable and pass:
