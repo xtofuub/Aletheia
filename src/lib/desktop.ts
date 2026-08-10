@@ -329,6 +329,39 @@ export interface DomainDetailsResponse {
   records: DomainRecordSummary[];
 }
 
+export interface SaveLiveDomainEvidenceInput {
+  domain: string;
+  sourceId: string;
+  sourceName: string;
+  evidence: DirectSearchHit[];
+}
+
+export interface LiveDomainCollectionSummary {
+  registrableDomain: string;
+  sourceCount: number;
+  evidenceCount: number;
+  updatedAt: string;
+}
+
+export interface LiveDomainCollectionResponse {
+  total: number;
+  offset: number;
+  collections: LiveDomainCollectionSummary[];
+}
+
+export interface StoredLiveDomainEvidence extends DirectSearchHit {
+  sourceId: string;
+  sourceName: string;
+  createdAt: string;
+}
+
+export interface LiveDomainEvidenceResponse {
+  registrableDomain: string;
+  total: number;
+  offset: number;
+  evidence: StoredLiveDomainEvidence[];
+}
+
 export interface IdentitySummary {
   id: string;
   displayLabel: string;
@@ -1033,13 +1066,14 @@ export async function startDirectSearch(
         .filter(Boolean),
     ).size,
   );
+  const primaryQuery = request.query.split(/\r?\n/)[0]?.trim() ?? request.query;
   const syntheticHit: DirectSearchHit = {
     id: crypto.randomUUID(),
     sourcePath: "C:\\Synthetic\\Authorized corpus\\synthetic.zip",
     sourceFile: "synthetic-authorized-source.txt",
     archiveEntry: request.includeArchives ? "records/synthetic.txt" : null,
     sourceLocation: "line 42",
-    excerpt: "synthetic@example.com portal.example.com",
+    excerpt: `synthetic@example.com portal.example.com ${primaryQuery}`,
     matchReason:
       queryCount > 1
         ? "Batch value found"
@@ -1048,14 +1082,14 @@ export async function startDirectSearch(
           : request.mode === "prefix"
             ? "Field prefix match"
             : "Line contains query",
-    matchedQuery: request.query.split(/\r?\n/)[0]?.trim() ?? request.query,
+    matchedQuery: primaryQuery,
   };
   const syntheticSecondHit: DirectSearchHit = {
     ...syntheticHit,
     id: crypto.randomUUID(),
     archiveEntry: request.includeArchives ? "records/synthetic-2.txt" : null,
     sourceLocation: "line 84",
-    excerpt: "s***@example.com:account-1002:service.example.com",
+    excerpt: "synthetic.second@example.com:account-1002:service.example.com",
   };
   window.setTimeout(() => {
     const progress: DirectSearchProgress = {
@@ -1102,6 +1136,159 @@ export async function resumeDirectSearch(jobId: string): Promise<void> {
   if (isTauriRuntime()) {
     await invoke("resume_direct_search", { jobId });
   }
+}
+
+const browserLiveDomainEvidenceKey = "aletheia.browser.live-domain-evidence";
+
+function browserDomainParent(value: string) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .split(/[/?#]/, 1)[0]
+    ?.replace(/\.$/, "");
+  return normalized || value.trim().toLowerCase();
+}
+
+function readBrowserLiveDomainEvidence(): Array<
+  StoredLiveDomainEvidence & { registrableDomain: string }
+> {
+  const stored = window.localStorage.getItem(browserLiveDomainEvidenceKey);
+  if (!stored) return [];
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    return Array.isArray(parsed)
+      ? (parsed as Array<
+          StoredLiveDomainEvidence & { registrableDomain: string }
+        >)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveLiveDomainEvidence(
+  input: SaveLiveDomainEvidenceInput,
+): Promise<LiveDomainCollectionSummary> {
+  if (isTauriRuntime()) {
+    return invoke<LiveDomainCollectionSummary>("save_live_domain_evidence", {
+      input,
+    });
+  }
+  const registrableDomain = browserDomainParent(input.domain);
+  const current = readBrowserLiveDomainEvidence();
+  const additions = input.evidence.map((hit) => ({
+    ...hit,
+    registrableDomain,
+    sourceId: input.sourceId,
+    sourceName: input.sourceName,
+    createdAt: new Date().toISOString(),
+  }));
+  const combined = [...additions, ...current].filter(
+    (item, index, values) =>
+      values.findIndex(
+        (candidate) =>
+          candidate.registrableDomain === item.registrableDomain &&
+          candidate.sourcePath === item.sourcePath &&
+          candidate.archiveEntry === item.archiveEntry &&
+          candidate.sourceLocation === item.sourceLocation &&
+          candidate.excerpt === item.excerpt,
+      ) === index,
+  );
+  window.localStorage.setItem(
+    browserLiveDomainEvidenceKey,
+    JSON.stringify(combined),
+  );
+  const evidence = combined.filter(
+    (item) => item.registrableDomain === registrableDomain,
+  );
+  return {
+    registrableDomain,
+    sourceCount: new Set(evidence.map((item) => item.sourceId)).size,
+    evidenceCount: evidence.length,
+    updatedAt: evidence[0]?.createdAt ?? new Date().toISOString(),
+  };
+}
+
+export async function listLiveDomainCollections(
+  query = "",
+  offset = 0,
+  limit = 25,
+): Promise<LiveDomainCollectionResponse> {
+  if (isTauriRuntime()) {
+    return invoke<LiveDomainCollectionResponse>(
+      "list_live_domain_collections",
+      {
+        query,
+        offset,
+        limit,
+      },
+    );
+  }
+  const normalized = query.trim().toLowerCase();
+  const grouped = new Map<string, StoredLiveDomainEvidence[]>();
+  for (const item of readBrowserLiveDomainEvidence()) {
+    if (normalized && !item.registrableDomain.startsWith(normalized)) continue;
+    const values = grouped.get(item.registrableDomain) ?? [];
+    values.push(item);
+    grouped.set(item.registrableDomain, values);
+  }
+  const collections = [...grouped.entries()]
+    .map(([registrableDomain, evidence]) => ({
+      registrableDomain,
+      sourceCount: new Set(evidence.map((item) => item.sourceId)).size,
+      evidenceCount: evidence.length,
+      updatedAt: evidence
+        .map((item) => item.createdAt)
+        .sort()
+        .at(-1) as string,
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  return {
+    total: collections.length,
+    offset,
+    collections: collections.slice(offset, offset + limit),
+  };
+}
+
+export async function listLiveDomainEvidence(
+  domain: string,
+  offset = 0,
+  limit = 25,
+): Promise<LiveDomainEvidenceResponse> {
+  if (isTauriRuntime()) {
+    return invoke<LiveDomainEvidenceResponse>("list_live_domain_evidence", {
+      domain,
+      offset,
+      limit,
+    });
+  }
+  const registrableDomain = browserDomainParent(domain);
+  const evidence = readBrowserLiveDomainEvidence().filter(
+    (item) => item.registrableDomain === registrableDomain,
+  );
+  return {
+    registrableDomain,
+    total: evidence.length,
+    offset,
+    evidence: evidence.slice(offset, offset + limit),
+  };
+}
+
+export async function clearLiveDomainEvidence(domain: string): Promise<number> {
+  if (isTauriRuntime()) {
+    return invoke<number>("clear_live_domain_evidence", { domain });
+  }
+  const registrableDomain = browserDomainParent(domain);
+  const current = readBrowserLiveDomainEvidence();
+  const next = current.filter(
+    (item) => item.registrableDomain !== registrableDomain,
+  );
+  window.localStorage.setItem(
+    browserLiveDomainEvidenceKey,
+    JSON.stringify(next),
+  );
+  return current.length - next.length;
 }
 
 const syntheticDomains: DomainSummary[] = [
@@ -1537,6 +1724,7 @@ export async function cleanupGenerated(request: CleanupRequest): Promise<void> {
     window.localStorage.removeItem("aletheia.browser.saved-searches");
     window.localStorage.removeItem(browserExportsKey);
     window.localStorage.removeItem(browserSearchHistoryKey);
+    window.localStorage.removeItem(browserLiveDomainEvidenceKey);
     return;
   }
   if (request.searchHistory)

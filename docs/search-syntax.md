@@ -13,7 +13,7 @@ Contains searches split a likely person name into meaningful tokens. A query suc
 - **Indexed** searches an existing Tantivy index. Use it for fast repeated queries, paging, saved views, export, domain analysis, and identity grouping.
 - **Saved Live source** scans cataloged TXT, CSV, TSV, JSONL, NDJSON, LOG, GZIP, ZIP, and RAR paths directly. Archives are streamed in memory and are never extracted beside the source. Saving a source records only its local paths and preferences; removing it does not touch the original data.
 
-The Search page uses one query control and one source selector. Choosing an indexed dataset or saved Live source automatically selects the matching engine.
+The Search page uses one query control and one source selector. Choosing an indexed dataset or saved Live source automatically selects the matching engine. The selector reports indexed and Live counts separately and includes an **All saved Live sources** option that deduplicates their selected paths before scanning.
 
 Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, cancellation, and paginated results. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker. Streamed result batches remain available after the completion event.
 

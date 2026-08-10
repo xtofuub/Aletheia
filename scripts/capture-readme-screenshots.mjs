@@ -68,10 +68,21 @@ await page.getByRole("heading", { name: "Search" }).waitFor();
 await page
   .getByLabel("Search query")
   .fill("synthetic@example.test\nportal.example.com");
-await page.getByRole("button", { name: "Search", exact: true }).click();
+await page.getByRole("button", { name: "Scan", exact: true }).click();
 await page.getByText("Live search complete").waitFor();
 await page.screenshot({
   path: "docs/screenshots/search-live.jpg",
+  quality: 88,
+  type: "jpeg",
+});
+
+await page.goto(`${baseUrl}/#/domains`);
+await page.getByRole("heading", { name: "Domains" }).waitFor();
+await page.getByLabel("Search domains").fill("example.co.uk");
+await page.getByRole("button", { name: "Scan & store" }).click();
+await page.getByText("2 Live rows stored locally").waitFor();
+await page.screenshot({
+  path: "docs/screenshots/domains-live.jpg",
   quality: 88,
   type: "jpeg",
 });

@@ -22,4 +22,10 @@ so opening a domain does not scan the full workspace. Older URL links and
 missing per-dataset counts are repaired locally once when that domain is
 requested.
 
+The same page can run a bounded containment scan over one saved Live source or
+all saved Live sources. A completed scan stores up to 5,000 deduplicated source
+line snapshots, including file, archive entry, location, and match reason, in
+local SQLite under the normalized parent domain. These reusable Live
+collections do not create Tantivy documents or modify the selected sources.
+
 No DNS request or remote enrichment occurs.

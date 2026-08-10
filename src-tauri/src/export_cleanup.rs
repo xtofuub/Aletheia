@@ -203,6 +203,7 @@ pub fn cleanup_generated(
                  DELETE FROM identity_live_evidence;
                  DELETE FROM identity_groups;
                  DELETE FROM identity_candidates;
+                 DELETE FROM live_domain_evidence;
                  DELETE FROM domain_link_repairs;
                  DELETE FROM urls;
                  DELETE FROM domains;

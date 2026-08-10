@@ -22,6 +22,7 @@ const MIGRATION_V6: &str =
     include_str!("../migrations/0006_identity_candidates_and_domain_repairs.sql");
 const MIGRATION_V7: &str = include_str!("../migrations/0007_identity_live_evidence.sql");
 const MIGRATION_V8: &str = include_str!("../migrations/0008_live_sources.sql");
+const MIGRATION_V9: &str = include_str!("../migrations/0009_live_domain_evidence.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -244,6 +245,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 9 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V9)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (9)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -341,7 +351,7 @@ mod tests {
 
     use super::{
         MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
-        MIGRATION_V7, open_database, recover_interrupted_imports,
+        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, open_database, recover_interrupted_imports,
     };
 
     #[test]
@@ -365,13 +375,17 @@ mod tests {
                      'domain_link_repairs',
                      'identity_live_evidence',
                      'live_sources',
-                     'live_source_paths'
+                     'live_source_paths',
+                     'live_domain_evidence'
                    )",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 12);
+        assert_eq!(table_count, 13);
+
+        assert!(!MIGRATION_V8.is_empty());
+        assert!(!MIGRATION_V9.is_empty());
 
         let theme: String = connection
             .query_row(
@@ -444,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_upgrades_an_existing_v7_workspace_with_live_sources() {
+    fn migration_upgrades_an_existing_v7_workspace_with_live_sources_and_domains() {
         let directory = tempdir().expect("temporary directory");
         let database_path = directory.path().join("metadata.sqlite3");
         let connection = Connection::open(&database_path).expect("legacy database");
@@ -490,12 +504,16 @@ mod tests {
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
                  WHERE type = 'table'
-                   AND name IN ('live_sources', 'live_source_paths')",
+                   AND name IN (
+                     'live_sources',
+                     'live_source_paths',
+                     'live_domain_evidence'
+                   )",
                 [],
                 |row| row.get(0),
             )
             .expect("live source tables");
-        assert_eq!(version, 8);
-        assert_eq!(live_table_count, 2);
+        assert_eq!(version, 9);
+        assert_eq!(live_table_count, 3);
     }
 }

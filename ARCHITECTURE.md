@@ -86,7 +86,7 @@ SQLite is authoritative for:
 - saved Live sources and their read-only paths
 - import jobs, checkpoints, mappings, and reports
 - record traceability and field metadata
-- domains, URLs, identities, indexed memberships, and selected live-evidence snapshots
+- domains, URLs, identities, indexed memberships, selected identity evidence, and reusable Live-domain line snapshots
 - bounded identity candidates and one-time domain aggregate repair markers
 - saved searches, notes, tags, review state, and bookmarks
 - export history and audit events
@@ -98,7 +98,7 @@ Raw records are not copied into SQLite. Recognized field values needed for detai
 Aletheia exposes both search engines through one source-aware command deck. The chosen saved source determines the engine automatically:
 
 - **Indexed** compiles a bounded request into Tantivy and joins masked, traceable view models from SQLite. It is best for repeated investigations, paging, saved views, exports, identities, and domain analysis.
-- **Saved Live source** opens cataloged authorized paths read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. Up to 512 newline-separated queries share one Aho-Corasick matcher and one physical read pass. The catalog persists only the name, paths, and archive preference, so the user does not need to choose the source for every search.
+- **Saved Live source** opens cataloged authorized paths read-only and scans them on background Rust workers. It streams text, GZIP, ZIP, and RAR entries without extracting an archive to disk or creating a persistent index. Up to 512 newline-separated queries share one Aho-Corasick matcher and one physical read pass. Search can combine the deduplicated paths from every saved Live source, while the catalog persists only names, paths, and archive preferences.
 
 Automatic mode recognizes common query shapes. Email, IP, phone, and service-ID queries use field-boundary matching; indexed domain queries use normalized domain links with an exact-first fallback, while live domain queries use literal containment so matches inside emails, URLs, and subdomains are not missed. Advanced mode exposes exact, contains, prefix, dataset, field, archive, case, worker, and result-limit controls.
 
@@ -112,7 +112,7 @@ before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
 
-The live path precompiles literal matching once per scan, checks pause and cancellation between bounded reads, emits results in small batches, and stops the whole worker set at the configured result cap. It emits throttled progress after every 1 MiB of decoded content, tracks physical source bytes separately from expanded archive bytes, and calculates an estimated remaining time from physical progress. Per-worker memory is bounded by a 1 MiB line buffer plus decoder state. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Raw lines are masked in Rust before events reach React.
+The live path precompiles literal matching once per scan, checks pause and cancellation between bounded reads, emits results in small batches, and stops the whole worker set at the configured result cap. It emits throttled progress after every 1 MiB of decoded content, tracks physical source bytes separately from expanded archive bytes, and calculates an estimated remaining time from physical progress. Per-worker memory is bounded by a 1 MiB line buffer plus decoder state. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Reusable secret-like fragments are filtered in Rust before events reach React; complete non-secret line contents remain visible.
 
 Result pages support 25, 50, 100, or 200 records with explicit ranges and
 navigation. Search hit metadata and fields are loaded in batches instead of one
@@ -123,6 +123,12 @@ field previews for each linked source line.
 ## Domain grouping
 
 URL and hostname normalization lowercases hostnames, removes trailing dots and ports, preserves Unicode safely, and uses Public Suffix List semantics to find the registrable domain. It never assumes the last two labels form the parent.
+
+Indexed domain links remain incrementally materialized for fast dataset and
+hostname drilldowns. An on-demand Live-domain scan can instead search one or all
+saved Live sources and persist at most 5,000 deduplicated line snapshots in
+SQLite. Stored Live collections retain provenance and remain separate from the
+Tantivy index.
 
 ## Identity grouping
 

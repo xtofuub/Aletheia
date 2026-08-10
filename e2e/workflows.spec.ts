@@ -97,6 +97,34 @@ test("Identity Builder reuses a saved Live source", async ({ page }) => {
   await expect(page.getByText("Live search complete")).toBeVisible();
 });
 
+test("Domains scans saved Live sources and stores matching lines", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "aletheia.browser.live-sources",
+      JSON.stringify([
+        {
+          id: "live-domain-corpus",
+          name: "Authorized domain corpus",
+          paths: ["C:\\Synthetic\\Authorized corpus"],
+          includeArchives: true,
+          createdAt: new Date().toISOString(),
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/domains");
+  await page.getByLabel("Search domains").fill("example.co.uk");
+  await page.getByRole("button", { name: "Scan & store" }).click();
+
+  await expect(page.getByText("2 Live rows stored locally")).toBeVisible();
+  await expect(page.getByText("Stored Live scans")).toBeVisible();
+  await expect(
+    page.getByText("synthetic@example.com portal.example.com"),
+  ).toBeVisible();
+});
+
 test("indexed results show complete identifiers and wrap safely", async ({
   page,
 }) => {

@@ -171,6 +171,8 @@ function liveSourceKey(sourceId: string) {
   return `live:${sourceId}`;
 }
 
+const allLiveSourcesId = "all-saved-live-sources";
+
 export function SearchPage({
   initialQuery = "",
   initialSource = "index:all",
@@ -213,13 +215,25 @@ export function SearchPage({
     queryKey: ["live-sources"],
     queryFn: listLiveSources,
   });
-  const selectedLiveSource = useMemo(
-    () =>
+  const allLiveSources = useMemo<LiveSourceSummary | null>(() => {
+    const sources = liveSources.data ?? [];
+    if (!sources.length) return null;
+    return {
+      id: allLiveSourcesId,
+      name: "All saved Live sources",
+      paths: [...new Set(sources.flatMap((source) => source.paths))],
+      includeArchives: sources.some((source) => source.includeArchives),
+      createdAt: sources[0]?.createdAt ?? "",
+    };
+  }, [liveSources.data]);
+  const selectedLiveSource = useMemo(() => {
+    if (sourceKey === liveSourceKey(allLiveSourcesId)) return allLiveSources;
+    return (
       (liveSources.data ?? []).find(
         (source) => liveSourceKey(source.id) === sourceKey,
-      ) ?? null,
-    [liveSources.data, sourceKey],
-  );
+      ) ?? null
+    );
+  }, [allLiveSources, liveSources.data, sourceKey]);
   const isLive = sourceKey.startsWith("live:");
   const submittedDatasetId = submittedSourceKey.startsWith("index:")
     ? submittedSourceKey.slice("index:".length)
@@ -276,7 +290,10 @@ export function SearchPage({
 
   const indexedItems = useMemo(
     () => [
-      { label: "All indexed datasets", value: "index:all" },
+      {
+        label: `All indexed datasets (${(datasets.data ?? []).length})`,
+        value: "index:all",
+      },
       ...(datasets.data ?? []).map((dataset) => ({
         label: dataset.name,
         value: indexedSourceKey(dataset.id),
@@ -285,12 +302,21 @@ export function SearchPage({
     [datasets.data],
   );
   const liveItems = useMemo(
-    () =>
-      (liveSources.data ?? []).map((source) => ({
+    () => [
+      ...(allLiveSources
+        ? [
+            {
+              label: `All saved Live sources (${(liveSources.data ?? []).length})`,
+              value: liveSourceKey(allLiveSources.id),
+            },
+          ]
+        : []),
+      ...(liveSources.data ?? []).map((source) => ({
         label: source.name,
         value: liveSourceKey(source.id),
       })),
-    [liveSources.data],
+    ],
+    [allLiveSources, liveSources.data],
   );
   const sourceItems = useMemo(
     () => [...indexedItems, ...liveItems],
@@ -328,9 +354,10 @@ export function SearchPage({
     ) {
       return;
     }
-    const source = (liveSources.data ?? []).find(
-      (item) => item.id === directSourceId,
-    );
+    const source =
+      directSourceId === allLiveSourcesId
+        ? allLiveSources
+        : (liveSources.data ?? []).find((item) => item.id === directSourceId);
     if (!source) return;
     recordedDirectJobId.current = directProgress.jobId;
     void recordLiveSearchActivity({
@@ -344,7 +371,13 @@ export function SearchPage({
     })
       .then(() => queryClient.invalidateQueries({ queryKey: ["overview"] }))
       .catch(() => undefined);
-  }, [directProgress, directSourceId, liveSources.data, queryClient]);
+  }, [
+    allLiveSources,
+    directProgress,
+    directSourceId,
+    liveSources.data,
+    queryClient,
+  ]);
 
   function submitSearch() {
     const value = query.trim();

@@ -53,4 +53,34 @@ describe("SearchPage query composer", () => {
     expect(screen.getByText("Up to 512 values")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Scan" })).toBeTruthy();
   });
+
+  it("counts indexed datasets and exposes one combined Live-source option", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(
+      "aletheia.browser.live-sources",
+      JSON.stringify([
+        {
+          id: "source-1",
+          name: "Synthetic archive",
+          paths: ["C:\\Synthetic\\fixture.zip"],
+          includeArchives: true,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          id: "source-2",
+          name: "Synthetic folder",
+          paths: ["C:\\Synthetic\\folder"],
+          includeArchives: false,
+          createdAt: "2026-01-02T00:00:00.000Z",
+        },
+      ]),
+    );
+    renderSearch();
+
+    const sourceLabel = await screen.findByText("All indexed datasets (0)");
+    const source = sourceLabel.closest("button");
+    expect(source).not.toBeNull();
+    await user.click(source as HTMLButtonElement);
+    expect(await screen.findByText("All saved Live sources (2)")).toBeTruthy();
+  });
 });

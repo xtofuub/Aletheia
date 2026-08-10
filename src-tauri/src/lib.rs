@@ -4,6 +4,7 @@ pub mod domain_analysis;
 mod export_cleanup;
 mod importer;
 mod investigation;
+mod live_domains;
 mod live_sources;
 pub mod models;
 pub mod search_index;
@@ -54,6 +55,10 @@ pub fn run() {
             live_sources::create_live_source,
             live_sources::list_live_sources,
             live_sources::delete_live_source,
+            live_domains::save_live_domain_evidence,
+            live_domains::list_live_domain_collections,
+            live_domains::list_live_domain_evidence,
+            live_domains::clear_live_domain_evidence,
             investigation::get_overview_stats,
             investigation::search_records,
             investigation::search_identity_records,

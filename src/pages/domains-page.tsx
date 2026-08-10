@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -7,9 +7,13 @@ import {
 } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
+  ArchiveIcon,
+  DatabaseIcon,
+  FileSearchIcon,
   Globe2Icon,
   LoaderCircleIcon,
   SearchIcon,
+  SquareIcon,
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
@@ -45,6 +49,11 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import {
+  Progress,
+  ProgressLabel,
+  ProgressValue,
+} from "@/components/ui/progress";
+import {
   Table,
   TableBody,
   TableCell,
@@ -52,10 +61,29 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getDomainDetails, listDomains, rebuildDomains } from "@/lib/desktop";
-import { formatCount } from "@/lib/format";
+import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
+import {
+  cancelDirectSearch,
+  getDomainDetails,
+  listDomains,
+  listLiveDomainCollections,
+  listLiveDomainEvidence,
+  listLiveSources,
+  rebuildDomains,
+  saveLiveDomainEvidence,
+  startDirectSearch,
+  type LiveSourceSummary,
+} from "@/lib/desktop";
+import { formatBytes, formatCount } from "@/lib/format";
 
 const pageSize = 25;
+const allLiveSourcesId = "all-saved-live-sources";
+
+function isDomainQuery(value: string) {
+  return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(
+    value.trim(),
+  );
+}
 
 export function DomainsPage() {
   const queryClient = useQueryClient();
@@ -67,7 +95,54 @@ export function DomainsPage() {
   const [hostnameQuery, setHostnameQuery] = useState("");
   const [datasetId, setDatasetId] = useState("all");
   const [recordOffset, setRecordOffset] = useState(0);
+  const [liveRecordOffset, setLiveRecordOffset] = useState(0);
+  const [liveSourceId, setLiveSourceId] = useState(allLiveSourcesId);
+  const [liveScanContext, setLiveScanContext] = useState<{
+    jobId: string;
+    domain: string;
+    source: LiveSourceSummary;
+  } | null>(null);
   const [repairNotice, setRepairNotice] = useState("");
+  const [liveNotice, setLiveNotice] = useState("");
+  const storedLiveJobId = useRef<string | null>(null);
+  const { begin: beginDirectSearch, progress: directProgress } =
+    useDirectSearchProgress();
+
+  const liveSources = useQuery({
+    queryKey: ["live-sources"],
+    queryFn: listLiveSources,
+  });
+  const allLiveSources = useMemo<LiveSourceSummary | null>(() => {
+    const sources = liveSources.data ?? [];
+    if (!sources.length) return null;
+    return {
+      id: allLiveSourcesId,
+      name: "All saved Live sources",
+      paths: [...new Set(sources.flatMap((source) => source.paths))],
+      includeArchives: sources.some((source) => source.includeArchives),
+      createdAt: sources[0]?.createdAt ?? "",
+    };
+  }, [liveSources.data]);
+  const selectedLiveSource =
+    liveSourceId === allLiveSourcesId
+      ? allLiveSources
+      : ((liveSources.data ?? []).find(
+          (source) => source.id === liveSourceId,
+        ) ?? allLiveSources);
+  const liveSourceItems = [
+    ...(allLiveSources
+      ? [
+          {
+            label: `All saved Live sources (${(liveSources.data ?? []).length})`,
+            value: allLiveSourcesId,
+          },
+        ]
+      : []),
+    ...(liveSources.data ?? []).map((source) => ({
+      label: source.name,
+      value: source.id,
+    })),
+  ];
 
   const domainRepair = useMutation({
     mutationFn: rebuildDomains,
@@ -88,8 +163,16 @@ export function DomainsPage() {
     placeholderData: keepPreviousData,
   });
 
+  const storedCollections = useQuery({
+    queryKey: ["live-domain-collections", submittedQuery],
+    queryFn: () => listLiveDomainCollections(submittedQuery, 0, 10),
+  });
+
   const activeDomain =
-    selectedDomain ?? domains.data?.groups[0]?.registrableDomain ?? null;
+    selectedDomain ??
+    domains.data?.groups[0]?.registrableDomain ??
+    storedCollections.data?.collections[0]?.registrableDomain ??
+    null;
 
   const details = useQuery({
     queryKey: [
@@ -113,6 +196,102 @@ export function DomainsPage() {
     placeholderData: keepPreviousData,
   });
 
+  const liveEvidence = useQuery({
+    queryKey: ["live-domain-evidence", activeDomain, liveRecordOffset],
+    queryFn: () =>
+      listLiveDomainEvidence(activeDomain ?? "", liveRecordOffset, pageSize),
+    enabled: Boolean(activeDomain),
+    placeholderData: keepPreviousData,
+  });
+
+  const storeLiveEvidence = useMutation({
+    mutationFn: ({
+      domain,
+      source,
+      evidence,
+    }: {
+      domain: string;
+      source: LiveSourceSummary;
+      evidence: NonNullable<typeof directProgress>["hits"];
+    }) =>
+      saveLiveDomainEvidence({
+        domain,
+        sourceId: source.id,
+        sourceName: source.name,
+        evidence,
+      }),
+    onSuccess: async (summary) => {
+      setSelectedDomain(summary.registrableDomain);
+      setLiveRecordOffset(0);
+      setLiveNotice(
+        `${formatCount(summary.evidenceCount)} Live rows stored locally`,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["live-domain-collections"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["live-domain-evidence", summary.registrableDomain],
+        }),
+      ]);
+    },
+    onError: (error) => setLiveNotice(`Could not store scan: ${String(error)}`),
+  });
+
+  const liveScan = useMutation({
+    mutationFn: ({
+      domain,
+      source,
+    }: {
+      domain: string;
+      source: LiveSourceSummary;
+    }) =>
+      startDirectSearch({
+        paths: source.paths,
+        query: domain,
+        mode: "contains",
+        caseSensitive: false,
+        includeArchives: source.includeArchives,
+        maxResults: 5_000,
+        workerLimit: 1,
+      }),
+    onSuccess: (start, variables) => {
+      storedLiveJobId.current = null;
+      setLiveNotice("");
+      setLiveScanContext({ jobId: start.jobId, ...variables });
+      beginDirectSearch(start);
+    },
+    onError: (error) => setLiveNotice(`Live scan failed: ${String(error)}`),
+  });
+
+  const currentLiveProgress =
+    liveScanContext?.jobId === directProgress?.jobId ? directProgress : null;
+  const livePercent = currentLiveProgress?.totalBytes
+    ? Math.min(
+        100,
+        (currentLiveProgress.sourceBytesScanned /
+          currentLiveProgress.totalBytes) *
+          100,
+      )
+    : 0;
+
+  useEffect(() => {
+    if (!currentLiveProgress || !liveScanContext) return;
+    if (
+      currentLiveProgress.status !== "completed" ||
+      storedLiveJobId.current === currentLiveProgress.jobId
+    ) {
+      return;
+    }
+    storedLiveJobId.current = currentLiveProgress.jobId;
+    if (!currentLiveProgress.hits.length) return;
+    storeLiveEvidence.mutate({
+      domain: liveScanContext.domain,
+      source: liveScanContext.source,
+      evidence: currentLiveProgress.hits,
+    });
+  }, [currentLiveProgress, liveScanContext, storeLiveEvidence]);
+
   const datasetItems = [
     { label: "All linked datasets", value: "all" },
     ...(details.data?.breaches ?? []).map((breach) => ({
@@ -120,6 +299,19 @@ export function DomainsPage() {
       value: breach.datasetId,
     })),
   ];
+  const domainToScan = query.trim() || activeDomain || "";
+  const liveBusy =
+    liveScan.isPending ||
+    storeLiveEvidence.isPending ||
+    ["running", "paused"].includes(currentLiveProgress?.status ?? "");
+  const displayedLiveNotice =
+    liveNotice ||
+    (currentLiveProgress?.status === "failed"
+      ? currentLiveProgress.message
+      : currentLiveProgress?.status === "completed" &&
+          currentLiveProgress.hits.length === 0
+        ? "Live scan completed with no matching rows."
+        : "");
 
   return (
     <div>
@@ -150,7 +342,8 @@ export function DomainsPage() {
           <CardHeader className="border-b">
             <CardTitle>Domain groups</CardTitle>
             <CardDescription>
-              {domains.data?.total ?? 0} parent domains
+              {domains.data?.total ?? 0} indexed /{" "}
+              {storedCollections.data?.total ?? 0} stored Live
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 p-3">
@@ -174,7 +367,154 @@ export function DomainsPage() {
                 />
               </InputGroup>
             </form>
+            <div className="flex flex-col gap-2 border p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Scan saved Live sources</p>
+                  <p className="text-xs text-muted-foreground">
+                    Find up to 5,000 matching lines and keep them in this
+                    domain.
+                  </p>
+                </div>
+                <ArchiveIcon className="shrink-0 text-muted-foreground" />
+              </div>
+              {liveSourceItems.length ? (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Select
+                    items={liveSourceItems}
+                    onValueChange={(value) => setLiveSourceId(String(value))}
+                    value={selectedLiveSource?.id ?? allLiveSourcesId}
+                  >
+                    <SelectTrigger className="min-w-0 flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {liveSourceItems.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    disabled={
+                      liveBusy ||
+                      !selectedLiveSource ||
+                      !isDomainQuery(domainToScan)
+                    }
+                    onClick={() => {
+                      if (selectedLiveSource && isDomainQuery(domainToScan)) {
+                        liveScan.mutate({
+                          domain: domainToScan,
+                          source: selectedLiveSource,
+                        });
+                      }
+                    }}
+                    size="sm"
+                  >
+                    {liveBusy ? (
+                      <Spinner data-icon="inline-start" />
+                    ) : (
+                      <FileSearchIcon data-icon="inline-start" />
+                    )}
+                    {storeLiveEvidence.isPending
+                      ? "Storingâ€¦"
+                      : liveBusy
+                        ? "Scanningâ€¦"
+                        : "Scan & store"}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  nativeButton={false}
+                  render={<a href="#/datasets" />}
+                  size="sm"
+                  variant="outline"
+                >
+                  Add a Live source
+                </Button>
+              )}
+              {currentLiveProgress ? (
+                <div className="flex flex-col gap-2">
+                  <Progress value={livePercent}>
+                    <ProgressLabel>{currentLiveProgress.message}</ProgressLabel>
+                    <ProgressValue>
+                      {() => `${livePercent.toFixed(0)}%`}
+                    </ProgressValue>
+                  </Progress>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">
+                      {formatBytes(currentLiveProgress.bytesPerSecond)}/s
+                    </Badge>
+                    <Badge variant="outline">
+                      {formatCount(currentLiveProgress.matches)} matches
+                    </Badge>
+                    {["running", "paused"].includes(
+                      currentLiveProgress.status,
+                    ) ? (
+                      <Button
+                        className="ms-auto"
+                        onClick={() =>
+                          void cancelDirectSearch(currentLiveProgress.jobId)
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        <SquareIcon data-icon="inline-start" />
+                        Cancel
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {displayedLiveNotice ? (
+                <p className="text-xs text-muted-foreground" role="status">
+                  {displayedLiveNotice}
+                </p>
+              ) : null}
+            </div>
+            {(storedCollections.data?.collections ?? []).length ? (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 px-2 py-1 text-xs font-medium text-muted-foreground">
+                  <FileSearchIcon />
+                  Stored Live scans
+                </div>
+                {(storedCollections.data?.collections ?? []).map(
+                  (collection) => (
+                    <Button
+                      className="h-auto w-full justify-between px-3 py-2"
+                      key={collection.registrableDomain}
+                      onClick={() => {
+                        setSelectedDomain(collection.registrableDomain);
+                        setHostname(null);
+                        setDatasetId("all");
+                        setRecordOffset(0);
+                        setLiveRecordOffset(0);
+                      }}
+                      variant={
+                        activeDomain === collection.registrableDomain
+                          ? "secondary"
+                          : "ghost"
+                      }
+                    >
+                      <span className="truncate">
+                        {collection.registrableDomain}
+                      </span>
+                      <Badge variant="outline">
+                        {formatCount(collection.evidenceCount)}
+                      </Badge>
+                    </Button>
+                  ),
+                )}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2 px-2 py-1 text-xs font-medium text-muted-foreground">
+                <DatabaseIcon />
+                Indexed groups
+              </div>
               {(domains.data?.groups ?? []).map((group) => (
                 <Button
                   className="h-auto w-full justify-between px-3 py-2"
@@ -186,6 +526,7 @@ export function DomainsPage() {
                     setHostname(null);
                     setDatasetId("all");
                     setRecordOffset(0);
+                    setLiveRecordOffset(0);
                     if (reloadActiveDomain) void details.refetch();
                   }}
                   variant={
@@ -217,13 +558,11 @@ export function DomainsPage() {
           <CardHeader className="border-b">
             <CardTitle>{activeDomain ?? "Domain evidence"}</CardTitle>
             <CardDescription>
-              {details.isPending
-                ? "Loading linked records…"
-                : details.isError
+              {details.isPending || liveEvidence.isPending
+                ? "Loading linked records..."
+                : details.isError && liveEvidence.isError
                   ? "Linked records could not be loaded."
-                  : details.data
-                    ? `${details.data.totalRecords.toLocaleString()} linked records`
-                    : "Select a domain group."}
+                  : `${(details.data?.totalRecords ?? 0).toLocaleString()} indexed / ${(liveEvidence.data?.total ?? 0).toLocaleString()} stored Live`}
             </CardDescription>
           </CardHeader>
           {activeDomain ? (
@@ -415,9 +754,10 @@ export function DomainsPage() {
                       <EmptyMedia variant="icon">
                         <Globe2Icon />
                       </EmptyMedia>
-                      <EmptyTitle>No linked lines</EmptyTitle>
+                      <EmptyTitle>No indexed lines</EmptyTitle>
                       <EmptyDescription>
-                        Adjust the hostname or dataset filter.
+                        Adjust the filters or use the stored Live evidence
+                        below.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -430,6 +770,127 @@ export function DomainsPage() {
                   offset={recordOffset}
                   onOffsetChange={setRecordOffset}
                   total={details.data.totalRecords}
+                />
+              ) : null}
+              <CardHeader className="border-y">
+                <CardTitle>Stored Live evidence</CardTitle>
+                <CardDescription>
+                  Lines gathered from saved files, folders, and archives without
+                  building an index.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="px-0">
+                {liveEvidence.isPending ? (
+                  <Empty className="min-h-48 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <LoaderCircleIcon className="animate-spin" />
+                      </EmptyMedia>
+                      <EmptyTitle>Loading stored Live lines</EmptyTitle>
+                    </EmptyHeader>
+                  </Empty>
+                ) : liveEvidence.isError ? (
+                  <Empty className="min-h-48 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <AlertCircleIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>Could not load stored Live lines</EmptyTitle>
+                      <EmptyDescription>
+                        {String(liveEvidence.error)}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : liveEvidence.data?.evidence.length ? (
+                  <Table className="table-fixed">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-48 ps-6">Source line</TableHead>
+                        <TableHead className="hidden w-56 xl:table-cell">
+                          Live source
+                        </TableHead>
+                        <TableHead className="pe-6">Line contents</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {liveEvidence.data.evidence.map((evidence) => (
+                        <TableRow key={evidence.id}>
+                          <TableCell className="min-w-0 ps-6 align-top">
+                            <p
+                              className="truncate text-xs"
+                              title={evidence.sourceFile}
+                            >
+                              {evidence.sourceFile}
+                            </p>
+                            <p
+                              className="truncate font-mono text-xs text-muted-foreground"
+                              title={evidence.sourceLocation}
+                            >
+                              {evidence.sourceLocation}
+                            </p>
+                            {evidence.archiveEntry ? (
+                              <p
+                                className="truncate font-mono text-[11px] text-muted-foreground"
+                                title={evidence.archiveEntry}
+                              >
+                                {evidence.archiveEntry}
+                              </p>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="hidden min-w-0 align-top xl:table-cell">
+                            <p className="truncate" title={evidence.sourceName}>
+                              {evidence.sourceName}
+                            </p>
+                            <p
+                              className="truncate font-mono text-[11px] text-muted-foreground"
+                              title={evidence.sourcePath}
+                            >
+                              {evidence.sourcePath}
+                            </p>
+                          </TableCell>
+                          <TableCell className="min-w-0 whitespace-normal pe-6 align-top">
+                            <p className="break-words [overflow-wrap:anywhere]">
+                              {evidence.excerpt}
+                            </p>
+                            <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+                              <Badge
+                                className="max-w-full truncate"
+                                title={evidence.matchedQuery}
+                                variant="outline"
+                              >
+                                {evidence.matchedQuery}
+                              </Badge>
+                              <Badge variant="secondary">
+                                {evidence.matchReason}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <Empty className="min-h-48 rounded-none border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <FileSearchIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>No stored Live lines</EmptyTitle>
+                      <EmptyDescription>
+                        Enter this domain in the search box, choose a saved Live
+                        source, then select Scan &amp; store.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                )}
+              </CardContent>
+              {liveEvidence.data ? (
+                <PaginationControls
+                  label="stored Live evidence"
+                  limit={pageSize}
+                  offset={liveRecordOffset}
+                  onOffsetChange={setLiveRecordOffset}
+                  total={liveEvidence.data.total}
                 />
               ) : null}
             </>
