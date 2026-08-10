@@ -33,7 +33,7 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
     .fill("synthetic@example.test\nportal.example.com");
 
   await expect(page.getByText("2 values")).toBeVisible();
-  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByRole("button", { name: "Scan", exact: true }).click();
 
   await expect(page.getByText("Live search complete")).toBeVisible();
   await expect(page.getByText("Batch value found").first()).toBeVisible();

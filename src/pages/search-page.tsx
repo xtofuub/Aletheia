@@ -55,6 +55,8 @@ import { Input } from "@/components/ui/input";
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
   InputGroupText,
   InputGroupTextarea,
 } from "@/components/ui/input-group";
@@ -443,51 +445,90 @@ export function SearchPage({
                   <FieldLabel htmlFor="workspace-search-query">
                     Query
                   </FieldLabel>
-                  <InputGroup>
-                    <InputGroupTextarea
-                      aria-label="Search query"
-                      autoFocus
-                      id="workspace-search-query"
-                      onChange={(event) => setQuery(event.target.value)}
-                      placeholder={
-                        isLive
-                          ? "Search one value, or paste up to 512 values with one per line"
-                          : "Name, email, domain, username, phone, IP, or URL"
-                      }
-                      rows={1}
-                      value={query}
-                    />
-                    <InputGroupAddon align="inline-end">
-                      <Button
-                        disabled={
-                          !query.trim() ||
-                          directSearch.isPending ||
-                          currentLiveProgress?.status === "running" ||
-                          indexed.isFetching
-                        }
-                        size="sm"
-                        type="submit"
-                      >
-                        {directSearch.isPending || indexed.isFetching ? (
-                          <Spinner data-icon="inline-start" />
-                        ) : (
-                          <SearchIcon data-icon="inline-start" />
-                        )}
-                        {directSearch.isPending || indexed.isFetching
-                          ? "Searching…"
-                          : "Search"}
-                      </Button>
-                    </InputGroupAddon>
-                    <InputGroupAddon align="block-end" className="border-t">
-                      <InputGroupText>
-                        {queries.length || 0}{" "}
-                        {queries.length === 1 ? "value" : "values"}
-                      </InputGroupText>
-                      {queryKind ? (
-                        <Badge variant="secondary">{queryKind}</Badge>
-                      ) : null}
-                    </InputGroupAddon>
-                  </InputGroup>
+                  {isLive ? (
+                    <InputGroup>
+                      <InputGroupTextarea
+                        aria-label="Search query"
+                        autoFocus
+                        className="min-h-20"
+                        id="workspace-search-query"
+                        onChange={(event) => setQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (
+                            event.key === "Enter" &&
+                            (event.ctrlKey || event.metaKey)
+                          ) {
+                            event.preventDefault();
+                            submitSearch();
+                          }
+                        }}
+                        placeholder="Paste up to 512 values, one per line"
+                        rows={3}
+                        value={query}
+                      />
+                      <InputGroupAddon align="block-end" className="border-t">
+                        <InputGroupText>
+                          {queries.length
+                            ? `${queries.length} ${queries.length === 1 ? "value" : "values"}`
+                            : "Up to 512 values"}
+                        </InputGroupText>
+                        {queryKind ? (
+                          <Badge variant="secondary">{queryKind}</Badge>
+                        ) : null}
+                        <InputGroupButton
+                          className="ms-auto"
+                          disabled={
+                            !query.trim() ||
+                            directSearch.isPending ||
+                            currentLiveProgress?.status === "running"
+                          }
+                          size="sm"
+                          type="submit"
+                          variant="default"
+                        >
+                          {directSearch.isPending ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <FileSearchIcon data-icon="inline-start" />
+                          )}
+                          {directSearch.isPending ? "Scanning…" : "Scan"}
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  ) : (
+                    <InputGroup>
+                      <InputGroupInput
+                        aria-label="Search query"
+                        autoFocus
+                        id="workspace-search-query"
+                        onChange={(event) => setQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            submitSearch();
+                          }
+                        }}
+                        placeholder="Name, email, domain, username, phone, IP, or URL"
+                        value={query}
+                      />
+                      <InputGroupAddon align="inline-start">
+                        <SearchIcon />
+                      </InputGroupAddon>
+                      <InputGroupAddon align="inline-end">
+                        <InputGroupButton
+                          disabled={!query.trim() || indexed.isFetching}
+                          size="sm"
+                          type="submit"
+                          variant="default"
+                        >
+                          {indexed.isFetching ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : null}
+                          {indexed.isFetching ? "Searching…" : "Search"}
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    </InputGroup>
+                  )}
                 </Field>
               </div>
               <div className="flex flex-wrap items-end gap-2">
