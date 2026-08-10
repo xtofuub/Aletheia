@@ -16,7 +16,7 @@ read-only source
   -> sanitized report and progress event
 ```
 
-Sources are rejected if they disappear or change size between inspection and import. Directory discovery does not follow links. Parsing is line-oriented and bounded. Severe limit violations stop the job when the safe default is enabled; malformed rows can otherwise be counted and skipped.
+Sources are rejected if they disappear or change size between inspection and import. **Index folder** recursively discovers supported TXT, CSV, TSV, JSONL, NDJSON, LOG, and GZIP files in subfolders without following links. Review import lists every discovered file before work begins. ZIP and RAR archives remain available through the saved Live-source workflow instead of persistent indexing. Parsing is line-oriented and bounded. Severe limit violations stop the job when the safe default is enabled; malformed rows can otherwise be counted and skipped.
 
 SQLite is authoritative for metadata and analysis. Tantivy stores record IDs plus safe normalized search values. Secret originals are replaced before either store is written.
 

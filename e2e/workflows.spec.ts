@@ -69,9 +69,12 @@ test("large-source index profiles explain their cost", async ({ page }) => {
   await page.goto("/#/datasets");
   await page.getByRole("button", { name: "Index files" }).click();
 
-  await expect(
-    page.getByRole("dialog", { name: "Review import" }),
-  ).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "Review import" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("3 files queued")).toBeVisible();
+  await expect(dialog.getByText("records_valid.csv")).toBeVisible();
+  await expect(dialog.getByText(/nested\\records_two\.txt/)).toBeVisible();
+  await expect(dialog.getByText("records_three.jsonl")).toBeVisible();
   await page.getByRole("button", { name: "Fast index" }).click();
   await expect(
     page.getByText(
@@ -81,4 +84,19 @@ test("large-source index profiles explain their cost", async ({ page }) => {
   await expect(
     page.getByText(/Plan roughly .* generated storage/),
   ).toBeVisible();
+});
+
+test("folder indexing reviews supported files recursively", async ({
+  page,
+}) => {
+  await page.goto("/#/datasets");
+  await page.getByRole("button", { name: "Index folder" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Review import" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Recursive folder scan")).toBeVisible();
+  await expect(dialog.getByText("3 files queued")).toBeVisible();
+  await expect(dialog.getByText("records_valid.csv")).toBeVisible();
+  await expect(dialog.getByText(/nested\\records_two\.txt/)).toBeVisible();
+  await expect(dialog.getByText("records_three.jsonl")).toBeVisible();
 });

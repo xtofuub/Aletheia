@@ -72,6 +72,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
 import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Table,
@@ -149,6 +150,9 @@ export function DatasetsPage() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [inspection, setInspection] = useState<InspectionResult | null>(null);
+  const [inspectionKind, setInspectionKind] = useState<"files" | "folder">(
+    "files",
+  );
   const [datasetLabel, setDatasetLabel] = useState("");
   const [authorizationNote, setAuthorizationNote] = useState("");
   const [importProfile, setImportProfile] = useState<ImportProfile>("analysis");
@@ -248,10 +252,18 @@ export function DatasetsPage() {
           return inspectSources(paths);
         },
       ),
-    onSuccess: (result) => {
+    onSuccess: (result, kind) => {
       if (!result) return;
+      if (result.files.length === 0) {
+        setInspection(null);
+        setActionError(
+          "No supported files were found. Persistent indexing accepts TXT, CSV, TSV, JSONL, NDJSON, LOG, and GZIP files.",
+        );
+        return;
+      }
       setActionError("");
       setInspection(result);
+      setInspectionKind(kind);
       const recommendedProfile: ImportProfile = isLargeInspection(result)
         ? "fast"
         : "analysis";
@@ -404,7 +416,7 @@ export function DatasetsPage() {
   return (
     <div>
       <PageHeader
-        description="Scan very large sources immediately, or index smaller collections you search repeatedly."
+        description="Save huge sources for live lookup, or recursively index supported files for repeated search."
         title="Datasets"
       />
 
@@ -487,8 +499,8 @@ export function DatasetsPage() {
           <CardHeader>
             <CardTitle>Persistent index</CardTitle>
             <CardDescription>
-              Build a reusable local index for fast repeated searches, domain
-              exploration, and identity grouping.
+              Build a reusable local index from selected files or every
+              supported file inside a folder and its subfolders.
             </CardDescription>
             <CardAction>
               <Badge variant="outline">Reusable</Badge>
@@ -497,6 +509,7 @@ export function DatasetsPage() {
           <CardContent className="flex flex-1 flex-col gap-4">
             <div className="flex flex-wrap gap-2">
               <Badge variant="outline">Fast repeated search</Badge>
+              <Badge variant="outline">Recursive folders</Badge>
               <Badge variant="outline">Domains</Badge>
               <Badge variant="outline">Identities</Badge>
               <Badge variant="outline">Resumable</Badge>
@@ -888,15 +901,41 @@ export function DatasetsPage() {
       </Dialog>
 
       <Dialog onOpenChange={setDialogOpen} open={dialogOpen}>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Review import</DialogTitle>
             <DialogDescription>
-              Detection previews are masked before reaching this screen.
+              {inspection
+                ? `${inspection.files.length.toLocaleString()} supported ${
+                    inspection.files.length === 1 ? "file" : "files"
+                  } discovered from ${
+                    inspectionKind === "folder"
+                      ? "the selected folder and its subfolders"
+                      : "your file selection"
+                  }.`
+                : "Review the selected local sources."}
             </DialogDescription>
           </DialogHeader>
           {inspection ? (
-            <div className="flex max-h-[65vh] flex-col gap-4 overflow-y-auto pr-1">
+            <div className="flex max-h-[68vh] flex-col gap-4 overflow-y-auto pr-1">
+              <div className="flex flex-wrap gap-2">
+                <Badge>
+                  {inspection.files.length.toLocaleString()} files queued
+                </Badge>
+                <Badge variant="outline">
+                  {formatBytes(inspection.totalBytes)} total
+                </Badge>
+                <Badge variant="outline">
+                  {inspectionKind === "folder"
+                    ? "Recursive folder scan"
+                    : "Multi-file selection"}
+                </Badge>
+                {inspection.rejectedPaths.length ? (
+                  <Badge variant="secondary">
+                    {inspection.rejectedPaths.length.toLocaleString()} skipped
+                  </Badge>
+                ) : null}
+              </div>
               {largeInspection ? (
                 <Alert>
                   <FileSearchIcon />
@@ -988,30 +1027,58 @@ export function DatasetsPage() {
                   </FieldDescription>
                 </Field>
               </FieldGroup>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>File</TableHead>
-                    <TableHead>Format</TableHead>
-                    <TableHead>Encoding</TableHead>
-                    <TableHead>Columns</TableHead>
-                    <TableHead>Size</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {inspection.files.map((file) => (
-                    <TableRow key={file.absolutePath}>
-                      <TableCell className="max-w-72 truncate">
-                        {file.fileName}
-                      </TableCell>
-                      <TableCell>{file.format}</TableCell>
-                      <TableCell>{file.encoding}</TableCell>
-                      <TableCell>{file.columnCount}</TableCell>
-                      <TableCell>{formatBytes(file.fileSize)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <Field>
+                <div className="flex items-center justify-between gap-3">
+                  <FieldLabel>Files to index</FieldLabel>
+                  <span className="text-xs text-muted-foreground">
+                    All discovered files are shown
+                  </span>
+                </div>
+                <ScrollArea className="h-56 border">
+                  <Table className="table-fixed">
+                    <TableHeader className="sticky top-0 bg-background">
+                      <TableRow>
+                        <TableHead className="w-1/2 ps-4">Path</TableHead>
+                        <TableHead>Format</TableHead>
+                        <TableHead>Encoding</TableHead>
+                        <TableHead>Rows</TableHead>
+                        <TableHead className="pe-4 text-right">Size</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inspection.files.map((file) => (
+                        <TableRow key={file.absolutePath}>
+                          <TableCell className="min-w-0 ps-4 whitespace-normal">
+                            <p
+                              className="truncate font-medium"
+                              title={file.relativePath}
+                            >
+                              {file.relativePath || file.fileName}
+                            </p>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{file.format}</Badge>
+                          </TableCell>
+                          <TableCell className="truncate text-xs">
+                            {file.encoding}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs tabular-nums">
+                            {file.estimatedRecords?.toLocaleString() ?? "—"}
+                          </TableCell>
+                          <TableCell className="pe-4 text-right font-mono text-xs">
+                            {formatBytes(file.fileSize)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ScrollArea>
+                <FieldDescription>
+                  Persistent indexing supports TXT, CSV, TSV, JSONL, NDJSON,
+                  LOG, and GZIP. Use a saved Live source for ZIP or RAR
+                  archives.
+                </FieldDescription>
+              </Field>
               <FieldGroup>
                 {(
                   [

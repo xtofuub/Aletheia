@@ -694,10 +694,11 @@ fn sanitize(error: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use super::{detect_delimiter, inspect_paths, mask_value};
     use crate::models::{FieldType, SourceFormat};
+    use tempfile::tempdir;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -727,6 +728,35 @@ mod tests {
         let result = inspect_paths(&[fixture("synthetic_848_shape.txt")]).expect("inspection");
         assert_eq!(result.files[0].format, SourceFormat::Text);
         assert_eq!(result.files[0].column_count, 1);
+    }
+
+    #[test]
+    fn folder_inspection_discovers_supported_files_recursively() {
+        let directory = tempdir().expect("source folder");
+        let nested = directory.path().join("nested");
+        fs::create_dir_all(&nested).expect("nested folder");
+        fs::write(
+            directory.path().join("first.txt"),
+            "synthetic@example.test\n",
+        )
+        .expect("text fixture");
+        fs::write(
+            nested.join("second.csv"),
+            "email,domain\nsecond@example.test,example.test\n",
+        )
+        .expect("csv fixture");
+        fs::write(nested.join("ignored.zip"), b"synthetic archive marker")
+            .expect("unsupported fixture");
+
+        let result = inspect_paths(&[directory.path().to_path_buf()]).expect("folder inspection");
+        let relative_paths = result
+            .files
+            .iter()
+            .map(|file| file.relative_path.replace('\\', "/"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(relative_paths, vec!["first.txt", "nested/second.csv"]);
+        assert!(result.rejected_paths.is_empty());
     }
 
     #[test]

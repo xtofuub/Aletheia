@@ -645,7 +645,13 @@ export async function selectStorageFolder(current: string): Promise<string> {
 }
 
 export async function selectSourceFiles(): Promise<string[]> {
-  if (!isTauriRuntime()) return ["C:\\Synthetic\\records_valid.csv"];
+  if (!isTauriRuntime()) {
+    return [
+      "C:\\Synthetic\\records_valid.csv",
+      "C:\\Synthetic\\nested\\records_two.txt",
+      "C:\\Synthetic\\records_three.jsonl",
+    ];
+  }
   const selected = await open({
     directory: false,
     multiple: true,
@@ -717,7 +723,7 @@ export async function inspectSources(
   if (isTauriRuntime()) {
     return invoke<InspectionResult>("inspect_sources", { paths });
   }
-  return syntheticInspection();
+  return syntheticInspection(paths);
 }
 
 export async function startImport(
@@ -1515,7 +1521,7 @@ export async function updateSecuritySettings(
   return next;
 }
 
-function syntheticInspection(): InspectionResult {
+function syntheticInspection(paths: string[] = []): InspectionResult {
   const mappings: FieldMapping[] = [
     ["email", "email", false],
     ["username", "username", false],
@@ -1532,46 +1538,66 @@ function syntheticInspection(): InspectionResult {
     confidence: 0.98,
     isSensitive: isSensitive as boolean,
   }));
-  return {
-    files: [
-      {
-        absolutePath: "C:\\Synthetic\\records_valid.csv",
-        relativePath: "records_valid.csv",
-        fileName: "records_valid.csv",
-        fileSize: 842,
-        modifiedAt: "2026-01-20T10:00:00Z",
-        format: "csv",
-        compressed: false,
-        encoding: "UTF-8",
-        lineEnding: "LF",
-        delimiter: "comma",
-        hasHeader: true,
-        estimatedRecords: 3,
-        columnCount: mappings.length,
-        rowConsistency: 1,
-        mappings,
-        preview: [
-          {
-            sourceLocation: 2,
-            values: [
-              "a•••@example.com",
-              "av•••",
-              "••••••67",
-              "198.51.100.25",
-              "https://portal.example.com/login",
-              "••••••••••••",
-              "••••••••••••",
-              "svc-1001",
-              "2025-03-14",
-            ],
-          },
+  const expandedPaths = paths.flatMap((path) =>
+    /\.[a-z0-9]+$/i.test(path)
+      ? [path]
+      : [
+          `${path}\\records_valid.csv`,
+          `${path}\\nested\\records_two.txt`,
+          `${path}\\records_three.jsonl`,
         ],
-        warnings: [],
-        eligible: true,
-      },
-    ],
+  );
+  const selectedPaths = expandedPaths.length
+    ? expandedPaths
+    : ["C:\\Synthetic\\records_valid.csv"];
+  const files = selectedPaths.map((absolutePath, index) => {
+    const fileName = absolutePath.split(/[\\/]/).at(-1) ?? "synthetic.txt";
+    const format: SourceFormat = fileName.endsWith(".csv")
+      ? "csv"
+      : fileName.endsWith(".jsonl")
+        ? "jsonl"
+        : "text";
+    const fileSize = 842 + index * 128;
+    return {
+      absolutePath,
+      relativePath: absolutePath.replace(/^C:\\Synthetic\\?/i, ""),
+      fileName,
+      fileSize,
+      modifiedAt: "2026-01-20T10:00:00Z",
+      format,
+      compressed: false,
+      encoding: "UTF-8",
+      lineEnding: "LF",
+      delimiter: format === "csv" ? "comma" : null,
+      hasHeader: format === "csv",
+      estimatedRecords: 3 + index,
+      columnCount: mappings.length,
+      rowConsistency: 1,
+      mappings,
+      preview: [
+        {
+          sourceLocation: 2,
+          values: [
+            "a•••@example.com",
+            "av•••",
+            "••••••67",
+            "198.51.100.25",
+            "https://portal.example.com/login",
+            "••••••••••••",
+            "••••••••••••",
+            "svc-1001",
+            "2025-03-14",
+          ],
+        },
+      ],
+      warnings: [],
+      eligible: true,
+    } satisfies FileInspection;
+  });
+  return {
+    files,
     rejectedPaths: [],
-    totalBytes: 842,
+    totalBytes: files.reduce((total, file) => total + file.fileSize, 0),
   };
 }
 

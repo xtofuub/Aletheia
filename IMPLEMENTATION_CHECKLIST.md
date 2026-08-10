@@ -150,6 +150,8 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Add end-to-end coverage for batch scan and index-profile selection
 - [x] Persist removable Live-source catalogs without modifying source files
 - [x] Merge indexed and Live lookup into one source-aware Search workflow
+- [x] Show every selected file in Review import before starting a multi-file index
+- [x] Recursively discover supported files when indexing a folder
 
 ## Signed update reliability
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rebuilt Review import around a dedicated scrollable file table so every selected or recursively discovered file is visible before indexing, with totals, relative paths, formats, estimated rows, and skipped-file feedback.
+- Added native and browser coverage proving that Index folder recursively discovers supported files in subfolders while leaving archives for the Live scan workflow.
 - Added persistent, removable Live-source catalogs and merged indexed lookup and live scanning into one source-aware Search workflow; source removal never deletes original files.
 - Replaced implementation-facing redaction wording in Search with a neutral protected-value marker and constrained indexed and direct-scan tables so long fields, paths, excerpts, and match values wrap without overlapping adjacent content.
 - Rebuilt the desktop, taskbar, installer, and in-app logo assets with a transparent canvas and an 87.5% mark footprint so the Aletheia symbol matches normal Windows icon sizing without a black tile.
