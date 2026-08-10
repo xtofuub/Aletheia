@@ -9,6 +9,8 @@ import {
   FolderOpenIcon,
   LinkIcon,
   ListChecksIcon,
+  PauseIcon,
+  PlayIcon,
   RefreshCwIcon,
   SearchIcon,
   SquareIcon,
@@ -82,7 +84,9 @@ import {
   createManualIdentity,
   listIdentities,
   listIdentityMembers,
+  pauseDirectSearch,
   rebuildIdentities,
+  resumeDirectSearch,
   searchIdentityRecords,
   selectDirectSearchSources,
   startDirectSearch,
@@ -187,7 +191,7 @@ export function IdentitiesPage() {
         caseSensitive: false,
         includeArchives: true,
         maxResults: 2_000,
-        workerLimit: 2,
+        workerLimit: 1,
       }),
     onSuccess: beginLiveSearch,
     onError: (error) => setNotice(`Live scan failed: ${String(error)}`),
@@ -254,7 +258,7 @@ export function IdentitiesPage() {
   const livePercent = liveProgress?.totalBytes
     ? Math.min(
         100,
-        (liveProgress.contentBytesScanned / liveProgress.totalBytes) * 100,
+        (liveProgress.sourceBytesScanned / liveProgress.totalBytes) * 100,
       )
     : 0;
   const visibleLiveHits = (liveProgress?.hits ?? []).slice(
@@ -588,11 +592,13 @@ export function IdentitiesPage() {
                 </CardDescription>
                 <CardAction>
                   {manualResults.isFetching ||
-                  liveProgress?.status === "running" ? (
+                  ["running", "paused"].includes(liveProgress?.status ?? "") ? (
                     <Badge>
-                      <Spinner />
+                      {liveProgress?.status === "running" ? <Spinner /> : null}
                       {evidenceSurface === "live"
-                        ? "Scanning files"
+                        ? liveProgress?.status === "paused"
+                          ? "Scan paused"
+                          : "Scanning files"
                         : "Searching index"}
                     </Badge>
                   ) : (
@@ -833,7 +839,10 @@ export function IdentitiesPage() {
 
                       {liveProgress ? (
                         <Progress value={livePercent}>
-                          <ProgressLabel>
+                          <ProgressLabel className="flex items-center gap-2">
+                            {liveProgress.status === "running" ? (
+                              <Spinner />
+                            ) : null}
                             {liveProgress.message} -{" "}
                             {formatBytes(liveProgress.bytesPerSecond)}/s
                           </ProgressLabel>
@@ -845,6 +854,31 @@ export function IdentitiesPage() {
 
                       <div className="flex justify-end gap-2">
                         {liveProgress?.status === "running" ? (
+                          <Button
+                            onClick={() =>
+                              void pauseDirectSearch(liveProgress.jobId)
+                            }
+                            size="sm"
+                            variant="outline"
+                          >
+                            <PauseIcon data-icon="inline-start" />
+                            Pause
+                          </Button>
+                        ) : null}
+                        {liveProgress?.status === "paused" ? (
+                          <Button
+                            onClick={() =>
+                              void resumeDirectSearch(liveProgress.jobId)
+                            }
+                            size="sm"
+                            variant="outline"
+                          >
+                            <PlayIcon data-icon="inline-start" />
+                            Resume
+                          </Button>
+                        ) : null}
+                        {liveProgress &&
+                        ["running", "paused"].includes(liveProgress.status) ? (
                           <Button
                             onClick={() =>
                               void cancelDirectSearch(liveProgress.jobId)
@@ -860,7 +894,9 @@ export function IdentitiesPage() {
                           disabled={
                             !liveSourcePaths.length ||
                             liveQuery.trim().length < 2 ||
-                            liveProgress?.status === "running" ||
+                            ["running", "paused"].includes(
+                              liveProgress?.status ?? "",
+                            ) ||
                             liveSearch.isPending
                           }
                           onClick={() => {
@@ -949,7 +985,9 @@ export function IdentitiesPage() {
                           <EmptyTitle>
                             {liveProgress?.status === "running"
                               ? "Scanning large sources"
-                              : "No live evidence yet"}
+                              : liveProgress?.status === "paused"
+                                ? "Scan paused"
+                                : "No live evidence yet"}
                           </EmptyTitle>
                           <EmptyDescription>
                             Select matching rows and save a local identity

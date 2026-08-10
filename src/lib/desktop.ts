@@ -223,6 +223,7 @@ export interface DirectSearchStart {
   jobId: string;
   sourceCount: number;
   totalBytes: number;
+  queryCount: number;
 }
 
 export interface DirectSearchHit {
@@ -233,19 +234,23 @@ export interface DirectSearchHit {
   sourceLocation: string;
   excerpt: string;
   matchReason: string;
+  matchedQuery: string;
 }
 
 export interface DirectSearchProgress {
   jobId: string;
-  status: "running" | "cancelled" | "completed" | "failed";
+  status: "running" | "paused" | "cancelled" | "completed" | "failed";
   currentSource: string | null;
   sourceCount: number;
   filesScanned: number;
   totalBytes: number;
+  sourceBytesScanned: number;
   contentBytesScanned: number;
   matches: number;
   elapsedMs: number;
   bytesPerSecond: number;
+  estimatedRemainingMs: number | null;
+  queryCount: number;
   truncated: boolean;
   message: string;
   hits: DirectSearchHit[];
@@ -853,6 +858,15 @@ export async function startDirectSearch(
   const jobId = crypto.randomUUID();
   const started = performance.now();
   const sourceCount = Math.max(1, request.paths.length);
+  const queryCount = Math.max(
+    1,
+    new Set(
+      request.query
+        .split(/\r?\n/)
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ).size,
+  );
   const syntheticHit: DirectSearchHit = {
     id: crypto.randomUUID(),
     sourcePath: "C:\\Synthetic\\Authorized corpus\\synthetic.zip",
@@ -861,11 +875,14 @@ export async function startDirectSearch(
     sourceLocation: "line 42",
     excerpt: "s•••@example.com:[REDACTED]:portal.example.com",
     matchReason:
-      request.mode === "exact"
-        ? "Exact field match"
-        : request.mode === "prefix"
-          ? "Field prefix match"
-          : "Line contains query",
+      queryCount > 1
+        ? "Batch value found"
+        : request.mode === "exact"
+          ? "Exact field match"
+          : request.mode === "prefix"
+            ? "Field prefix match"
+            : "Line contains query",
+    matchedQuery: request.query.split(/\r?\n/)[0]?.trim() ?? request.query,
   };
   const syntheticSecondHit: DirectSearchHit = {
     ...syntheticHit,
@@ -882,10 +899,13 @@ export async function startDirectSearch(
       sourceCount,
       filesScanned: sourceCount,
       totalBytes: 128 * 1024 * 1024,
+      sourceBytesScanned: 128 * 1024 * 1024,
       contentBytesScanned: 384 * 1024 * 1024,
       matches: 2,
       elapsedMs: Math.max(1, Math.round(performance.now() - started)),
       bytesPerSecond: 196 * 1024 * 1024,
+      estimatedRemainingMs: null,
+      queryCount,
       truncated: false,
       message: "Live search complete",
       hits: [syntheticHit, syntheticSecondHit],
@@ -896,12 +916,25 @@ export async function startDirectSearch(
     jobId,
     sourceCount,
     totalBytes: 128 * 1024 * 1024,
+    queryCount,
   };
 }
 
 export async function cancelDirectSearch(jobId: string): Promise<void> {
   if (isTauriRuntime()) {
     await invoke("cancel_direct_search", { jobId });
+  }
+}
+
+export async function pauseDirectSearch(jobId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("pause_direct_search", { jobId });
+  }
+}
+
+export async function resumeDirectSearch(jobId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("resume_direct_search", { jobId });
   }
 }
 

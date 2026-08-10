@@ -6,6 +6,8 @@ import {
   DatabaseIcon,
   FileSearchIcon,
   FolderOpenIcon,
+  PauseIcon,
+  PlayIcon,
   SaveIcon,
   SearchIcon,
   SlidersHorizontalIcon,
@@ -15,6 +17,7 @@ import {
 import { DashboardCard } from "@/components/dashboard-card";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -60,6 +63,8 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
+  InputGroupText,
+  InputGroupTextarea,
 } from "@/components/ui/input-group";
 import {
   Progress,
@@ -90,6 +95,8 @@ import {
   cancelDirectSearch,
   exportRecords,
   listDatasets,
+  pauseDirectSearch,
+  resumeDirectSearch,
   saveSearch,
   searchRecords,
   selectDirectSearchSources,
@@ -98,7 +105,7 @@ import {
   type FieldType,
   type SearchMode,
 } from "@/lib/desktop";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatDuration } from "@/lib/format";
 
 const modeItems = [
   { label: "Contains", value: "contains" },
@@ -122,10 +129,12 @@ const pageItems = [25, 50, 100, 200].map((value) => ({
   label: `${value} per page`,
   value: String(value),
 }));
-const workerItems = [1, 2, 4, 8].map((value) => ({
-  label: `${value} ${value === 1 ? "worker" : "workers"}`,
-  value: String(value),
-}));
+const workerItems = [
+  { label: "1 worker · HDD", value: "1" },
+  { label: "2 workers · SATA SSD", value: "2" },
+  { label: "4 workers · NVMe", value: "4" },
+  { label: "8 workers · fast NVMe", value: "8" },
+];
 const resultCapItems = [500, 2_000, 5_000].map((value) => ({
   label: `${value.toLocaleString()} matches`,
   value: String(value),
@@ -144,6 +153,17 @@ function detectQueryKind(value: string) {
   if (/^@[a-z0-9_.-]+$/i.test(query)) return "Username";
   if (/^[\p{L}']+(?:[ -][\p{L}']+){1,3}$/u.test(query)) return "Name";
   return "Text";
+}
+
+function parseDirectQueries(value: string) {
+  return [
+    ...new Set(
+      value
+        .split(/\r?\n/)
+        .map((query) => query.trim())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 export function SearchPage({
@@ -170,9 +190,10 @@ export function SearchPage({
   const [directQuery, setDirectQuery] = useState("");
   const [directMode, setDirectMode] = useState<SearchMode>("contains");
   const [includeArchives, setIncludeArchives] = useState(true);
-  const [directWorkerLimit, setDirectWorkerLimit] = useState(2);
+  const [directWorkerLimit, setDirectWorkerLimit] = useState(1);
   const [directMaxResults, setDirectMaxResults] = useState(2_000);
   const [directOffset, setDirectOffset] = useState(0);
+  const [directError, setDirectError] = useState("");
   const { begin: beginDirectSearch, progress: directProgress } =
     useDirectSearchProgress();
   const queryClient = useQueryClient();
@@ -203,7 +224,11 @@ export function SearchPage({
         maxResults: directMaxResults,
         workerLimit: directWorkerLimit,
       }),
-    onSuccess: beginDirectSearch,
+    onSuccess: (start) => {
+      setDirectError("");
+      beginDirectSearch(start);
+    },
+    onError: (error) => setDirectError(String(error)),
   });
 
   const datasetItems = useMemo(
@@ -245,7 +270,7 @@ export function SearchPage({
   const directPercent = directProgress?.totalBytes
     ? Math.min(
         100,
-        (directProgress.contentBytesScanned / directProgress.totalBytes) * 100,
+        (directProgress.sourceBytesScanned / directProgress.totalBytes) * 100,
       )
     : 0;
   const visibleDirectHits = (directProgress?.hits ?? []).slice(
@@ -253,7 +278,11 @@ export function SearchPage({
     directOffset + limit,
   );
   const indexedQueryKind = detectQueryKind(query);
-  const directQueryKind = detectQueryKind(directQuery);
+  const directQueries = parseDirectQueries(directQuery);
+  const directQueryKind =
+    directQueries.length > 1
+      ? "Batch"
+      : detectQueryKind(directQueries[0] ?? "");
 
   return (
     <div>
@@ -643,9 +672,11 @@ export function SearchPage({
                 </CardDescription>
                 <CardAction>
                   <Badge variant="outline">
-                    {directProgress?.status === "running"
-                      ? `${directPercent.toFixed(0)}% scanned`
-                      : "No index created"}
+                    {directProgress?.status === "paused"
+                      ? `Paused at ${directPercent.toFixed(0)}%`
+                      : directProgress?.status === "running"
+                        ? `${directPercent.toFixed(0)}% scanned`
+                        : "No index created"}
                   </Badge>
                 </CardAction>
               </CardHeader>
@@ -709,22 +740,25 @@ export function SearchPage({
                   <FieldGroup>
                     <Field>
                       <FieldLabel htmlFor="direct-scan-query">
-                        2. Enter a value
+                        2. Enter values
                       </FieldLabel>
                       <InputGroup>
-                        <InputGroupAddon>
-                          <SearchIcon />
-                        </InputGroupAddon>
-                        <InputGroupInput
+                        <InputGroupTextarea
                           aria-label="Direct scan query"
                           id="direct-scan-query"
                           onChange={(event) =>
                             setDirectQuery(event.target.value)
                           }
-                          placeholder="Name, email, domain, username, phone, IP, or URL"
+                          placeholder="One value, or paste up to 512 values with one per line"
+                          rows={3}
                           value={directQuery}
                         />
-                        <InputGroupAddon align="inline-end">
+                        <InputGroupAddon align="block-end" className="border-t">
+                          <SearchIcon />
+                          <InputGroupText>
+                            {directQueries.length || 0}{" "}
+                            {directQueries.length === 1 ? "value" : "values"}
+                          </InputGroupText>
                           <Select
                             items={modeItems}
                             onValueChange={(value) =>
@@ -758,11 +792,19 @@ export function SearchPage({
                         Detected: {directQueryKind}
                       </Badge>
                       <p className="text-xs text-muted-foreground">
-                        {directQueryKind === "Name"
-                          ? "All name tokens can match across columns or email separators."
-                          : "Contains matching works best for unknown source formats."}
+                        {directQueryKind === "Batch"
+                          ? "Every value is matched in one pass, avoiding repeated scans of the same huge source."
+                          : directQueryKind === "Name"
+                            ? "All name tokens can match across columns or email separators."
+                            : "Contains matching works best for unknown source formats."}
                       </p>
                     </div>
+                  ) : null}
+                  {directError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>Scan could not start</AlertTitle>
+                      <AlertDescription>{directError}</AlertDescription>
+                    </Alert>
                   ) : null}
                   <Collapsible>
                     <CollapsibleTrigger
@@ -791,7 +833,8 @@ export function SearchPage({
                           <FieldContent>
                             <FieldTitle>Worker limit</FieldTitle>
                             <FieldDescription>
-                              More workers can scan faster and use more CPU.
+                              Use one worker for a physical HDD. Extra workers
+                              can cause slower random seeking.
                             </FieldDescription>
                           </FieldContent>
                           <Select
@@ -854,7 +897,12 @@ export function SearchPage({
                   </Collapsible>
                   {directProgress ? (
                     <Progress value={directPercent}>
-                      <ProgressLabel>{directProgress.message}</ProgressLabel>
+                      <ProgressLabel className="flex items-center gap-2">
+                        {directProgress.status === "running" ? (
+                          <Spinner />
+                        ) : null}
+                        {directProgress.message}
+                      </ProgressLabel>
                       <ProgressValue>
                         {() => `${directPercent.toFixed(0)}%`}
                       </ProgressValue>
@@ -862,6 +910,31 @@ export function SearchPage({
                   ) : null}
                   <div className="flex justify-end gap-2">
                     {directProgress?.status === "running" ? (
+                      <Button
+                        onClick={() =>
+                          void pauseDirectSearch(directProgress.jobId)
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        <PauseIcon data-icon="inline-start" />
+                        Pause
+                      </Button>
+                    ) : null}
+                    {directProgress?.status === "paused" ? (
+                      <Button
+                        onClick={() =>
+                          void resumeDirectSearch(directProgress.jobId)
+                        }
+                        size="sm"
+                        variant="outline"
+                      >
+                        <PlayIcon data-icon="inline-start" />
+                        Resume
+                      </Button>
+                    ) : null}
+                    {directProgress &&
+                    ["running", "paused"].includes(directProgress.status) ? (
                       <Button
                         onClick={() =>
                           void cancelDirectSearch(directProgress.jobId)
@@ -877,7 +950,9 @@ export function SearchPage({
                       disabled={
                         !sourcePaths.length ||
                         !directQuery.trim() ||
-                        directProgress?.status === "running" ||
+                        ["running", "paused"].includes(
+                          directProgress?.status ?? "",
+                        ) ||
                         directSearch.isPending
                       }
                       onClick={() => {
@@ -898,17 +973,32 @@ export function SearchPage({
               </CardContent>
             </DashboardCard>
 
-            <div className="grid grid-cols-2 gap-px sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-px sm:grid-cols-3 xl:grid-cols-6">
               {[
                 [
-                  "Content scanned",
+                  "Source progress",
+                  `${formatBytes(directProgress?.sourceBytesScanned ?? 0)} / ${formatBytes(directProgress?.totalBytes ?? 0)}`,
+                ],
+                [
+                  "Decoded content",
                   formatBytes(directProgress?.contentBytesScanned ?? 0),
                 ],
                 [
                   "Throughput",
                   `${formatBytes(directProgress?.bytesPerSecond ?? 0)}/s`,
                 ],
-                ["Files visited", String(directProgress?.filesScanned ?? 0)],
+                [
+                  "Time remaining",
+                  directProgress?.status === "completed"
+                    ? "Done"
+                    : formatDuration(
+                        directProgress?.estimatedRemainingMs ?? null,
+                      ),
+                ],
+                [
+                  "Files visited",
+                  `${directProgress?.filesScanned ?? 0} / ${directProgress?.sourceCount ?? 0}`,
+                ],
                 ["Matches", String(directProgress?.matches ?? 0)],
               ].map(([label, value]) => (
                 <DashboardCard key={label}>
@@ -943,7 +1033,7 @@ export function SearchPage({
                         <TableHead className="ps-6">Source</TableHead>
                         <TableHead>Location</TableHead>
                         <TableHead>Excerpt</TableHead>
-                        <TableHead className="pe-6">Reason</TableHead>
+                        <TableHead className="pe-6">Match</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -966,7 +1056,10 @@ export function SearchPage({
                             {hit.excerpt}
                           </TableCell>
                           <TableCell className="pe-6 text-xs text-muted-foreground">
-                            {hit.matchReason}
+                            <p className="max-w-64 break-all font-mono text-foreground">
+                              {hit.matchedQuery}
+                            </p>
+                            <p>{hit.matchReason}</p>
                           </TableCell>
                         </TableRow>
                       ))}

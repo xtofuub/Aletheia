@@ -39,6 +39,8 @@ pub fn run() {
             detection::inspect_sources,
             direct_scan::start_direct_search,
             direct_scan::cancel_direct_search,
+            direct_scan::pause_direct_search,
+            direct_scan::resume_direct_search,
             importer::start_import,
             importer::resume_dataset_import,
             importer::rebuild_identities,

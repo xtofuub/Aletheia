@@ -41,6 +41,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "flate2",
+ "memchr",
  "once_cell",
  "psl",
  "rars",

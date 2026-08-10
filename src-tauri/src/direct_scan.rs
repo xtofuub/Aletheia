@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs::File,
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
@@ -8,7 +8,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
@@ -31,11 +31,15 @@ const DIRECT_SEARCH_EVENT: &str = "direct-search-progress";
 const MAX_INPUT_PATHS: usize = 64;
 const MAX_SOURCE_FILES: usize = 250_000;
 const MAX_RESULTS: usize = 5_000;
+const MAX_QUERY_COUNT: usize = 512;
+const MAX_QUERY_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_DECOMPRESSION_RATIO: u64 = 250;
 const MIN_DECOMPRESSION_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
 const HIT_BATCH_SIZE: usize = 20;
+const PROGRESS_EMIT_INTERVAL_MS: u64 = 250;
+const PROGRESS_BYTE_INTERVAL: u64 = 1024 * 1024;
 
 static EMAIL_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b([a-z0-9._%+\-])([a-z0-9._%+\-]*)@([a-z0-9.\-]+\.[a-z]{2,})\b")
@@ -70,6 +74,7 @@ pub struct DirectSearchStart {
     pub job_id: String,
     pub source_count: usize,
     pub total_bytes: u64,
+    pub query_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,6 +87,7 @@ pub struct DirectSearchHit {
     pub source_location: String,
     pub excerpt: String,
     pub match_reason: String,
+    pub matched_query: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,10 +99,13 @@ pub struct DirectSearchProgress {
     pub source_count: usize,
     pub files_scanned: usize,
     pub total_bytes: u64,
+    pub source_bytes_scanned: u64,
     pub content_bytes_scanned: u64,
     pub matches: usize,
     pub elapsed_ms: u64,
     pub bytes_per_second: u64,
+    pub estimated_remaining_ms: Option<u64>,
+    pub query_count: usize,
     pub truncated: bool,
     pub message: String,
     pub hits: Vec<DirectSearchHit>,
@@ -118,24 +127,29 @@ struct SharedScan {
     total_bytes: u64,
     started: Instant,
     files_scanned: AtomicUsize,
+    source_bytes_scanned: AtomicU64,
     content_bytes_scanned: AtomicU64,
     matches: AtomicUsize,
     stop: AtomicBool,
+    last_progress_emit_ms: AtomicU64,
+    pause_announced: AtomicBool,
 }
 
 struct QueryMatcher {
     literal: Option<AhoCorasick>,
+    literal_query_indices: Vec<usize>,
+    unicode_queries: Vec<(usize, String)>,
     flexible_name: Option<(AhoCorasick, usize)>,
-    needle: Vec<u8>,
+    queries: Vec<String>,
     mode: SearchMode,
     case_sensitive: bool,
 }
 
 impl QueryMatcher {
     fn new(query: &str, mode: SearchMode, case_sensitive: bool) -> Result<Self, String> {
-        let needle = query.as_bytes().to_vec();
-        let name_tokens = if matches!(mode, SearchMode::Contains) {
-            flexible_ascii_name_tokens(query)
+        let queries = parse_queries(query, case_sensitive)?;
+        let name_tokens = if queries.len() == 1 && matches!(mode, SearchMode::Contains) {
+            flexible_ascii_name_tokens(&queries[0])
         } else {
             None
         };
@@ -149,66 +163,147 @@ impl QueryMatcher {
                     .map_err(|_| "the name search could not be compiled".to_string())
             })
             .transpose()?;
-        let literal = if query.is_ascii() {
+        let literal_query_indices = queries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, query)| query.is_ascii().then_some(index))
+            .collect::<Vec<_>>();
+        let literal = if literal_query_indices.is_empty() {
+            None
+        } else {
             Some(
                 AhoCorasickBuilder::new()
                     .ascii_case_insensitive(!case_sensitive)
-                    .build([query])
+                    .build(
+                        literal_query_indices
+                            .iter()
+                            .map(|index| queries[*index].as_bytes()),
+                    )
                     .map_err(|_| "the live search query could not be compiled".to_string())?,
             )
-        } else {
-            None
         };
+        let unicode_queries = queries
+            .iter()
+            .enumerate()
+            .filter(|(_, query)| !query.is_ascii())
+            .map(|(index, query)| {
+                (
+                    index,
+                    if case_sensitive {
+                        query.clone()
+                    } else {
+                        query.to_lowercase()
+                    },
+                )
+            })
+            .collect();
         Ok(Self {
             literal,
+            literal_query_indices,
+            unicode_queries,
             flexible_name,
-            needle,
+            queries,
             mode,
             case_sensitive,
         })
     }
 
-    fn matches(&self, line: &[u8]) -> bool {
+    fn find_match(&self, line: &[u8]) -> Option<usize> {
         if let Some((matcher, pattern_count)) = &self.flexible_name {
             let mut found = 0_u8;
             for matched in matcher.find_iter(line) {
                 found |= 1_u8 << matched.pattern().as_usize();
                 if found.count_ones() as usize == *pattern_count {
-                    return true;
+                    return Some(0);
                 }
             }
-            return false;
+            return None;
         }
         if let Some(literal) = &self.literal {
-            return match self.mode {
-                SearchMode::Contains => literal.is_match(line),
-                SearchMode::Prefix => literal.find_iter(line).any(|matched| {
-                    matched.start() == 0 || is_field_boundary(line[matched.start() - 1])
-                }),
-                SearchMode::Exact => literal.find_iter(line).any(|matched| {
-                    (matched.start() == 0 || is_field_boundary(line[matched.start() - 1]))
-                        && (matched.end() == line.len() || is_field_boundary(line[matched.end()]))
-                }),
-            };
+            for matched in literal.find_iter(line) {
+                let valid = match self.mode {
+                    SearchMode::Contains => true,
+                    SearchMode::Prefix => {
+                        matched.start() == 0 || is_field_boundary(line[matched.start() - 1])
+                    }
+                    SearchMode::Exact => {
+                        (matched.start() == 0 || is_field_boundary(line[matched.start() - 1]))
+                            && (matched.end() == line.len()
+                                || is_field_boundary(line[matched.end()]))
+                    }
+                };
+                if valid {
+                    return self
+                        .literal_query_indices
+                        .get(matched.pattern().as_usize())
+                        .copied();
+                }
+            }
         }
-
+        if self.unicode_queries.is_empty() {
+            return None;
+        }
         let text = String::from_utf8_lossy(line);
-        let query = String::from_utf8_lossy(&self.needle);
-        let (haystack, needle) = if self.case_sensitive {
-            (text.into_owned(), query.into_owned())
+        let haystack = if self.case_sensitive {
+            text.into_owned()
         } else {
-            (text.to_lowercase(), query.to_lowercase())
+            text.to_lowercase()
         };
-        match self.mode {
-            SearchMode::Contains => haystack.contains(&needle),
-            SearchMode::Prefix => field_tokens(&haystack).any(|token| token.starts_with(&needle)),
-            SearchMode::Exact => field_tokens(&haystack).any(|token| token == needle),
-        }
+        self.unicode_queries.iter().find_map(|(index, needle)| {
+            let matches = match self.mode {
+                SearchMode::Contains => haystack.contains(needle),
+                SearchMode::Prefix => {
+                    field_tokens(&haystack).any(|token| token.starts_with(needle))
+                }
+                SearchMode::Exact => field_tokens(&haystack).any(|token| token == needle),
+            };
+            matches.then_some(*index)
+        })
     }
 
     fn is_flexible_name(&self) -> bool {
         self.flexible_name.is_some()
     }
+
+    fn query(&self, index: usize) -> &str {
+        &self.queries[index]
+    }
+
+    fn query_count(&self) -> usize {
+        self.queries.len()
+    }
+}
+
+fn parse_queries(value: &str, case_sensitive: bool) -> Result<Vec<String>, String> {
+    if value.len() > MAX_QUERY_BYTES {
+        return Err("live search input is limited to 64 KiB".to_string());
+    }
+    let mut seen = HashSet::new();
+    let mut queries = Vec::new();
+    for query in value
+        .lines()
+        .map(str::trim)
+        .filter(|query| !query.is_empty())
+    {
+        if query.len() < 2 || query.len() > 512 {
+            return Err("each live search value requires between 2 and 512 characters".to_string());
+        }
+        let key = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+        if seen.insert(key) {
+            queries.push(query.to_string());
+        }
+        if queries.len() > MAX_QUERY_COUNT {
+            return Err("live search supports up to 512 values per scan".to_string());
+        }
+    }
+    if queries.is_empty() {
+        return Err("enter at least one live search value".to_string());
+    }
+    Ok(queries)
 }
 
 fn flexible_ascii_name_tokens(value: &str) -> Option<Vec<String>> {
@@ -247,6 +342,28 @@ impl SharedScan {
             .fetch_add(bytes, Ordering::Relaxed);
     }
 
+    fn add_source_bytes(&self, bytes: u64) {
+        self.source_bytes_scanned
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn wait_until_running(&self) -> bool {
+        if !self.control.is_paused() {
+            return !self.should_stop();
+        }
+        if !self.pause_announced.swap(true, Ordering::Relaxed) {
+            self.emit("paused", None, "Live search paused", Vec::new());
+        }
+        while self.control.is_paused() && !self.should_stop() {
+            thread::sleep(Duration::from_millis(100));
+        }
+        if !self.should_stop() && self.pause_announced.swap(false, Ordering::Relaxed) {
+            self.last_progress_emit_ms.store(0, Ordering::Relaxed);
+            self.emit("running", None, "Live search resumed", Vec::new());
+        }
+        !self.should_stop()
+    }
+
     fn reserve_hit(&self) -> bool {
         loop {
             let current = self.matches.load(Ordering::Relaxed);
@@ -275,6 +392,25 @@ impl SharedScan {
         hits: Vec<DirectSearchHit>,
     ) {
         let elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        if status == "running" && hits.is_empty() {
+            let previous = self.last_progress_emit_ms.load(Ordering::Relaxed);
+            if previous > 0 && elapsed_ms.saturating_sub(previous) < PROGRESS_EMIT_INTERVAL_MS {
+                return;
+            }
+            if self
+                .last_progress_emit_ms
+                .compare_exchange(
+                    previous,
+                    elapsed_ms.max(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_err()
+            {
+                return;
+            }
+        }
+        let source_bytes_scanned = self.source_bytes_scanned.load(Ordering::Relaxed);
         let content_bytes_scanned = self.content_bytes_scanned.load(Ordering::Relaxed);
         let bytes_per_second = content_bytes_scanned
             .saturating_mul(1_000)
@@ -290,16 +426,33 @@ impl SharedScan {
                 source_count: self.source_count,
                 files_scanned: self.files_scanned.load(Ordering::Relaxed),
                 total_bytes: self.total_bytes,
+                source_bytes_scanned,
                 content_bytes_scanned,
                 matches,
                 elapsed_ms,
                 bytes_per_second,
+                estimated_remaining_ms: estimate_remaining_ms(
+                    self.total_bytes,
+                    source_bytes_scanned,
+                    elapsed_ms,
+                ),
+                query_count: self.matcher.query_count(),
                 truncated: matches >= self.request.max_results,
                 message: message.to_string(),
                 hits,
             },
         );
     }
+}
+
+fn estimate_remaining_ms(total_bytes: u64, scanned_bytes: u64, elapsed_ms: u64) -> Option<u64> {
+    if scanned_bytes == 0 || scanned_bytes >= total_bytes || elapsed_ms == 0 {
+        return None;
+    }
+    total_bytes
+        .saturating_sub(scanned_bytes)
+        .saturating_mul(elapsed_ms)
+        .checked_div(scanned_bytes)
 }
 
 #[tauri::command]
@@ -309,15 +462,13 @@ pub fn start_direct_search(
     mut request: DirectSearchRequest,
 ) -> Result<DirectSearchStart, String> {
     request.query = request.query.trim().to_string();
-    if request.query.len() < 2 || request.query.len() > 512 {
-        return Err("live searches require between 2 and 512 characters".to_string());
-    }
     if request.paths.is_empty() || request.paths.len() > MAX_INPUT_PATHS {
         return Err("choose between 1 and 64 local sources".to_string());
     }
     request.max_results = request.max_results.clamp(1, MAX_RESULTS);
     request.worker_limit = request.worker_limit.clamp(1, 8);
     let matcher = QueryMatcher::new(&request.query, request.mode, request.case_sensitive)?;
+    let query_count = matcher.query_count();
 
     let candidates = collect_candidates(&request.paths, request.include_archives)?;
     if candidates.is_empty() {
@@ -350,9 +501,12 @@ pub fn start_direct_search(
                 total_bytes,
                 started: Instant::now(),
                 files_scanned: AtomicUsize::new(0),
+                source_bytes_scanned: AtomicU64::new(0),
                 content_bytes_scanned: AtomicU64::new(0),
                 matches: AtomicUsize::new(0),
                 stop: AtomicBool::new(false),
+                last_progress_emit_ms: AtomicU64::new(0),
+                pause_announced: AtomicBool::new(false),
             });
             shared.emit("running", None, "Scanning local sources", Vec::new());
             let result = run_scan(candidates, Arc::clone(&shared));
@@ -379,6 +533,7 @@ pub fn start_direct_search(
         job_id,
         source_count,
         total_bytes,
+        query_count,
     })
 }
 
@@ -392,6 +547,32 @@ pub fn cancel_direct_search(job_id: String, state: State<'_, AppState>) -> Resul
         .get(&job_id)
         .ok_or_else(|| "live search is no longer active".to_string())?;
     control.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn pause_direct_search(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    set_direct_search_paused(&job_id, true, &state)
+}
+
+#[tauri::command]
+pub fn resume_direct_search(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    set_direct_search_paused(&job_id, false, &state)
+}
+
+fn set_direct_search_paused(
+    job_id: &str,
+    paused: bool,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    let jobs = state
+        .jobs
+        .lock()
+        .map_err(|_| "search controls are unavailable".to_string())?;
+    let control = jobs
+        .get(job_id)
+        .ok_or_else(|| "live search is no longer active".to_string())?;
+    control.set_paused(paused);
     Ok(())
 }
 
@@ -457,7 +638,7 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
             let first_error = Arc::clone(&first_error);
             scope.spawn(move || {
                 loop {
-                    if shared.should_stop() {
+                    if !shared.wait_until_running() {
                         break;
                     }
                     let candidate = match queue.lock() {
@@ -473,6 +654,12 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
                         Vec::new(),
                     );
                     let result = scan_candidate(&candidate, &shared);
+                    if result.is_ok()
+                        && !shared.should_stop()
+                        && is_compressed_candidate(&candidate.path)
+                    {
+                        shared.add_source_bytes(candidate.size);
+                    }
                     shared.files_scanned.fetch_add(1, Ordering::Relaxed);
                     shared.emit(
                         "running",
@@ -507,6 +694,10 @@ fn scan_candidate(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(),
     }
 }
 
+fn is_compressed_candidate(path: &Path) -> bool {
+    matches!(extension(path).as_str(), "gz" | "zip" | "rar")
+}
+
 fn scan_plain(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), String> {
     let file = File::open(&candidate.path)
         .map_err(|_| "a source could not be opened read-only".to_string())?;
@@ -515,6 +706,7 @@ fn scan_plain(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Str
         &candidate.path.to_string_lossy(),
         &file_name(&candidate.path),
         None,
+        true,
         shared,
     )
 }
@@ -528,6 +720,7 @@ fn scan_gzip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Stri
         &candidate.path.to_string_lossy(),
         &file_name(&candidate.path),
         None,
+        false,
         shared,
     )
 }
@@ -577,6 +770,7 @@ fn scan_zip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
             &candidate.path.to_string_lossy(),
             &file_name(&candidate.path),
             Some(entry_name),
+            false,
             shared,
         )?;
     }
@@ -638,13 +832,15 @@ fn scan_reader<R: BufRead>(
     source_path: &str,
     source_file: &str,
     archive_entry: Option<String>,
+    track_source_bytes: bool,
     shared: &Arc<SharedScan>,
 ) -> Result<(), String> {
     let mut line = Vec::with_capacity(4096);
     let mut line_number = 0_u64;
     let mut hits = Vec::new();
+    let mut bytes_since_progress = 0_u64;
     loop {
-        if shared.should_stop() {
+        if !shared.wait_until_running() {
             break;
         }
         let (bytes, exceeded) = read_bounded_line(&mut reader, &mut line)?;
@@ -652,6 +848,19 @@ fn scan_reader<R: BufRead>(
             break;
         }
         shared.add_content_bytes(bytes);
+        bytes_since_progress = bytes_since_progress.saturating_add(bytes);
+        if track_source_bytes {
+            shared.add_source_bytes(bytes);
+        }
+        if bytes_since_progress >= PROGRESS_BYTE_INTERVAL {
+            shared.emit(
+                "running",
+                Some(source_file.to_string()),
+                "Scanning local sources",
+                Vec::new(),
+            );
+            bytes_since_progress = 0;
+        }
         line_number += 1;
         if exceeded || line.is_empty() {
             continue;
@@ -700,7 +909,7 @@ fn read_bounded_line<R: BufRead>(
         if available.is_empty() {
             break;
         }
-        let newline = available.iter().position(|byte| *byte == b'\n');
+        let newline = memchr::memchr(b'\n', available);
         let take = newline.map_or(available.len(), |index| index + 1);
         consumed = consumed.saturating_add(take as u64);
         if line.len() < MAX_LINE_BYTES + 2 {
@@ -729,9 +938,7 @@ fn make_hit(
     line: &[u8],
     shared: &Arc<SharedScan>,
 ) -> Option<DirectSearchHit> {
-    if !shared.matcher.matches(line) {
-        return None;
-    }
+    let query_index = shared.matcher.find_match(line)?;
     if !shared.reserve_hit() {
         return None;
     }
@@ -744,6 +951,8 @@ fn make_hit(
         excerpt: mask_excerpt(&String::from_utf8_lossy(line)),
         match_reason: if shared.matcher.is_flexible_name() {
             "Name tokens found"
+        } else if shared.matcher.query_count() > 1 {
+            "Batch value found"
         } else {
             match shared.request.mode {
                 SearchMode::Exact => "Exact field match",
@@ -752,13 +961,14 @@ fn make_hit(
             }
         }
         .to_string(),
+        matched_query: shared.matcher.query(query_index).to_string(),
     })
 }
 
 #[cfg(test)]
 fn line_matches(text: &str, query: &str, mode: SearchMode, case_sensitive: bool) -> bool {
     QueryMatcher::new(query, mode, case_sensitive)
-        .is_ok_and(|matcher| matcher.matches(text.as_bytes()))
+        .is_ok_and(|matcher| matcher.find_match(text.as_bytes()).is_some())
 }
 
 fn field_tokens(value: &str) -> impl Iterator<Item = &str> {
@@ -818,6 +1028,7 @@ struct RarLineWriter {
     discarding: bool,
     line_number: u64,
     hits: Vec<DirectSearchHit>,
+    bytes_since_progress: u64,
 }
 
 impl RarLineWriter {
@@ -836,6 +1047,7 @@ impl RarLineWriter {
             discarding: false,
             line_number: 0,
             hits: Vec::new(),
+            bytes_since_progress: 0,
         }
     }
 
@@ -879,13 +1091,25 @@ impl RarLineWriter {
 
 impl Write for RarLineWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if self.shared.should_stop() {
+        if !self.shared.wait_until_running() {
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "live search stopped",
             ));
         }
         self.shared.add_content_bytes(buffer.len() as u64);
+        self.bytes_since_progress = self
+            .bytes_since_progress
+            .saturating_add(buffer.len() as u64);
+        if self.bytes_since_progress >= PROGRESS_BYTE_INTERVAL {
+            self.shared.emit(
+                "running",
+                Some(self.source_file.clone()),
+                "Scanning local sources",
+                Vec::new(),
+            );
+            self.bytes_since_progress = 0;
+        }
         for byte in buffer {
             if self.discarding {
                 if *byte == b'\n' {
@@ -950,15 +1174,24 @@ fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{Read, Write},
-        sync::{Arc, Mutex},
+        io::{BufReader, Read, Write},
+        path::Path,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::Instant,
     };
 
     use rars::rar15_40::{StoredEntry, WriterOptions, write_stored_archive};
     use tempfile::tempdir;
     use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-    use super::{ArchiveReader, field_tokens, line_matches, mask_excerpt};
+    use super::{
+        ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, estimate_remaining_ms,
+        extension, field_tokens, is_text_extension, line_matches, mask_excerpt, parse_queries,
+        read_bounded_line,
+    };
     use crate::models::SearchMode;
 
     #[test]
@@ -1009,6 +1242,210 @@ mod tests {
             SearchMode::Contains,
             false,
         ));
+    }
+
+    #[test]
+    fn batch_search_compiles_many_values_into_one_matcher() {
+        let matcher = QueryMatcher::new(
+            "first@example.test\nsecond.example.test\n+1 202 555 0199",
+            SearchMode::Contains,
+            false,
+        )
+        .expect("batch matcher");
+        assert_eq!(matcher.query_count(), 3);
+        let match_index = matcher
+            .find_match(b"domain=second.example.test|status=synthetic")
+            .expect("batch match");
+        assert_eq!(matcher.query(match_index), "second.example.test");
+        assert_eq!(
+            parse_queries("VALUE\nvalue\nother", false).expect("deduplicated values"),
+            vec!["VALUE", "other"]
+        );
+    }
+
+    #[test]
+    fn remaining_time_uses_physical_source_progress() {
+        assert_eq!(estimate_remaining_ms(1_000, 250, 2_000), Some(6_000));
+        assert_eq!(estimate_remaining_ms(1_000, 0, 2_000), None);
+        assert_eq!(estimate_remaining_ms(1_000, 1_000, 2_000), None);
+    }
+
+    struct RepeatingScanReader {
+        pattern: Vec<u8>,
+        offset: usize,
+        remaining: u64,
+    }
+
+    impl RepeatingScanReader {
+        fn new(total_bytes: u64) -> Self {
+            Self {
+                pattern: b"user-0000000000|person-0000000000@example.test|synthetic-value\n"
+                    .to_vec(),
+                offset: 0,
+                remaining: total_bytes,
+            }
+        }
+    }
+
+    impl Read for RepeatingScanReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let requested = buffer.len().min(self.remaining as usize);
+            let mut written = 0;
+            while written < requested {
+                let available = self.pattern.len() - self.offset;
+                let copy = available.min(requested - written);
+                buffer[written..written + copy]
+                    .copy_from_slice(&self.pattern[self.offset..self.offset + copy]);
+                written += copy;
+                self.offset = (self.offset + copy) % self.pattern.len();
+            }
+            self.remaining = self.remaining.saturating_sub(written as u64);
+            Ok(written)
+        }
+    }
+
+    #[test]
+    #[ignore = "manual generated direct-scan throughput soak test"]
+    fn generated_direct_scan_soak() {
+        let gibibytes = std::env::var("ALETHEIA_DIRECT_SOAK_GIB")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1)
+            .clamp(1, 4_096);
+        let target_bytes = gibibytes * 1024 * 1024 * 1024;
+        let query_count = std::env::var("ALETHEIA_DIRECT_SOAK_QUERIES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(MAX_QUERY_COUNT)
+            .clamp(1, MAX_QUERY_COUNT);
+        let source = RepeatingScanReader::new(target_bytes);
+        let mut reader = BufReader::with_capacity(1024 * 1024, source);
+        let queries = (0..query_count)
+            .map(|index| format!("absent-{index:04}@example.test"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let matcher =
+            QueryMatcher::new(&queries, SearchMode::Contains, false).expect("soak matcher");
+        let mut line = Vec::with_capacity(4096);
+        let mut consumed = 0_u64;
+        let mut lines = 0_u64;
+        let started = Instant::now();
+        while consumed < target_bytes {
+            let (bytes, exceeded) = read_bounded_line(&mut reader, &mut line).expect("scan line");
+            if bytes == 0 {
+                break;
+            }
+            assert!(!exceeded);
+            consumed = consumed.saturating_add(bytes);
+            lines += 1;
+            assert!(matcher.find_match(&line).is_none());
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(consumed, target_bytes);
+        assert!(line.capacity() <= MAX_LINE_BYTES + 2);
+        eprintln!(
+            "scanned {gibibytes} GiB / {lines} generated lines against {query_count} queries in {:.2?} ({:.1} MiB/s)",
+            elapsed,
+            consumed as f64 / 1024.0 / 1024.0 / elapsed.as_secs_f64()
+        );
+    }
+
+    #[test]
+    #[ignore = "manual authorized RAR metadata compatibility probe"]
+    fn authorized_rar_metadata_probe() {
+        let path = std::env::var("ALETHEIA_RAR_PROBE_PATH")
+            .expect("set ALETHEIA_RAR_PROBE_PATH to an authorized archive");
+        let archive = ArchiveReader::read_path(Path::new(&path))
+            .expect("authorized RAR metadata should be readable");
+        let mut entries = 0_u64;
+        let mut text_entries = 0_u64;
+        let mut packed_bytes = 0_u64;
+        let mut unpacked_bytes = 0_u64;
+        let mut encrypted_entries = 0_u64;
+        for member in archive.members() {
+            if member.meta.is_directory {
+                continue;
+            }
+            entries += 1;
+            packed_bytes = packed_bytes.saturating_add(member.meta.packed_size);
+            unpacked_bytes = unpacked_bytes.saturating_add(member.meta.unpacked_size);
+            encrypted_entries += u64::from(member.meta.is_encrypted);
+            let entry_name = member.meta.name_lossy();
+            text_entries += u64::from(is_text_extension(&extension(Path::new(&entry_name))));
+        }
+        assert!(
+            entries > 0,
+            "authorized RAR should contain at least one entry"
+        );
+        eprintln!(
+            "RAR metadata probe: {entries} entries, {text_entries} text entries, {packed_bytes} packed bytes, {unpacked_bytes} unpacked bytes, {encrypted_entries} encrypted entries"
+        );
+    }
+
+    struct ArchiveProbeWriter {
+        matcher: Arc<QueryMatcher>,
+        decoded_bytes: Arc<AtomicU64>,
+        matches: Arc<AtomicU64>,
+    }
+
+    impl Write for ArchiveProbeWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.decoded_bytes
+                .fetch_add(buffer.len() as u64, Ordering::Relaxed);
+            if self.matcher.find_match(buffer).is_some() {
+                self.matches.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[ignore = "manual authorized RAR read-only throughput probe"]
+    fn authorized_rar_stream_probe() {
+        let path = std::env::var("ALETHEIA_RAR_PROBE_PATH")
+            .expect("set ALETHEIA_RAR_PROBE_PATH to an authorized archive");
+        let archive = ArchiveReader::read_path(Path::new(&path))
+            .expect("authorized RAR metadata should be readable");
+        let matcher = Arc::new(
+            QueryMatcher::new(
+                "aletheia-guaranteed-absent-synthetic-probe.invalid",
+                SearchMode::Contains,
+                false,
+            )
+            .expect("probe matcher"),
+        );
+        let decoded_bytes = Arc::new(AtomicU64::new(0));
+        let matches = Arc::new(AtomicU64::new(0));
+        let writer_matcher = Arc::clone(&matcher);
+        let writer_bytes = Arc::clone(&decoded_bytes);
+        let writer_matches = Arc::clone(&matches);
+        let started = Instant::now();
+        archive
+            .extract_to(None, move |meta| {
+                let entry_name = meta.name_lossy();
+                if meta.is_directory || !is_text_extension(&extension(Path::new(&entry_name))) {
+                    return Ok(Box::new(std::io::sink()));
+                }
+                Ok(Box::new(ArchiveProbeWriter {
+                    matcher: Arc::clone(&writer_matcher),
+                    decoded_bytes: Arc::clone(&writer_bytes),
+                    matches: Arc::clone(&writer_matches),
+                }))
+            })
+            .expect("authorized RAR should stream read-only");
+        let elapsed = started.elapsed();
+        let bytes = decoded_bytes.load(Ordering::Relaxed);
+        assert!(bytes > 0, "authorized RAR should decode text content");
+        assert_eq!(matches.load(Ordering::Relaxed), 0);
+        eprintln!(
+            "RAR stream probe: {bytes} decoded bytes in {:.2?} ({:.1} MiB/s)",
+            elapsed,
+            bytes as f64 / 1024.0 / 1024.0 / elapsed.as_secs_f64()
+        );
     }
 
     #[test]

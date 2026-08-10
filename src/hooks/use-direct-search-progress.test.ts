@@ -14,10 +14,13 @@ function progress(
     sourceCount: 1,
     filesScanned: status === "completed" ? 1 : 0,
     totalBytes: 100,
+    sourceBytesScanned: status === "completed" ? 100 : 50,
     contentBytesScanned: status === "completed" ? 100 : 50,
     matches: hits.length,
     elapsedMs: 10,
     bytesPerSecond: 10,
+    estimatedRemainingMs: status === "completed" ? null : 10,
+    queryCount: 1,
     truncated: false,
     message: status,
     hits,
@@ -34,6 +37,7 @@ describe("mergeDirectSearchProgress", () => {
       sourceLocation: "line 2",
       excerpt: "synthetic row",
       matchReason: "Line contains query",
+      matchedQuery: "synthetic",
     };
     const running = progress("running", [hit]);
     const completed = progress("completed", []);

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBytes, formatCount, formatDateTime, formatRate } from "./format";
+import {
+  formatBytes,
+  formatCount,
+  formatDateTime,
+  formatDuration,
+  formatRate,
+} from "./format";
 
 describe("format helpers", () => {
   it("formats storage sizes without exposing source values", () => {
@@ -16,5 +22,12 @@ describe("format helpers", () => {
 
   it("handles missing timestamps", () => {
     expect(formatDateTime(null)).toBe("Not yet");
+  });
+
+  it("formats long-running estimates", () => {
+    expect(formatDuration(null)).toBe("Calculating");
+    expect(formatDuration(65_000)).toBe("1m 5s");
+    expect(formatDuration(7_260_000)).toBe("2h 1m");
+    expect(formatDuration(183_600_000)).toBe("2d 3h");
   });
 });
