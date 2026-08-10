@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-08-10
+
+- Added on-demand domain scanning across one saved Live source or all saved Live sources, including TXT, GZIP, ZIP, and RAR content without extraction.
+- Added reusable Live-domain collections that deduplicate and store up to 5,000 matching source lines locally with file, archive-entry, location, query, and match provenance.
+- Updated Domains with scan throughput, progress, stored-collection navigation, paginated Live evidence, and long-line wrapping alongside existing indexed evidence.
+- Updated Search to show indexed and Live source counts separately and added a single **All saved Live sources** option with deduplicated paths.
+- Added a versioned SQLite migration, generated-workspace cleanup support, Rust regression coverage, browser workflow coverage, and a refreshed README with current product screenshots.
+
+## 0.1.7 - 2026-08-10
+
 - Removed identifier masking across Search, Live scans, Domains, Identities, previews, and exports; complete non-secret values are shown while reusable secret fields are excluded instead of rendered as placeholders.
 - Tightened the full-workspace UI audit: domain evidence now adapts without overlapping, empty charts and saved views offer direct next steps, activity charts use honest scales, and resource copy is easier to scan.
 - Added completed Live scans to Overview metrics, charts, recent sources, and activity so the dashboard no longer reports only indexed evidence.
