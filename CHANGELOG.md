@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-08-12
+
 - Fixed Live scan progress jumping backwards when startup and parallel-worker events arrive out of order, and kept throughput/ETA stable across pauses.
 - Made pause, resume, and cancel acknowledge immediately across Search and Identity Builder while preventing a second scan during cancellation.
 - Moved large-folder discovery off the command thread, applied the saved worker limit to Search, Domains, and Identities, and added a first-match fast-stop option.
