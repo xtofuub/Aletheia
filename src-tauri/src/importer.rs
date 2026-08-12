@@ -28,7 +28,7 @@ use crate::{
         ImportStartResult, SourceFormat,
     },
     search_index::{SearchIndex, make_document},
-    storage::{AppState, JobControl, open_database},
+    storage::{AppState, JobControl, open_database, open_worker_database},
 };
 
 const MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -244,8 +244,12 @@ pub async fn start_import(
     let dataset_id = Uuid::new_v4().to_string();
     let job_id = Uuid::new_v4().to_string();
     let control = Arc::new(JobControl::default());
-    let registry_guard =
-        reserve_import_job(&state.database, &state.jobs, &job_id, control.clone())?;
+    let registry_guard = reserve_import_job(
+        &state.database,
+        &state.import_jobs,
+        &job_id,
+        control.clone(),
+    )?;
     let total_bytes = total_source_bytes(&plan);
     let worker_files = prepare_database_rows(&state.database, &dataset_id, &job_id, &plan)?;
 
@@ -257,7 +261,7 @@ pub async fn start_import(
     tauri::async_runtime::spawn_blocking(move || {
         let _registry_guard = registry_guard;
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            open_database(&storage_root)
+            open_worker_database(&storage_root)
                 .map_err(|_| "metadata database worker could not start".to_string())
                 .and_then(|worker_connection| {
                     prepare_import_database(&worker_connection)?;
@@ -319,8 +323,12 @@ pub async fn resume_dataset_import(
     let plan_json =
         serde_json::to_string(&plan).map_err(|_| "saved import plan is invalid".to_string())?;
     let control = Arc::new(JobControl::default());
-    let registry_guard =
-        reserve_import_job(&state.database, &state.jobs, &job_id, control.clone())?;
+    let registry_guard = reserve_import_job(
+        &state.database,
+        &state.import_jobs,
+        &job_id,
+        control.clone(),
+    )?;
     {
         let connection = state
             .database
@@ -350,7 +358,7 @@ pub async fn resume_dataset_import(
     tauri::async_runtime::spawn_blocking(move || {
         let _registry_guard = registry_guard;
         let run_result = catch_unwind(AssertUnwindSafe(|| {
-            open_database(&storage_root)
+            open_worker_database(&storage_root)
                 .map_err(|_| "metadata database worker could not start".to_string())
                 .and_then(|worker_connection| {
                     prepare_import_database(&worker_connection)?;
@@ -391,7 +399,7 @@ pub async fn resume_dataset_import(
 #[tauri::command]
 pub fn get_active_import(state: State<'_, AppState>) -> Result<Option<ImportProgress>, String> {
     let job_id = state
-        .jobs
+        .import_jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?
         .keys()
@@ -406,7 +414,7 @@ pub fn get_active_import(state: State<'_, AppState>) -> Result<Option<ImportProg
 #[tauri::command]
 pub async fn rebuild_identities(state: State<'_, AppState>) -> Result<u64, String> {
     if !state
-        .jobs
+        .import_jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?
         .is_empty()
@@ -427,11 +435,12 @@ pub async fn rebuild_identities(state: State<'_, AppState>) -> Result<u64, Strin
 
 #[tauri::command]
 pub async fn rebuild_domains(state: State<'_, AppState>) -> Result<u64, String> {
-    let database = state.database.clone();
+    let storage_root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let mut connection = database
-            .lock()
-            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let mut connection = open_worker_database(&storage_root)
+            .map_err(|_| "domain database worker could not start".to_string())?;
         rebuild_domain_groups(&mut connection)
     })
     .await
@@ -636,7 +645,7 @@ fn prepare_import_database(connection: &Connection) -> Result<(), String> {
 #[tauri::command]
 pub fn pause_import(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let registry = state
-        .jobs
+        .import_jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?;
     let control = registry
@@ -649,7 +658,7 @@ pub fn pause_import(job_id: String, state: State<'_, AppState>) -> Result<(), St
 #[tauri::command]
 pub fn resume_import(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let registry = state
-        .jobs
+        .import_jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?;
     let control = registry
@@ -662,7 +671,7 @@ pub fn resume_import(job_id: String, state: State<'_, AppState>) -> Result<(), S
 #[tauri::command]
 pub fn cancel_import(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let registry = state
-        .jobs
+        .import_jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?;
     let control = registry
@@ -721,7 +730,7 @@ pub async fn delete_dataset(dataset_id: String, state: State<'_, AppState>) -> R
         return Err("dataset identifier is invalid".to_string());
     }
     if !state
-        .jobs
+        .import_jobs
         .lock()
         .map_err(|_| "job registry is unavailable".to_string())?
         .is_empty()

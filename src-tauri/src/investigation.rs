@@ -18,7 +18,7 @@ use crate::{
         SearchRequest, SearchResponse,
     },
     search_index::SearchIndex,
-    storage::AppState,
+    storage::{AppState, open_worker_database},
 };
 
 #[tauri::command]
@@ -182,11 +182,12 @@ pub async fn list_domains(
     if query.chars().count() > 253 {
         return Err("domain search exceeds 253 characters".to_string());
     }
-    let database = state.database.clone();
+    let root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = database
-            .lock()
-            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let connection = open_worker_database(&root)
+            .map_err(|_| "domain database worker could not start".to_string())?;
         search_domain_groups(&connection, &query, offset, limit)
     })
     .await
@@ -218,11 +219,12 @@ pub async fn get_domain_details(
     let hostname_query = hostname_query
         .map(|value| value.trim().to_lowercase())
         .filter(|value| !value.is_empty());
-    let database = state.database.clone();
+    let root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = database
-            .lock()
-            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let connection = open_worker_database(&root)
+            .map_err(|_| "domain database worker could not start".to_string())?;
         load_domain_details(
             &connection,
             &parent,
@@ -521,6 +523,27 @@ fn ensure_url_domain_links(
         )
         .map_err(sanitized)?;
     if repaired {
+        return Ok(());
+    }
+    let counts_exist = connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM domain_dataset_counts
+               WHERE registrable_domain = ?1
+             )",
+            [parent],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(sanitized)?;
+    if counts_exist {
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO domain_link_repairs(
+                   registrable_domain, repaired_at
+                 ) VALUES (?1, CURRENT_TIMESTAMP)",
+                [parent],
+            )
+            .map_err(sanitized)?;
         return Ok(());
     }
     let transaction = connection.unchecked_transaction().map_err(sanitized)?;

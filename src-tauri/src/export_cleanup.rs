@@ -152,12 +152,17 @@ pub fn cleanup_generated(
     request: CleanupRequest,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if !state
-        .jobs
+    let import_active = !state
+        .import_jobs
         .lock()
         .map_err(|_| "import job registry is unavailable".to_string())?
-        .is_empty()
-    {
+        .is_empty();
+    let scan_active = !state
+        .scan_jobs
+        .lock()
+        .map_err(|_| "search job registry is unavailable".to_string())?
+        .is_empty();
+    if import_active || scan_active {
         return Err("cancel active indexing or live search before cleanup".to_string());
     }
     let root = state

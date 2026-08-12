@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Separated persistent import controls from Live scan controls so searches no longer appear as active imports or block unrelated dataset actions.
+- Isolated domain reads and rebuilds from the shared application database connection, and skipped redundant first-open domain repairs when aggregate links already exist.
+
 ## 0.1.9 - 2026-08-12
 
 - Fixed Live scan progress jumping backwards when startup and parallel-worker events arrive out of order, and kept throughput/ETA stable across pauses.

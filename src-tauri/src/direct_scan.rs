@@ -512,12 +512,12 @@ pub async fn start_direct_search(
     let job_id = Uuid::new_v4().to_string();
     let control = Arc::new(JobControl::default());
     state
-        .jobs
+        .scan_jobs
         .lock()
         .map_err(|_| "search controls are unavailable".to_string())?
         .insert(job_id.clone(), Arc::clone(&control));
 
-    let jobs = Arc::clone(&state.jobs);
+    let jobs = Arc::clone(&state.scan_jobs);
     let worker_job_id = job_id.clone();
     thread::Builder::new()
         .name("aletheia-live-search".to_string())
@@ -574,7 +574,7 @@ pub async fn start_direct_search(
 #[tauri::command]
 pub fn cancel_direct_search(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
     let jobs = state
-        .jobs
+        .scan_jobs
         .lock()
         .map_err(|_| "search controls are unavailable".to_string())?;
     let control = jobs
@@ -600,7 +600,7 @@ fn set_direct_search_paused(
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
     let jobs = state
-        .jobs
+        .scan_jobs
         .lock()
         .map_err(|_| "search controls are unavailable".to_string())?;
     let control = jobs

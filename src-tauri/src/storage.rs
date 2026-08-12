@@ -77,7 +77,8 @@ impl JobControl {
 pub struct AppState {
     pub database: Arc<Mutex<Connection>>,
     pub storage_root: Arc<RwLock<PathBuf>>,
-    pub jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    pub import_jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    pub scan_jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
     app_data_dir: PathBuf,
 }
 
@@ -97,7 +98,8 @@ impl AppState {
         Ok(Self {
             database: Arc::new(Mutex::new(database)),
             storage_root: Arc::new(RwLock::new(storage_root)),
-            jobs: Arc::new(Mutex::new(HashMap::new())),
+            import_jobs: Arc::new(Mutex::new(HashMap::new())),
+            scan_jobs: Arc::new(Mutex::new(HashMap::new())),
             app_data_dir,
         })
     }
@@ -142,6 +144,20 @@ pub fn open_database(storage_root: &Path) -> Result<Connection, StorageError> {
     fs::create_dir_all(storage_root)?;
     let database_path = storage_root.join(DATABASE_FILE);
     let mut connection = Connection::open(database_path)?;
+    configure_connection(&connection)?;
+    apply_migrations(&mut connection)?;
+    seed_defaults(&connection)?;
+    Ok(connection)
+}
+
+pub fn open_worker_database(storage_root: &Path) -> Result<Connection, StorageError> {
+    let database_path = storage_root.join(DATABASE_FILE);
+    let connection = Connection::open(database_path)?;
+    configure_connection(&connection)?;
+    Ok(connection)
+}
+
+fn configure_connection(connection: &Connection) -> Result<(), StorageError> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
@@ -153,9 +169,7 @@ pub fn open_database(storage_root: &Path) -> Result<Connection, StorageError> {
     connection.pragma_update(None, "wal_autocheckpoint", 32_768_i64)?;
     connection.pragma_update(None, "journal_size_limit", 128_i64 * 1024 * 1024)?;
     connection.busy_timeout(Duration::from_secs(10))?;
-    apply_migrations(&mut connection)?;
-    seed_defaults(&connection)?;
-    Ok(connection)
+    Ok(())
 }
 
 fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
