@@ -15,7 +15,7 @@ Contains searches split a likely person name into meaningful tokens. A query suc
 
 The Search page uses one query control and one source selector. Choosing an indexed dataset or saved Live source automatically selects the matching engine. The selector reports indexed and Live counts separately and includes an **All saved Live sources** option that deduplicates their selected paths before scanning.
 
-Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, cancellation, and paginated results. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker. Streamed result batches remain available after the completion event.
+Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, pause/resume/cancel controls, and paginated results. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker. The native scanner skips complete nonmatching buffer regions in bulk, while streamed result batches are coalesced to the display refresh rate and remain available after completion.
 
 ## Advanced mode
 
@@ -52,4 +52,4 @@ Password, password-hash, and salt fields cannot be searched. Regex and fuzzy sec
 
 Every result includes dataset, source file, consistently formatted source location, parser, match reason, and complete non-secret fields. Secret fields are excluded. Search failures are shown instead of being presented as empty results. Select explicit records to export them through the protected export pipeline. Saved views keep the query and filters only in local SQLite.
 
-Opening a saved view restores its Automatic/Advanced mode, match mode, dataset, safe field, and sort order. Ready datasets also link directly to Advanced search with that dataset already selected.
+Opening a saved view restores its Automatic/Advanced mode, match mode, dataset, indexed field, and sort order. Ready datasets also link directly to Advanced search with that dataset already selected.

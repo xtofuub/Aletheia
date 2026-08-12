@@ -8,20 +8,19 @@ Never create a fixture from a real record.
 
 ## Frontend
 
-`pnpm test` runs Vitest and Testing Library tests for onboarding, empty states, and the guarded import wizard.
+`pnpm test` runs Vitest and Testing Library tests for update prompts, search composition, monotonic import progress, and ordered Live scan event merging.
 
 It also verifies that automatic update checks remain disabled when requested, that a signed update opens an approval dialog, and that installer failures leave the current installation unchanged.
 
 `pnpm test:e2e` runs Playwright flows for:
 
-- first-launch authorization;
-- keyboard command navigation;
-- synthetic import and field mapping;
-- masked search details and redacted export;
-- result pagination, saved-view restoration, export history, and dataset-scoped search;
-- Automatic/Advanced search and direct Live files search;
-- Public Suffix List domain grouping;
-- deterministic identity review and undo.
+- every primary investigation route;
+- reusable Live source creation, batch search, and safe removal;
+- indexed evidence rendering and long-value wrapping;
+- identity building from a saved Live source;
+- Live domain scanning and stored source lines;
+- multi-file and recursive-folder import review;
+- large-source profile guidance and single-writer protection.
 
 ## Rust
 
@@ -35,7 +34,7 @@ It also verifies that automatic update checks remain disabled when requested, th
 - SQLite migrations;
 - Tantivy exact, contains, and prefix queries;
 - precompiled single-pass batch matching plus synthetic ZIP and RAR streaming without extraction;
-- redacted export rendering;
+- secret-free export rendering;
 - generated cleanup target restrictions and source-file preservation;
 - a complete synthetic CSV import into SQLite, Tantivy, domains, and identities;
 - manual identity creation, member splitting, and audited undo;
@@ -69,6 +68,8 @@ $env:ALETHEIA_DIRECT_SOAK_GIB = "1"
 $env:ALETHEIA_DIRECT_SOAK_QUERIES = "512"
 cargo test --manifest-path src-tauri/Cargo.toml generated_direct_scan_soak --release -- --ignored --nocapture
 ```
+
+On the 2026-08-12 stabilization pass, the optimized scanner processed the 1 GiB generated stream at 605 MiB/s for one absent query and 552 MiB/s for 512 absent queries. These numbers validate the matcher and block-skip path, not HDD or archive speed; physical storage and decompression can be much slower.
 
 Authorized archive probes accept a local archive path through `ALETHEIA_RAR_PROBE_PATH`. They print only aggregate sizes and throughput; they never print or copy record contents.
 

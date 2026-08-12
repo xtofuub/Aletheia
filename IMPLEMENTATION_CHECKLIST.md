@@ -165,3 +165,16 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Keep offline automatic checks quiet and show manual check failures
 - [x] Fail release CI when the updater signing key is missing
 - [x] Validate updater URL, checksums, and signature against the embedded public key before publishing
+
+## Responsiveness stabilization
+
+- [x] Separate persistent-import and Live-scan job registries
+- [x] Move domain, overview, and indexed search reads to independent SQLite WAL connections
+- [x] Skip redundant legacy domain repairs when aggregate links already exist
+- [x] Add exact identifier fast paths before substring index scans
+- [x] Keep import progress monotonic across queued, paused, resumed, and cancelled events
+- [x] Coalesce Live scan progress and hit batches to one browser render per frame
+- [x] Skip complete nonmatching Live scan buffers in bulk
+- [x] Bound long Search and Domain panes and verify no page-level horizontal overflow
+- [x] Verify one-query and 512-query optimized scanner throughput with generated data
+- [x] Pass frontend, Rust, browser workflow, build, and repository safety gates

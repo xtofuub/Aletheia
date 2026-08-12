@@ -4,6 +4,10 @@
 
 - Separated persistent import controls from Live scan controls so searches no longer appear as active imports or block unrelated dataset actions.
 - Isolated domain reads and rebuilds from the shared application database connection, and skipped redundant first-open domain repairs when aggregate links already exist.
+- Added a fast exact-term path for complete emails, domains, URLs, phone numbers, and IP addresses before falling back to an expensive substring index scan.
+- Stabilized persistent import progress and pause/resume/cancel state against late events, bounded long Search and Domain result panes, and removed page-level input overflow.
+- Added a block prefilter and a release-tuned Aho-Corasick DFA for Live scans; a 1 GiB synthetic batch with 512 queries now scans at over 550 MiB/s before storage or archive limits.
+- Batched Live progress rendering to one browser frame and replaced cramped field pills with readable, wrapping evidence rows.
 
 ## 0.1.9 - 2026-08-12
 
