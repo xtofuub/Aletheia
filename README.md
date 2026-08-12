@@ -22,7 +22,7 @@
 
 Aletheia has one search screen backed by two engines, so a multi-million-row file does not always need a permanent index.
 
-- **Saved Live source** remembers a file or folder selection and streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR content with bounded memory. Archives are read directly without extraction. Search shows indexed and Live counts separately, and can scan every saved Live source in one selection. Paste up to 512 values to find them in one physical pass instead of rereading a huge collection for every query.
+- **Saved Live source** remembers a file or folder selection and streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR content with bounded memory. Archives are read directly without extraction. Search shows indexed and Live counts separately, and can scan every saved Live source in one selection. Paste up to 512 values to find them in one physical pass, or choose **First match** when one confirmed hit is enough.
 - **Persistent index** stores a reusable Tantivy index for fast repeated searches, pagination, domain grouping, and identity workflows. Imports are cancellable, resumable, and report throughput.
 - **Flexible name lookup** finds first and last names across separate fields and common email separators, so `Jane Doe` can match values such as `jane.doe@example.com`.
 
@@ -48,7 +48,7 @@ Domains can be scanned directly across saved Live files, folders, ZIP, RAR, and 
 ## Investigation features
 
 - Exact, contains, prefix, field-specific, and flexible name search with pagination.
-- Direct sequential batch search inside text files, GZIP streams, ZIP entries, and RAR entries, with pause, resume, ETA, decoded throughput, and physical-source progress.
+- Direct sequential batch search inside text files, GZIP streams, ZIP entries, and RAR entries, with responsive pause/cancel controls, monotonic progress, pause-aware ETA, decoded throughput, and physical-source progress.
 - Parent-domain and subdomain navigation with indexed evidence plus reusable Live-domain collections gathered on demand.
 - Automatic deterministic identity groups plus manually reviewed bundles from indexed records or selected live-scan evidence.
 - Dataset, file, archive-entry, parser, line, and record provenance.

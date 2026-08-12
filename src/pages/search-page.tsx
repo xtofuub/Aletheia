@@ -87,13 +87,11 @@ import {
 } from "@/components/ui/table";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
-  cancelDirectSearch,
   exportRecords,
+  getSettings,
   listDatasets,
   listLiveSources,
-  pauseDirectSearch,
   recordLiveSearchActivity,
-  resumeDirectSearch,
   saveSearch,
   searchRecords,
   selectExportDestination,
@@ -132,10 +130,13 @@ const workerItems = [
   { label: "4 workers · NVMe", value: "4" },
   { label: "8 workers · fast NVMe", value: "8" },
 ];
-const resultCapItems = [500, 2_000, 5_000].map((value) => ({
-  label: `${value.toLocaleString()} matches`,
-  value: String(value),
-}));
+const resultCapItems = [
+  { label: "First match (fastest)", value: "1" },
+  { label: "50 matches", value: "50" },
+  { label: "500 matches", value: "500" },
+  { label: "2,000 matches", value: "2000" },
+  { label: "5,000 matches", value: "5000" },
+];
 
 function detectQueryKind(value: string) {
   const query = value.trim();
@@ -200,16 +201,27 @@ export function SearchPage({
   const [includeArchivesOverride, setIncludeArchivesOverride] = useState<
     boolean | null
   >(null);
-  const [workerLimit, setWorkerLimit] = useState(1);
+  const [workerLimitOverride, setWorkerLimitOverride] = useState<number | null>(
+    null,
+  );
   const [maxResults, setMaxResults] = useState(2_000);
   const [directOffset, setDirectOffset] = useState(0);
   const [directError, setDirectError] = useState("");
   const [directSourceId, setDirectSourceId] = useState<string | null>(null);
   const recordedDirectJobId = useRef<string | null>(null);
-  const { begin: beginDirectSearch, progress: directProgress } =
-    useDirectSearchProgress();
+  const {
+    begin: beginDirectSearch,
+    cancel: cancelLiveSearch,
+    controlError,
+    controlPending,
+    pause: pauseLiveSearch,
+    progress: directProgress,
+    resume: resumeLiveSearch,
+  } = useDirectSearchProgress();
   const queryClient = useQueryClient();
 
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const workerLimit = workerLimitOverride ?? settings.data?.workerLimit ?? 2;
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
   const liveSources = useQuery({
     queryKey: ["live-sources"],
@@ -344,7 +356,9 @@ export function SearchPage({
     hits.length > 0 && hits.every((hit) => selected.has(hit.recordId));
   const liveBusy =
     directSearch.isPending ||
-    ["running", "paused"].includes(currentLiveProgress?.status ?? "");
+    ["running", "paused", "cancelling"].includes(
+      currentLiveProgress?.status ?? "",
+    );
 
   useEffect(() => {
     if (
@@ -540,7 +554,9 @@ export function SearchPage({
                           disabled={
                             !query.trim() ||
                             directSearch.isPending ||
-                            currentLiveProgress?.status === "running"
+                            ["running", "paused", "cancelling"].includes(
+                              currentLiveProgress?.status ?? "",
+                            )
                           }
                           size="sm"
                           type="submit"
@@ -689,7 +705,9 @@ export function SearchPage({
                       <FieldLabel>Worker limit</FieldLabel>
                       <Select
                         items={workerItems}
-                        onValueChange={(value) => setWorkerLimit(Number(value))}
+                        onValueChange={(value) =>
+                          setWorkerLimitOverride(Number(value))
+                        }
                         value={String(workerLimit)}
                       >
                         <SelectTrigger className="w-full">
@@ -748,10 +766,12 @@ export function SearchPage({
               </Collapsible>
             ) : null}
 
-            {directError ? (
+            {directError || controlError ? (
               <Alert variant="destructive">
                 <AlertTitle>Search could not start</AlertTitle>
-                <AlertDescription>{directError}</AlertDescription>
+                <AlertDescription>
+                  {directError || controlError}
+                </AlertDescription>
               </Alert>
             ) : null}
 
@@ -789,8 +809,9 @@ export function SearchPage({
                   <div className="ms-auto flex gap-2">
                     {currentLiveProgress.status === "running" ? (
                       <Button
+                        disabled={controlPending !== null}
                         onClick={() =>
-                          void pauseDirectSearch(currentLiveProgress.jobId)
+                          void pauseLiveSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"
@@ -801,8 +822,9 @@ export function SearchPage({
                     ) : null}
                     {currentLiveProgress.status === "paused" ? (
                       <Button
+                        disabled={controlPending !== null}
                         onClick={() =>
-                          void resumeDirectSearch(currentLiveProgress.jobId)
+                          void resumeLiveSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"
@@ -811,12 +833,13 @@ export function SearchPage({
                         Resume
                       </Button>
                     ) : null}
-                    {["running", "paused"].includes(
+                    {["running", "paused", "cancelling"].includes(
                       currentLiveProgress.status,
                     ) ? (
                       <Button
+                        disabled={controlPending !== null}
                         onClick={() =>
-                          void cancelDirectSearch(currentLiveProgress.jobId)
+                          void cancelLiveSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"

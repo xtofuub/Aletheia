@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   ArchiveIcon,
@@ -63,7 +58,7 @@ import {
 } from "@/components/ui/table";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
-  cancelDirectSearch,
+  getSettings,
   getDomainDetails,
   listDomains,
   listLiveDomainCollections,
@@ -93,6 +88,7 @@ export function DomainsPage() {
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [hostname, setHostname] = useState<string | null>(null);
   const [hostnameQuery, setHostnameQuery] = useState("");
+  const [submittedHostnameQuery, setSubmittedHostnameQuery] = useState("");
   const [datasetId, setDatasetId] = useState("all");
   const [recordOffset, setRecordOffset] = useState(0);
   const [liveRecordOffset, setLiveRecordOffset] = useState(0);
@@ -105,9 +101,15 @@ export function DomainsPage() {
   const [repairNotice, setRepairNotice] = useState("");
   const [liveNotice, setLiveNotice] = useState("");
   const storedLiveJobId = useRef<string | null>(null);
-  const { begin: beginDirectSearch, progress: directProgress } =
-    useDirectSearchProgress();
+  const {
+    begin: beginDirectSearch,
+    cancel: cancelLiveSearch,
+    controlError,
+    controlPending,
+    progress: directProgress,
+  } = useDirectSearchProgress();
 
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const liveSources = useQuery({
     queryKey: ["live-sources"],
     queryFn: listLiveSources,
@@ -160,7 +162,6 @@ export function DomainsPage() {
   const domains = useQuery({
     queryKey: ["domains", submittedQuery, offset],
     queryFn: () => listDomains(submittedQuery, offset, pageSize),
-    placeholderData: keepPreviousData,
   });
 
   const storedCollections = useQuery({
@@ -179,7 +180,7 @@ export function DomainsPage() {
       "domain-details",
       activeDomain,
       hostname,
-      hostnameQuery,
+      submittedHostnameQuery,
       datasetId,
       recordOffset,
     ],
@@ -187,13 +188,12 @@ export function DomainsPage() {
       getDomainDetails(
         activeDomain ?? "",
         hostname,
-        hostnameQuery || null,
+        submittedHostnameQuery || null,
         datasetId === "all" ? null : datasetId,
         recordOffset,
         pageSize,
       ),
     enabled: Boolean(activeDomain),
-    placeholderData: keepPreviousData,
   });
 
   const liveEvidence = useQuery({
@@ -201,7 +201,6 @@ export function DomainsPage() {
     queryFn: () =>
       listLiveDomainEvidence(activeDomain ?? "", liveRecordOffset, pageSize),
     enabled: Boolean(activeDomain),
-    placeholderData: keepPreviousData,
   });
 
   const storeLiveEvidence = useMutation({
@@ -253,7 +252,7 @@ export function DomainsPage() {
         caseSensitive: false,
         includeArchives: source.includeArchives,
         maxResults: 5_000,
-        workerLimit: 1,
+        workerLimit: settings.data?.workerLimit ?? 2,
       }),
     onSuccess: (start, variables) => {
       storedLiveJobId.current = null;
@@ -303,15 +302,36 @@ export function DomainsPage() {
   const liveBusy =
     liveScan.isPending ||
     storeLiveEvidence.isPending ||
-    ["running", "paused"].includes(currentLiveProgress?.status ?? "");
+    ["running", "paused", "cancelling"].includes(
+      currentLiveProgress?.status ?? "",
+    );
   const displayedLiveNotice =
     liveNotice ||
+    controlError ||
     (currentLiveProgress?.status === "failed"
       ? currentLiveProgress.message
       : currentLiveProgress?.status === "completed" &&
           currentLiveProgress.hits.length === 0
         ? "Live scan completed with no matching rows."
         : "");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const value = query.trim();
+      if (value === submittedQuery) return;
+      setOffset(0);
+      setSelectedDomain(isDomainQuery(value) ? value.toLowerCase() : null);
+      setSubmittedQuery(value);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [query, submittedQuery]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSubmittedHostnameQuery(hostnameQuery.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [hostnameQuery]);
 
   return (
     <div>
@@ -365,6 +385,11 @@ export function DomainsPage() {
                   placeholder="Search domains"
                   value={query}
                 />
+                {domains.isFetching || storedCollections.isFetching ? (
+                  <InputGroupAddon align="inline-end">
+                    <Spinner />
+                  </InputGroupAddon>
+                ) : null}
               </InputGroup>
             </form>
             <div className="flex flex-col gap-2 border p-3">
@@ -420,9 +445,9 @@ export function DomainsPage() {
                       <FileSearchIcon data-icon="inline-start" />
                     )}
                     {storeLiveEvidence.isPending
-                      ? "Storingâ€¦"
+                      ? "Storing..."
                       : liveBusy
-                        ? "Scanningâ€¦"
+                        ? "Scanning..."
                         : "Scan & store"}
                   </Button>
                 </div>
@@ -451,13 +476,14 @@ export function DomainsPage() {
                     <Badge variant="outline">
                       {formatCount(currentLiveProgress.matches)} matches
                     </Badge>
-                    {["running", "paused"].includes(
+                    {["running", "paused", "cancelling"].includes(
                       currentLiveProgress.status,
                     ) ? (
                       <Button
                         className="ms-auto"
+                        disabled={controlPending !== null}
                         onClick={() =>
-                          void cancelDirectSearch(currentLiveProgress.jobId)
+                          void cancelLiveSearch(currentLiveProgress.jobId)
                         }
                         size="sm"
                         variant="outline"

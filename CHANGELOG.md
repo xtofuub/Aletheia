@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed Live scan progress jumping backwards when startup and parallel-worker events arrive out of order, and kept throughput/ETA stable across pauses.
+- Made pause, resume, and cancel acknowledge immediately across Search and Identity Builder while preventing a second scan during cancellation.
+- Moved large-folder discovery off the command thread, applied the saved worker limit to Search, Domains, and Identities, and added a first-match fast-stop option.
+- Debounced Domains and subdomain filters and removed stale linked-evidence placeholders that caused results to flicker between domain selections.
+
 ## 0.1.8 - 2026-08-10
 
 - Added on-demand domain scanning across one saved Live source or all saved Live sources, including TXT, GZIP, ZIP, and RAR content without extraction.

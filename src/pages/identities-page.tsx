@@ -79,15 +79,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
   applyIdentityAction,
-  cancelDirectSearch,
   createManualIdentity,
+  getSettings,
   listIdentities,
   listIdentityMembers,
   listLiveSources,
-  pauseDirectSearch,
   recordLiveSearchActivity,
   rebuildIdentities,
-  resumeDirectSearch,
   searchIdentityRecords,
   startDirectSearch,
   type LiveSourceSummary,
@@ -128,10 +126,16 @@ export function IdentitiesPage() {
   const [notice, setNotice] = useState("");
   const {
     begin: beginLiveSearch,
+    cancel: cancelLiveSearch,
     clear: clearLiveSearch,
+    controlError,
+    controlPending,
+    pause: pauseLiveSearch,
     progress: liveProgress,
+    resume: resumeLiveSearch,
   } = useDirectSearchProgress();
 
+  const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const identities = useQuery({
     queryKey: ["identities"],
     queryFn: listIdentities,
@@ -217,7 +221,7 @@ export function IdentitiesPage() {
         caseSensitive: false,
         includeArchives: source.includeArchives,
         maxResults: 2_000,
-        workerLimit: 1,
+        workerLimit: settings.data?.workerLimit ?? 2,
       }),
     onSuccess: (start, source) => {
       liveSearchSource.current = source;
@@ -644,13 +648,17 @@ export function IdentitiesPage() {
                 </CardDescription>
                 <CardAction>
                   {manualResults.isFetching ||
-                  ["running", "paused"].includes(liveProgress?.status ?? "") ? (
+                  ["running", "paused", "cancelling"].includes(
+                    liveProgress?.status ?? "",
+                  ) ? (
                     <Badge>
                       {liveProgress?.status === "running" ? <Spinner /> : null}
                       {evidenceSurface === "live"
                         ? liveProgress?.status === "paused"
                           ? "Scan paused"
-                          : "Scanning files"
+                          : liveProgress?.status === "cancelling"
+                            ? "Cancelling scan"
+                            : "Scanning files"
                         : "Searching index"}
                     </Badge>
                   ) : (
@@ -948,8 +956,9 @@ export function IdentitiesPage() {
                       <div className="flex justify-end gap-2">
                         {liveProgress?.status === "running" ? (
                           <Button
+                            disabled={controlPending !== null}
                             onClick={() =>
-                              void pauseDirectSearch(liveProgress.jobId)
+                              void pauseLiveSearch(liveProgress.jobId)
                             }
                             size="sm"
                             variant="outline"
@@ -960,8 +969,9 @@ export function IdentitiesPage() {
                         ) : null}
                         {liveProgress?.status === "paused" ? (
                           <Button
+                            disabled={controlPending !== null}
                             onClick={() =>
-                              void resumeDirectSearch(liveProgress.jobId)
+                              void resumeLiveSearch(liveProgress.jobId)
                             }
                             size="sm"
                             variant="outline"
@@ -971,10 +981,13 @@ export function IdentitiesPage() {
                           </Button>
                         ) : null}
                         {liveProgress &&
-                        ["running", "paused"].includes(liveProgress.status) ? (
+                        ["running", "paused", "cancelling"].includes(
+                          liveProgress.status,
+                        ) ? (
                           <Button
+                            disabled={controlPending !== null}
                             onClick={() =>
-                              void cancelDirectSearch(liveProgress.jobId)
+                              void cancelLiveSearch(liveProgress.jobId)
                             }
                             size="sm"
                             variant="outline"
@@ -987,7 +1000,7 @@ export function IdentitiesPage() {
                           disabled={
                             !selectedLiveSource ||
                             liveQuery.trim().length < 2 ||
-                            ["running", "paused"].includes(
+                            ["running", "paused", "cancelling"].includes(
                               liveProgress?.status ?? "",
                             ) ||
                             liveSearch.isPending
@@ -1012,6 +1025,11 @@ export function IdentitiesPage() {
                             : "Start live scan"}
                         </Button>
                       </div>
+                      {controlError ? (
+                        <p className="text-xs text-destructive" role="status">
+                          Live scan control failed: {controlError}
+                        </p>
+                      ) : null}
                     </div>
                   </CardContent>
 
@@ -1082,7 +1100,9 @@ export function IdentitiesPage() {
                               ? "Scanning large sources"
                               : liveProgress?.status === "paused"
                                 ? "Scan paused"
-                                : "No live evidence yet"}
+                                : liveProgress?.status === "cancelling"
+                                  ? "Cancelling scan"
+                                  : "No live evidence yet"}
                           </EmptyTitle>
                           <EmptyDescription>
                             Select matching rows and save a local identity
