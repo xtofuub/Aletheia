@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { mergeDirectSearchProgress } from "./use-direct-search-progress";
+import {
+  applyPendingControl,
+  mergeDirectSearchProgress,
+} from "./use-direct-search-progress";
 import type { DirectSearchProgress } from "@/lib/desktop";
 
 function progress(
   status: DirectSearchProgress["status"],
   hits: DirectSearchProgress["hits"],
+  sequence = 1,
 ): DirectSearchProgress {
   return {
     jobId: "job-1",
+    sequence,
     status,
     currentSource: null,
     sourceCount: 1,
@@ -43,5 +48,50 @@ describe("mergeDirectSearchProgress", () => {
     const completed = progress("completed", []);
 
     expect(mergeDirectSearchProgress(running, completed).hits).toEqual([hit]);
+  });
+
+  it("does not let a late worker event move counters backwards", () => {
+    const newer = {
+      ...progress("running", [], 4),
+      sourceBytesScanned: 80,
+      contentBytesScanned: 160,
+      elapsedMs: 400,
+    };
+    const stale = {
+      ...progress("running", [], 3),
+      sourceBytesScanned: 20,
+      contentBytesScanned: 40,
+      elapsedMs: 200,
+    };
+
+    expect(mergeDirectSearchProgress(newer, stale)).toEqual(newer);
+  });
+
+  it("ignores the zeroed start snapshot when scan events arrived first", () => {
+    const running = {
+      ...progress("running", [], 2),
+      sourceBytesScanned: 25,
+    };
+    const startSnapshot = {
+      ...progress("running", [], 0),
+      sourceBytesScanned: 0,
+    };
+
+    expect(
+      mergeDirectSearchProgress(running, startSnapshot).sourceBytesScanned,
+    ).toBe(25);
+  });
+
+  it("shows control acknowledgement immediately while the worker catches up", () => {
+    const running = progress("running", [], 2);
+    expect(
+      applyPendingControl(running, { action: "pause", jobId: "job-1" }),
+    ).toMatchObject({ status: "paused", message: "Pausing live search" });
+    expect(
+      applyPendingControl(running, { action: "cancel", jobId: "job-1" }),
+    ).toMatchObject({
+      status: "cancelling",
+      message: "Cancelling live search",
+    });
   });
 });

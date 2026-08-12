@@ -264,7 +264,9 @@ export interface DirectSearchHit {
 
 export interface DirectSearchProgress {
   jobId: string;
-  status: "running" | "paused" | "cancelled" | "completed" | "failed";
+  sequence: number;
+  status:
+    "running" | "paused" | "cancelling" | "cancelled" | "completed" | "failed";
   currentSource: string | null;
   sourceCount: number;
   filesScanned: number;
@@ -1094,6 +1096,7 @@ export async function startDirectSearch(
   window.setTimeout(() => {
     const progress: DirectSearchProgress = {
       jobId,
+      sequence: 1,
       status: "completed",
       currentSource: null,
       sourceCount,

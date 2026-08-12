@@ -88,6 +88,7 @@ pub struct DirectSearchHit {
 #[serde(rename_all = "camelCase")]
 pub struct DirectSearchProgress {
     pub job_id: String,
+    pub sequence: u64,
     pub status: String,
     pub current_source: Option<String>,
     pub source_count: usize,
@@ -127,6 +128,9 @@ struct SharedScan {
     stop: AtomicBool,
     last_progress_emit_ms: AtomicU64,
     pause_announced: AtomicBool,
+    pause_started_ms: AtomicU64,
+    paused_total_ms: AtomicU64,
+    sequence: AtomicU64,
 }
 
 struct QueryMatcher {
@@ -346,12 +350,20 @@ impl SharedScan {
             return !self.should_stop();
         }
         if !self.pause_announced.swap(true, Ordering::Relaxed) {
+            self.pause_started_ms.store(
+                (self.started.elapsed().as_millis().min(u64::MAX as u128) as u64).max(1),
+                Ordering::Relaxed,
+            );
             self.emit("paused", None, "Live search paused", Vec::new());
         }
         while self.control.is_paused() && !self.should_stop() {
             thread::sleep(Duration::from_millis(100));
         }
         if !self.should_stop() && self.pause_announced.swap(false, Ordering::Relaxed) {
+            let wall_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            let pause_started_ms = self.pause_started_ms.swap(0, Ordering::Relaxed);
+            self.paused_total_ms
+                .fetch_add(wall_ms.saturating_sub(pause_started_ms), Ordering::Relaxed);
             self.last_progress_emit_ms.store(0, Ordering::Relaxed);
             self.emit("running", None, "Live search resumed", Vec::new());
         }
@@ -385,7 +397,18 @@ impl SharedScan {
         message: &str,
         hits: Vec<DirectSearchHit>,
     ) {
-        let elapsed_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let wall_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let pause_started_ms = self.pause_started_ms.load(Ordering::Relaxed);
+        let current_pause_ms = if pause_started_ms > 0 {
+            wall_ms.saturating_sub(pause_started_ms)
+        } else {
+            0
+        };
+        let elapsed_ms = active_elapsed_ms(
+            wall_ms,
+            self.paused_total_ms.load(Ordering::Relaxed),
+            current_pause_ms,
+        );
         if status == "running" && hits.is_empty() {
             let previous = self.last_progress_emit_ms.load(Ordering::Relaxed);
             if previous > 0 && elapsed_ms.saturating_sub(previous) < PROGRESS_EMIT_INTERVAL_MS {
@@ -411,10 +434,12 @@ impl SharedScan {
             .checked_div(elapsed_ms)
             .unwrap_or(0);
         let matches = self.matches.load(Ordering::Relaxed);
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = self.app.emit(
             DIRECT_SEARCH_EVENT,
             DirectSearchProgress {
                 job_id: self.job_id.clone(),
+                sequence,
                 status: status.to_string(),
                 current_source,
                 source_count: self.source_count,
@@ -449,8 +474,14 @@ fn estimate_remaining_ms(total_bytes: u64, scanned_bytes: u64, elapsed_ms: u64) 
         .checked_div(scanned_bytes)
 }
 
+fn active_elapsed_ms(wall_ms: u64, paused_total_ms: u64, current_pause_ms: u64) -> u64 {
+    wall_ms
+        .saturating_sub(paused_total_ms)
+        .saturating_sub(current_pause_ms)
+}
+
 #[tauri::command]
-pub fn start_direct_search(
+pub async fn start_direct_search(
     app: AppHandle,
     state: State<'_, AppState>,
     mut request: DirectSearchRequest,
@@ -464,7 +495,13 @@ pub fn start_direct_search(
     let matcher = QueryMatcher::new(&request.query, request.mode, request.case_sensitive)?;
     let query_count = matcher.query_count();
 
-    let candidates = collect_candidates(&request.paths, request.include_archives)?;
+    let candidate_paths = request.paths.clone();
+    let include_archives = request.include_archives;
+    let candidates = tauri::async_runtime::spawn_blocking(move || {
+        collect_candidates(&candidate_paths, include_archives)
+    })
+    .await
+    .map_err(|_| "live source discovery task failed".to_string())??;
     if candidates.is_empty() {
         return Err("no supported local text or archive sources were found".to_string());
     }
@@ -501,6 +538,9 @@ pub fn start_direct_search(
                 stop: AtomicBool::new(false),
                 last_progress_emit_ms: AtomicU64::new(0),
                 pause_announced: AtomicBool::new(false),
+                pause_started_ms: AtomicU64::new(0),
+                paused_total_ms: AtomicU64::new(0),
+                sequence: AtomicU64::new(0),
             });
             shared.emit("running", None, "Scanning local sources", Vec::new());
             let result = run_scan(candidates, Arc::clone(&shared));
@@ -1169,9 +1209,9 @@ mod tests {
     use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, display_excerpt,
-        estimate_remaining_ms, extension, field_tokens, is_text_extension, line_matches,
-        parse_queries, read_bounded_line,
+        ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, active_elapsed_ms,
+        display_excerpt, estimate_remaining_ms, extension, field_tokens, is_text_extension,
+        line_matches, parse_queries, read_bounded_line,
     };
     use crate::models::SearchMode;
 
@@ -1249,6 +1289,12 @@ mod tests {
         assert_eq!(estimate_remaining_ms(1_000, 250, 2_000), Some(6_000));
         assert_eq!(estimate_remaining_ms(1_000, 0, 2_000), None);
         assert_eq!(estimate_remaining_ms(1_000, 1_000, 2_000), None);
+    }
+
+    #[test]
+    fn paused_time_does_not_reduce_reported_scan_throughput() {
+        assert_eq!(active_elapsed_ms(10_000, 2_000, 3_000), 5_000);
+        assert_eq!(active_elapsed_ms(1_000, 2_000, 0), 0);
     }
 
     struct RepeatingScanReader {
