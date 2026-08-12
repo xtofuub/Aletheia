@@ -262,10 +262,15 @@ impl QueryMatcher {
     }
 
     fn could_match_block(&self, block: &[u8]) -> bool {
-        // Flexible person-name matching needs every token to occur on the same
-        // line, so keep its line-by-line path conservative.
-        if self.flexible_name.is_some() {
-            return true;
+        if let Some((matcher, pattern_count)) = &self.flexible_name {
+            let mut found = 0_u8;
+            for matched in matcher.find_iter(block) {
+                found |= 1_u8 << matched.pattern().as_usize();
+                if found.count_ones() as usize == *pattern_count {
+                    return true;
+                }
+            }
+            return false;
         }
         if self
             .literal
@@ -1364,6 +1369,12 @@ mod tests {
                 &matcher,
             )
             .is_none()
+        );
+        let name_matcher =
+            QueryMatcher::new("Jane Doe", SearchMode::Contains, false).expect("name matcher");
+        assert_eq!(
+            skippable_complete_prefix(b"unrelated generated row\n", &name_matcher),
+            Some((24, 1))
         );
     }
 
