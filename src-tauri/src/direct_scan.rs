@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder, AhoCorasickKind};
 use flate2::read::GzDecoder;
 use once_cell::sync::Lazy;
 use rars::ArchiveReader;
@@ -155,6 +155,7 @@ impl QueryMatcher {
             .as_ref()
             .map(|tokens| {
                 AhoCorasickBuilder::new()
+                    .kind(Some(AhoCorasickKind::DFA))
                     .ascii_case_insensitive(!case_sensitive)
                     .build(tokens)
                     .map(|matcher| (matcher, tokens.len()))
@@ -171,6 +172,7 @@ impl QueryMatcher {
         } else {
             Some(
                 AhoCorasickBuilder::new()
+                    .kind(Some(AhoCorasickKind::DFA))
                     .ascii_case_insensitive(!case_sensitive)
                     .build(
                         literal_query_indices
@@ -257,6 +259,33 @@ impl QueryMatcher {
             };
             matches.then_some(*index)
         })
+    }
+
+    fn could_match_block(&self, block: &[u8]) -> bool {
+        // Flexible person-name matching needs every token to occur on the same
+        // line, so keep its line-by-line path conservative.
+        if self.flexible_name.is_some() {
+            return true;
+        }
+        if self
+            .literal
+            .as_ref()
+            .is_some_and(|matcher| matcher.is_match(block))
+        {
+            return true;
+        }
+        if self.unicode_queries.is_empty() {
+            return false;
+        }
+        let text = String::from_utf8_lossy(block);
+        let haystack = if self.case_sensitive {
+            text.into_owned()
+        } else {
+            text.to_lowercase()
+        };
+        self.unicode_queries
+            .iter()
+            .any(|(_, needle)| haystack.contains(needle))
     }
 
     fn is_flexible_name(&self) -> bool {
@@ -877,6 +906,32 @@ fn scan_reader<R: BufRead>(
         if !shared.wait_until_running() {
             break;
         }
+        let skippable = {
+            let available = reader
+                .fill_buf()
+                .map_err(|_| "source read failed".to_string())?;
+            skippable_complete_prefix(available, &shared.matcher)
+        };
+        if let Some((bytes, lines)) = skippable {
+            reader.consume(bytes);
+            let bytes = bytes as u64;
+            line_number = line_number.saturating_add(lines as u64);
+            shared.add_content_bytes(bytes);
+            bytes_since_progress = bytes_since_progress.saturating_add(bytes);
+            if track_source_bytes {
+                shared.add_source_bytes(bytes);
+            }
+            if bytes_since_progress >= PROGRESS_BYTE_INTERVAL {
+                shared.emit(
+                    "running",
+                    Some(source_file.to_string()),
+                    "Scanning local sources",
+                    Vec::new(),
+                );
+                bytes_since_progress = 0;
+            }
+            continue;
+        }
         let (bytes, exceeded) = read_bounded_line(&mut reader, &mut line)?;
         if bytes == 0 {
             break;
@@ -927,6 +982,15 @@ fn scan_reader<R: BufRead>(
         );
     }
     Ok(())
+}
+
+fn skippable_complete_prefix(block: &[u8], matcher: &QueryMatcher) -> Option<(usize, usize)> {
+    let end = memchr::memrchr(b'\n', block)?.saturating_add(1);
+    let complete_lines = &block[..end];
+    if matcher.could_match_block(complete_lines) {
+        return None;
+    }
+    Some((end, memchr::memchr_iter(b'\n', complete_lines).count()))
 }
 
 fn read_bounded_line<R: BufRead>(
@@ -1195,7 +1259,7 @@ fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{BufReader, Read, Write},
+        io::{BufRead, BufReader, Read, Write},
         path::Path,
         sync::{
             Arc, Mutex,
@@ -1211,7 +1275,7 @@ mod tests {
     use super::{
         ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, active_elapsed_ms,
         display_excerpt, estimate_remaining_ms, extension, field_tokens, is_text_extension,
-        line_matches, parse_queries, read_bounded_line,
+        line_matches, parse_queries, read_bounded_line, skippable_complete_prefix,
     };
     use crate::models::SearchMode;
 
@@ -1281,6 +1345,25 @@ mod tests {
         assert_eq!(
             parse_queries("VALUE\nvalue\nother", false).expect("deduplicated values"),
             vec!["VALUE", "other"]
+        );
+    }
+
+    #[test]
+    fn block_prefilter_skips_complete_nonmatching_lines_without_crossing_a_tail() {
+        let matcher = QueryMatcher::new(
+            "needle@example.test\nportal.example.test",
+            SearchMode::Contains,
+            false,
+        )
+        .expect("batch matcher");
+        let block = b"first absent line\nsecond absent line\npartial tail";
+        assert_eq!(skippable_complete_prefix(block, &matcher), Some((37, 2)));
+        assert!(
+            skippable_complete_prefix(
+                b"first absent line\nneedle@example.test appears here\n",
+                &matcher,
+            )
+            .is_none()
         );
     }
 
@@ -1358,6 +1441,16 @@ mod tests {
         let mut lines = 0_u64;
         let started = Instant::now();
         while consumed < target_bytes {
+            let skippable = {
+                let available = reader.fill_buf().expect("generated scan buffer");
+                skippable_complete_prefix(available, &matcher)
+            };
+            if let Some((bytes, skipped_lines)) = skippable {
+                reader.consume(bytes);
+                consumed = consumed.saturating_add(bytes as u64);
+                lines = lines.saturating_add(skipped_lines as u64);
+                continue;
+            }
             let (bytes, exceeded) = read_bounded_line(&mut reader, &mut line).expect("scan line");
             if bytes == 0 {
                 break;
