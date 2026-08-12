@@ -1671,7 +1671,7 @@ export async function selectExportDestination(
   if (!isTauriRuntime()) return `C:\\Synthetic\\findings.${format}`;
   const extension = format === "markdown" ? "md" : format;
   return save({
-    title: "Save protected findings",
+    title: "Save findings",
     defaultPath: `aletheia-findings.${extension}`,
     filters: [
       { name: `${format.toUpperCase()} export`, extensions: [extension] },

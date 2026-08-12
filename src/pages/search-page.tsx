@@ -77,6 +77,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Spinner } from "@/components/ui/spinner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Table,
   TableBody,
@@ -108,7 +109,7 @@ const modeItems = [
   { label: "Prefix", value: "prefix" },
 ];
 const fieldItems: Array<{ label: string; value: string }> = [
-  { label: "Any safe field", value: "all" },
+  { label: "Any indexed field", value: "all" },
   { label: "Email", value: "email" },
   { label: "Domain", value: "domain" },
   { label: "URL", value: "url" },
@@ -884,44 +885,46 @@ export function SearchPage({
           <CardContent className="px-0">
             {isLive ? (
               visibleDirectHits.length ? (
-                <Table className="table-fixed">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-1/4 ps-6">Source</TableHead>
-                      <TableHead className="w-1/6">Location</TableHead>
-                      <TableHead className="w-5/12">Row</TableHead>
-                      <TableHead className="pe-6">Match</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleDirectHits.map((hit) => (
-                      <TableRow key={hit.id}>
-                        <TableCell className="min-w-0 ps-6 whitespace-normal">
-                          <p className="break-all">
-                            {hit.archiveEntry ?? hit.sourceFile}
-                          </p>
-                          {hit.archiveEntry ? (
-                            <p className="break-all text-xs text-muted-foreground">
-                              {hit.sourceFile}
-                            </p>
-                          ) : null}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs break-all whitespace-normal">
-                          {hit.sourceLocation}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
-                          {hit.excerpt}
-                        </TableCell>
-                        <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
-                          <p className="break-all font-mono text-foreground">
-                            {hit.matchedQuery}
-                          </p>
-                          <p className="break-words">{hit.matchReason}</p>
-                        </TableCell>
+                <ScrollArea className="h-[min(52vh,34rem)]">
+                  <Table className="table-fixed">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-1/4 ps-6">Source</TableHead>
+                        <TableHead className="w-1/6">Location</TableHead>
+                        <TableHead className="w-5/12">Row</TableHead>
+                        <TableHead className="pe-6">Match</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleDirectHits.map((hit) => (
+                        <TableRow key={hit.id}>
+                          <TableCell className="min-w-0 ps-6 whitespace-normal">
+                            <p className="break-all">
+                              {hit.archiveEntry ?? hit.sourceFile}
+                            </p>
+                            {hit.archiveEntry ? (
+                              <p className="break-all text-xs text-muted-foreground">
+                                {hit.sourceFile}
+                              </p>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs break-all whitespace-normal">
+                            {hit.sourceLocation}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
+                            {hit.excerpt}
+                          </TableCell>
+                          <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
+                            <p className="break-all font-mono text-foreground">
+                              {hit.matchedQuery}
+                            </p>
+                            <p className="break-words">{hit.matchReason}</p>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ScrollArea>
               ) : (
                 <Empty className="min-h-72 rounded-none border-0">
                   <EmptyHeader>
@@ -938,82 +941,80 @@ export function SearchPage({
                 </Empty>
               )
             ) : hits.length ? (
-              <Table className="table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10 ps-4">
-                      <Checkbox
-                        aria-label="Select visible results"
-                        checked={allVisibleSelected}
-                        onCheckedChange={(checked) => {
-                          setSelected((current) => {
-                            const next = new Set(current);
-                            hits.forEach((hit) =>
-                              checked
-                                ? next.add(hit.recordId)
-                                : next.delete(hit.recordId),
-                            );
-                            return next;
-                          });
-                        }}
-                      />
-                    </TableHead>
-                    <TableHead className="w-5/12">Evidence</TableHead>
-                    <TableHead className="w-1/6">Dataset</TableHead>
-                    <TableHead className="w-1/4">Source</TableHead>
-                    <TableHead className="pe-4">Match</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {hits.map((hit) => (
-                    <TableRow key={hit.recordId}>
-                      <TableCell className="ps-4">
+              <ScrollArea className="h-[min(52vh,34rem)]">
+                <Table className="table-fixed">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10 ps-4">
                         <Checkbox
-                          aria-label={`Select ${hit.recordId}`}
-                          checked={selected.has(hit.recordId)}
-                          onCheckedChange={(checked) =>
+                          aria-label="Select visible results"
+                          checked={allVisibleSelected}
+                          onCheckedChange={(checked) => {
                             setSelected((current) => {
                               const next = new Set(current);
-                              if (checked) next.add(hit.recordId);
-                              else next.delete(hit.recordId);
+                              hits.forEach((hit) =>
+                                checked
+                                  ? next.add(hit.recordId)
+                                  : next.delete(hit.recordId),
+                              );
                               return next;
-                            })
-                          }
+                            });
+                          }}
                         />
-                      </TableCell>
-                      <TableCell className="min-w-0 whitespace-normal">
-                        <div className="flex flex-wrap gap-1">
-                          {hit.fields.slice(0, 6).map((item) => (
-                            <Badge
-                              className="h-auto max-w-full min-w-0 whitespace-normal"
-                              data-slot="search-field-value"
-                              key={`${hit.recordId}-${item.name}`}
-                              variant={item.sensitive ? "secondary" : "outline"}
-                            >
-                              <span className="shrink-0">{item.name}:</span>
-                              <span className="min-w-0 break-all text-left">
-                                {item.displayValue}
-                              </span>
-                            </Badge>
-                          ))}
-                        </div>
-                      </TableCell>
-                      <TableCell className="min-w-0 whitespace-normal">
-                        <p className="break-all">{hit.datasetName}</p>
-                      </TableCell>
-                      <TableCell className="min-w-0 whitespace-normal">
-                        <p className="break-all text-xs">{hit.sourceFile}</p>
-                        <p className="break-all font-mono text-xs text-muted-foreground">
-                          {hit.sourceLocation}
-                        </p>
-                      </TableCell>
-                      <TableCell className="pe-4 text-xs break-words whitespace-normal text-muted-foreground">
-                        {hit.matchReason}
-                      </TableCell>
+                      </TableHead>
+                      <TableHead className="w-5/12">Evidence</TableHead>
+                      <TableHead className="w-1/6">Dataset</TableHead>
+                      <TableHead className="w-1/4">Source</TableHead>
+                      <TableHead className="pe-4">Match</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {hits.map((hit) => (
+                      <TableRow key={hit.recordId}>
+                        <TableCell className="ps-4">
+                          <Checkbox
+                            aria-label={`Select ${hit.recordId}`}
+                            checked={selected.has(hit.recordId)}
+                            onCheckedChange={(checked) =>
+                              setSelected((current) => {
+                                const next = new Set(current);
+                                if (checked) next.add(hit.recordId);
+                                else next.delete(hit.recordId);
+                                return next;
+                              })
+                            }
+                          />
+                        </TableCell>
+                        <TableCell className="min-w-0 whitespace-normal">
+                          <p
+                            className="font-mono text-xs break-all"
+                            data-slot="search-field-value"
+                            title={hit.fields
+                              .map((item) => item.displayValue)
+                              .join(" | ")}
+                          >
+                            {hit.fields
+                              .map((item) => item.displayValue)
+                              .join(" | ") || "No displayable values"}
+                          </p>
+                        </TableCell>
+                        <TableCell className="min-w-0 whitespace-normal">
+                          <p className="break-all">{hit.datasetName}</p>
+                        </TableCell>
+                        <TableCell className="min-w-0 whitespace-normal">
+                          <p className="break-all text-xs">{hit.sourceFile}</p>
+                          <p className="break-all font-mono text-xs text-muted-foreground">
+                            {hit.sourceLocation}
+                          </p>
+                        </TableCell>
+                        <TableCell className="pe-4 text-xs break-words whitespace-normal text-muted-foreground">
+                          {hit.matchReason}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
             ) : (
               <Empty className="min-h-72 rounded-none border-0">
                 <EmptyHeader>

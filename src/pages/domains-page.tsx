@@ -43,6 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Progress,
   ProgressLabel,
@@ -501,73 +502,75 @@ export function DomainsPage() {
                 </p>
               ) : null}
             </div>
-            {(storedCollections.data?.collections ?? []).length ? (
+            <ScrollArea className="h-[26rem] pe-2">
+              {(storedCollections.data?.collections ?? []).length ? (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2 px-2 py-1 text-xs font-medium text-muted-foreground">
+                    <FileSearchIcon />
+                    Stored Live scans
+                  </div>
+                  {(storedCollections.data?.collections ?? []).map(
+                    (collection) => (
+                      <Button
+                        className="h-auto w-full justify-between px-3 py-2"
+                        key={collection.registrableDomain}
+                        onClick={() => {
+                          setSelectedDomain(collection.registrableDomain);
+                          setHostname(null);
+                          setDatasetId("all");
+                          setRecordOffset(0);
+                          setLiveRecordOffset(0);
+                        }}
+                        variant={
+                          activeDomain === collection.registrableDomain
+                            ? "secondary"
+                            : "ghost"
+                        }
+                      >
+                        <span className="truncate">
+                          {collection.registrableDomain}
+                        </span>
+                        <Badge variant="outline">
+                          {formatCount(collection.evidenceCount)}
+                        </Badge>
+                      </Button>
+                    ),
+                  )}
+                </div>
+              ) : null}
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2 px-2 py-1 text-xs font-medium text-muted-foreground">
-                  <FileSearchIcon />
-                  Stored Live scans
+                  <DatabaseIcon />
+                  Indexed groups
                 </div>
-                {(storedCollections.data?.collections ?? []).map(
-                  (collection) => (
-                    <Button
-                      className="h-auto w-full justify-between px-3 py-2"
-                      key={collection.registrableDomain}
-                      onClick={() => {
-                        setSelectedDomain(collection.registrableDomain);
-                        setHostname(null);
-                        setDatasetId("all");
-                        setRecordOffset(0);
-                        setLiveRecordOffset(0);
-                      }}
-                      variant={
-                        activeDomain === collection.registrableDomain
-                          ? "secondary"
-                          : "ghost"
-                      }
-                    >
-                      <span className="truncate">
-                        {collection.registrableDomain}
-                      </span>
-                      <Badge variant="outline">
-                        {formatCount(collection.evidenceCount)}
-                      </Badge>
-                    </Button>
-                  ),
-                )}
+                {(domains.data?.groups ?? []).map((group) => (
+                  <Button
+                    className="h-auto w-full justify-between px-3 py-2"
+                    key={group.registrableDomain}
+                    onClick={() => {
+                      const reloadActiveDomain =
+                        activeDomain === group.registrableDomain;
+                      setSelectedDomain(group.registrableDomain);
+                      setHostname(null);
+                      setDatasetId("all");
+                      setRecordOffset(0);
+                      setLiveRecordOffset(0);
+                      if (reloadActiveDomain) void details.refetch();
+                    }}
+                    variant={
+                      activeDomain === group.registrableDomain
+                        ? "secondary"
+                        : "ghost"
+                    }
+                  >
+                    <span className="truncate">{group.registrableDomain}</span>
+                    <Badge variant="outline">
+                      {formatCount(group.recordCount)}
+                    </Badge>
+                  </Button>
+                ))}
               </div>
-            ) : null}
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2 px-2 py-1 text-xs font-medium text-muted-foreground">
-                <DatabaseIcon />
-                Indexed groups
-              </div>
-              {(domains.data?.groups ?? []).map((group) => (
-                <Button
-                  className="h-auto w-full justify-between px-3 py-2"
-                  key={group.registrableDomain}
-                  onClick={() => {
-                    const reloadActiveDomain =
-                      activeDomain === group.registrableDomain;
-                    setSelectedDomain(group.registrableDomain);
-                    setHostname(null);
-                    setDatasetId("all");
-                    setRecordOffset(0);
-                    setLiveRecordOffset(0);
-                    if (reloadActiveDomain) void details.refetch();
-                  }}
-                  variant={
-                    activeDomain === group.registrableDomain
-                      ? "secondary"
-                      : "ghost"
-                  }
-                >
-                  <span className="truncate">{group.registrableDomain}</span>
-                  <Badge variant="outline">
-                    {formatCount(group.recordCount)}
-                  </Badge>
-                </Button>
-              ))}
-            </div>
+            </ScrollArea>
           </CardContent>
           {domains.data ? (
             <PaginationControls
@@ -706,74 +709,77 @@ export function DomainsPage() {
                     </EmptyHeader>
                   </Empty>
                 ) : details.data?.records.length ? (
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-48 ps-6">Source line</TableHead>
-                        <TableHead className="hidden w-44 2xl:table-cell">
-                          Dataset
-                        </TableHead>
-                        <TableHead>Line contents</TableHead>
-                        <TableHead className="hidden w-44 pe-6 2xl:table-cell">
-                          Parser
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {details.data.records.map((record) => (
-                        <TableRow key={record.recordId}>
-                          <TableCell className="min-w-0 ps-6">
-                            <p className="truncate text-xs">
-                              {record.sourceFile}
-                            </p>
-                            <p className="truncate font-mono text-xs text-muted-foreground">
-                              {record.sourceLocation}
-                            </p>
-                            <div className="mt-1 min-w-0 2xl:hidden">
+                  <ScrollArea className="h-[min(50vh,34rem)]">
+                    <Table className="table-fixed">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-48 ps-6">
+                            Source line
+                          </TableHead>
+                          <TableHead className="hidden w-44 2xl:table-cell">
+                            Dataset
+                          </TableHead>
+                          <TableHead>Line contents</TableHead>
+                          <TableHead className="hidden w-44 pe-6 2xl:table-cell">
+                            Parser
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {details.data.records.map((record) => (
+                          <TableRow key={record.recordId}>
+                            <TableCell className="min-w-0 ps-6">
+                              <p className="truncate text-xs">
+                                {record.sourceFile}
+                              </p>
+                              <p className="truncate font-mono text-xs text-muted-foreground">
+                                {record.sourceLocation}
+                              </p>
+                              <div className="mt-1 min-w-0 2xl:hidden">
+                                <p
+                                  className="truncate text-xs text-muted-foreground"
+                                  title={record.datasetName}
+                                >
+                                  {record.datasetName}
+                                </p>
+                                <p
+                                  className="truncate font-mono text-[11px] text-muted-foreground"
+                                  title={record.parser}
+                                >
+                                  {record.parser}
+                                </p>
+                              </div>
+                            </TableCell>
+                            <TableCell className="hidden min-w-0 2xl:table-cell">
                               <p
-                                className="truncate text-xs text-muted-foreground"
+                                className="truncate"
                                 title={record.datasetName}
                               >
                                 {record.datasetName}
                               </p>
+                            </TableCell>
+                            <TableCell className="min-w-0 whitespace-normal">
                               <p
-                                className="truncate font-mono text-[11px] text-muted-foreground"
-                                title={record.parser}
+                                className="font-mono text-xs break-all"
+                                title={record.fields
+                                  .map((field) => field.displayValue)
+                                  .join(" | ")}
                               >
+                                {record.fields
+                                  .map((field) => field.displayValue)
+                                  .join(" | ") || "No displayable values"}
+                              </p>
+                            </TableCell>
+                            <TableCell className="hidden min-w-0 pe-6 font-mono text-xs text-muted-foreground 2xl:table-cell">
+                              <p className="truncate" title={record.parser}>
                                 {record.parser}
                               </p>
-                            </div>
-                          </TableCell>
-                          <TableCell className="hidden min-w-0 2xl:table-cell">
-                            <p className="truncate" title={record.datasetName}>
-                              {record.datasetName}
-                            </p>
-                          </TableCell>
-                          <TableCell className="min-w-0 whitespace-normal">
-                            <div className="flex min-w-0 max-w-full flex-wrap gap-1">
-                              {record.fields.map((field) => (
-                                <Badge
-                                  className="h-auto max-w-full min-w-0 whitespace-normal py-1 text-left leading-snug [overflow-wrap:anywhere]"
-                                  key={`${record.recordId}-${field.name}`}
-                                  title={`${field.name}: ${field.displayValue}`}
-                                  variant={
-                                    field.sensitive ? "secondary" : "outline"
-                                  }
-                                >
-                                  {field.name}: {field.displayValue}
-                                </Badge>
-                              ))}
-                            </div>
-                          </TableCell>
-                          <TableCell className="hidden min-w-0 pe-6 font-mono text-xs text-muted-foreground 2xl:table-cell">
-                            <p className="truncate" title={record.parser}>
-                              {record.parser}
-                            </p>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
                 ) : (
                   <Empty className="min-h-64 rounded-none border-0">
                     <EmptyHeader>
@@ -828,73 +834,80 @@ export function DomainsPage() {
                     </EmptyHeader>
                   </Empty>
                 ) : liveEvidence.data?.evidence.length ? (
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-48 ps-6">Source line</TableHead>
-                        <TableHead className="hidden w-56 xl:table-cell">
-                          Live source
-                        </TableHead>
-                        <TableHead className="pe-6">Line contents</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {liveEvidence.data.evidence.map((evidence) => (
-                        <TableRow key={evidence.id}>
-                          <TableCell className="min-w-0 ps-6 align-top">
-                            <p
-                              className="truncate text-xs"
-                              title={evidence.sourceFile}
-                            >
-                              {evidence.sourceFile}
-                            </p>
-                            <p
-                              className="truncate font-mono text-xs text-muted-foreground"
-                              title={evidence.sourceLocation}
-                            >
-                              {evidence.sourceLocation}
-                            </p>
-                            {evidence.archiveEntry ? (
+                  <ScrollArea className="h-[min(42vh,28rem)]">
+                    <Table className="table-fixed">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-48 ps-6">
+                            Source line
+                          </TableHead>
+                          <TableHead className="hidden w-56 xl:table-cell">
+                            Live source
+                          </TableHead>
+                          <TableHead className="pe-6">Line contents</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {liveEvidence.data.evidence.map((evidence) => (
+                          <TableRow key={evidence.id}>
+                            <TableCell className="min-w-0 ps-6 align-top">
+                              <p
+                                className="truncate text-xs"
+                                title={evidence.sourceFile}
+                              >
+                                {evidence.sourceFile}
+                              </p>
+                              <p
+                                className="truncate font-mono text-xs text-muted-foreground"
+                                title={evidence.sourceLocation}
+                              >
+                                {evidence.sourceLocation}
+                              </p>
+                              {evidence.archiveEntry ? (
+                                <p
+                                  className="truncate font-mono text-[11px] text-muted-foreground"
+                                  title={evidence.archiveEntry}
+                                >
+                                  {evidence.archiveEntry}
+                                </p>
+                              ) : null}
+                            </TableCell>
+                            <TableCell className="hidden min-w-0 align-top xl:table-cell">
+                              <p
+                                className="truncate"
+                                title={evidence.sourceName}
+                              >
+                                {evidence.sourceName}
+                              </p>
                               <p
                                 className="truncate font-mono text-[11px] text-muted-foreground"
-                                title={evidence.archiveEntry}
+                                title={evidence.sourcePath}
                               >
-                                {evidence.archiveEntry}
+                                {evidence.sourcePath}
                               </p>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="hidden min-w-0 align-top xl:table-cell">
-                            <p className="truncate" title={evidence.sourceName}>
-                              {evidence.sourceName}
-                            </p>
-                            <p
-                              className="truncate font-mono text-[11px] text-muted-foreground"
-                              title={evidence.sourcePath}
-                            >
-                              {evidence.sourcePath}
-                            </p>
-                          </TableCell>
-                          <TableCell className="min-w-0 whitespace-normal pe-6 align-top">
-                            <p className="break-words [overflow-wrap:anywhere]">
-                              {evidence.excerpt}
-                            </p>
-                            <div className="mt-2 flex min-w-0 flex-wrap gap-1">
-                              <Badge
-                                className="max-w-full truncate"
-                                title={evidence.matchedQuery}
-                                variant="outline"
-                              >
-                                {evidence.matchedQuery}
-                              </Badge>
-                              <Badge variant="secondary">
-                                {evidence.matchReason}
-                              </Badge>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                            </TableCell>
+                            <TableCell className="min-w-0 whitespace-normal pe-6 align-top">
+                              <p className="break-words [overflow-wrap:anywhere]">
+                                {evidence.excerpt}
+                              </p>
+                              <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+                                <Badge
+                                  className="max-w-full truncate"
+                                  title={evidence.matchedQuery}
+                                  variant="outline"
+                                >
+                                  {evidence.matchedQuery}
+                                </Badge>
+                                <Badge variant="secondary">
+                                  {evidence.matchReason}
+                                </Badge>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
                 ) : (
                   <Empty className="min-h-48 rounded-none border-0">
                     <EmptyHeader>
