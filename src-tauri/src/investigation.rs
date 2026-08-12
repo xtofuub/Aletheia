@@ -23,11 +23,12 @@ use crate::{
 
 #[tauri::command]
 pub async fn get_overview_stats(state: State<'_, AppState>) -> Result<OverviewStats, String> {
-    let database = state.database.clone();
+    let root = state
+        .current_storage_root()
+        .map_err(|_| "storage location is unavailable".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
-        let connection = database
-            .lock()
-            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let connection = open_worker_database(&root)
+            .map_err(|_| "overview database worker could not start".to_string())?;
         let identity_group_count = connection
             .query_row(
                 "SELECT COUNT(*) FROM identity_groups ig
@@ -66,9 +67,10 @@ pub async fn search_records(
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
-    let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        search_records_inner(request, database, &root, true)
+        let connection = open_worker_database(&root)
+            .map_err(|_| "search database worker could not start".to_string())?;
+        search_records_inner(request, &connection, &root, true)
     })
     .await
     .map_err(|_| "search task failed".to_string())?
@@ -82,9 +84,10 @@ pub async fn search_identity_records(
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
-    let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        search_records_inner(request, database, &root, true)
+        let connection = open_worker_database(&root)
+            .map_err(|_| "identity search database worker could not start".to_string())?;
+        search_records_inner(request, &connection, &root, true)
     })
     .await
     .map_err(|_| "identity search task failed".to_string())?
@@ -92,7 +95,7 @@ pub async fn search_identity_records(
 
 fn search_records_inner(
     request: SearchRequest,
-    database: Arc<Mutex<Connection>>,
+    connection: &Connection,
     root: &Path,
     reveal_non_secret: bool,
 ) -> Result<SearchResponse, String> {
@@ -104,19 +107,14 @@ fn search_records_inner(
     }
     let domain = exact_domain_query(&request);
     let (total, record_ids) = if let Some(domain) = domain.as_ref() {
-        let domain_results = {
-            let connection = database
-                .lock()
-                .map_err(|_| "metadata database is unavailable".to_string())?;
-            ensure_url_domain_links(&connection, domain)?;
-            search_domain_record_ids(
-                &connection,
-                domain,
-                request.dataset_id.as_deref(),
-                request.offset,
-                request.limit,
-            )?
-        };
+        ensure_url_domain_links(connection, domain)?;
+        let domain_results = search_domain_record_ids(
+            connection,
+            domain,
+            request.dataset_id.as_deref(),
+            request.offset,
+            request.limit,
+        )?;
         if domain_results.0 > 0 {
             domain_results
         } else {
@@ -143,10 +141,7 @@ fn search_records_inner(
             request.limit,
         )?
     };
-    let connection = database
-        .lock()
-        .map_err(|_| "metadata database is unavailable".to_string())?;
-    let hits = load_search_hits(&connection, &record_ids, reveal_non_secret)?;
+    let hits = load_search_hits(connection, &record_ids, reveal_non_secret)?;
     connection
         .execute(
             "INSERT INTO search_history(id, query, mode) VALUES (?1, ?2, ?3)",

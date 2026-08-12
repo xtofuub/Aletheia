@@ -99,6 +99,30 @@ impl SearchIndex {
             .map(|kind| format!("{kind}:{value}"))
             .unwrap_or_else(|| value.to_string());
 
+        let reader = self.reader()?;
+        reader.reload().map_err(sanitized)?;
+        let searcher = reader.searcher();
+
+        if matches!(mode, SearchMode::Contains) && is_complete_identifier(requested_type, value) {
+            let exact_query = with_dataset_filter(
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.fields.exact_values, &term_value),
+                    IndexRecordOption::Basic,
+                )),
+                dataset_id,
+                self.fields.dataset_id,
+            );
+            if searcher.search(&exact_query, &Count).map_err(sanitized)? > 0 {
+                return collect_record_ids(
+                    &searcher,
+                    &exact_query,
+                    self.fields.record_id,
+                    offset,
+                    limit,
+                );
+            }
+        }
+
         let value_query: Box<dyn Query> = match mode {
             SearchMode::Exact => Box::new(TermQuery::new(
                 Term::from_field_text(self.fields.exact_values, &term_value),
@@ -142,47 +166,71 @@ impl SearchIndex {
             ),
         };
 
-        let query: Box<dyn Query> = if let Some(dataset_id) = dataset_id {
-            Box::new(BooleanQuery::new(vec![
-                (Occur::Must, value_query),
-                (
-                    Occur::Must,
-                    Box::new(TermQuery::new(
-                        Term::from_field_text(self.fields.dataset_id, dataset_id),
-                        IndexRecordOption::Basic,
-                    )),
-                ),
-            ]))
-        } else {
-            value_query
-        };
-
-        let reader = self.reader()?;
-        reader.reload().map_err(sanitized)?;
-        let searcher = reader.searcher();
-        let total = searcher.search(&query, &Count).map_err(sanitized)?;
-        let top_docs = searcher
-            .search(
-                &query,
-                &TopDocs::with_limit(limit.clamp(1, 200))
-                    .and_offset(offset)
-                    .order_by_score(),
-            )
-            .map_err(sanitized)?;
-        let mut record_ids = Vec::with_capacity(top_docs.len());
-        for (_, address) in top_docs {
-            let document = searcher
-                .doc::<TantivyDocument>(address)
-                .map_err(sanitized)?;
-            if let Some(record_id) = document
-                .get_first(self.fields.record_id)
-                .and_then(|value| value.as_str())
-            {
-                record_ids.push(record_id.to_string());
-            }
-        }
-        Ok((total, record_ids))
+        let query = with_dataset_filter(value_query, dataset_id, self.fields.dataset_id);
+        collect_record_ids(&searcher, &query, self.fields.record_id, offset, limit)
     }
+}
+
+fn with_dataset_filter(
+    value_query: Box<dyn Query>,
+    dataset_id: Option<&str>,
+    dataset_field: Field,
+) -> Box<dyn Query> {
+    match dataset_id {
+        Some(dataset_id) => Box::new(BooleanQuery::new(vec![
+            (Occur::Must, value_query),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(dataset_field, dataset_id),
+                    IndexRecordOption::Basic,
+                )),
+            ),
+        ])),
+        None => value_query,
+    }
+}
+
+fn collect_record_ids(
+    searcher: &tantivy::Searcher,
+    query: &dyn Query,
+    record_id_field: Field,
+    offset: usize,
+    limit: usize,
+) -> Result<(usize, Vec<String>), String> {
+    let total = searcher.search(query, &Count).map_err(sanitized)?;
+    let top_docs = searcher
+        .search(
+            query,
+            &TopDocs::with_limit(limit.clamp(1, 200))
+                .and_offset(offset)
+                .order_by_score(),
+        )
+        .map_err(sanitized)?;
+    let mut record_ids = Vec::with_capacity(top_docs.len());
+    for (_, address) in top_docs {
+        let document = searcher
+            .doc::<TantivyDocument>(address)
+            .map_err(sanitized)?;
+        if let Some(record_id) = document
+            .get_first(record_id_field)
+            .and_then(|value| value.as_str())
+        {
+            record_ids.push(record_id.to_string());
+        }
+    }
+    Ok((total, record_ids))
+}
+
+fn is_complete_identifier(requested_type: Option<&str>, value: &str) -> bool {
+    matches!(
+        requested_type,
+        Some("email" | "domain" | "url" | "phone" | "ip_address")
+    ) || value.contains('@')
+        || value.contains('.')
+        || value.contains("://")
+        || (value.starts_with('+') && value.chars().filter(char::is_ascii_digit).count() >= 7)
+        || value.parse::<std::net::IpAddr>().is_ok()
 }
 
 fn flexible_name_tokens(value: &str) -> Option<Vec<String>> {
@@ -328,6 +376,7 @@ mod tests {
 
         for (query, mode) in [
             ("email:person@example.com", SearchMode::Exact),
+            ("person@example.com", SearchMode::Contains),
             ("example", SearchMode::Contains),
             ("person@", SearchMode::Prefix),
         ] {
