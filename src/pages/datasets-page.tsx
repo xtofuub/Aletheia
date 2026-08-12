@@ -114,6 +114,11 @@ import {
   formatDuration,
   formatRate,
 } from "@/lib/format";
+import {
+  isTerminalImportStatus,
+  mergeImportProgress,
+  type ImportControlStatus,
+} from "@/lib/import-progress";
 
 type ImportProfile = "fast" | "analysis";
 
@@ -161,6 +166,8 @@ export function DatasetsPage() {
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [recordsPerSecond, setRecordsPerSecond] = useState(0);
   const [bytesPerSecond, setBytesPerSecond] = useState(0);
+  const [controlPending, setControlPending] =
+    useState<ImportControlStatus | null>(null);
   const [actionError, setActionError] = useState("");
   const [resumingDatasetId, setResumingDatasetId] = useState<string | null>(
     null,
@@ -179,6 +186,11 @@ export function DatasetsPage() {
     at: number;
     records: number;
     bytes: number;
+    status: string;
+  } | null>(null);
+  const forcedControl = useRef<{
+    jobId: string;
+    status: ImportControlStatus;
   } | null>(null);
 
   const datasets = useQuery({
@@ -205,9 +217,24 @@ export function DatasetsPage() {
     let unlisten: (() => void) | undefined;
     void listenImportProgress((next) => {
       const now = performance.now();
+      let forcedStatus =
+        forcedControl.current?.jobId === next.jobId
+          ? forcedControl.current.status
+          : null;
       if (
+        forcedStatus !== "cancelling" &&
+        next.status === forcedStatus &&
+        forcedControl.current?.jobId === next.jobId
+      ) {
+        forcedControl.current = null;
+        forcedStatus = null;
+      }
+      if (
+        next.status === "running" &&
+        forcedStatus === null &&
         previous.current &&
         previous.current.jobId === next.jobId &&
+        previous.current.status === "running" &&
         previous.current.at < now
       ) {
         const seconds = (now - previous.current.at) / 1_000;
@@ -234,13 +261,16 @@ export function DatasetsPage() {
         at: now,
         records: next.recordsProcessed,
         bytes: next.bytesRead,
+        status: next.status,
       };
-      setProgress(next);
-      if (
-        ["completed", "failed", "cancelled", "interrupted"].includes(
-          next.status,
-        )
-      ) {
+      setProgress((current) =>
+        mergeImportProgress(current, next, forcedStatus),
+      );
+      if (isTerminalImportStatus(next.status)) {
+        if (forcedControl.current?.jobId === next.jobId) {
+          forcedControl.current = null;
+          setControlPending(null);
+        }
         void queryClient.invalidateQueries({ queryKey: ["datasets"] });
         void queryClient.invalidateQueries({ queryKey: ["overview"] });
       }
@@ -298,7 +328,9 @@ export function DatasetsPage() {
     },
     onSuccess: async (result) => {
       setActionError("");
-      setProgress({
+      forcedControl.current = null;
+      setControlPending(null);
+      const queued: ImportProgress = {
         jobId: result.jobId,
         datasetId: result.datasetId,
         status: "queued",
@@ -310,7 +342,8 @@ export function DatasetsPage() {
         invalidRecords: 0,
         duplicateRecords: 0,
         message: "Import queued",
-      });
+      };
+      setProgress((current) => mergeImportProgress(current, queued));
       setDialogOpen(false);
       setInspection(null);
       await queryClient.invalidateQueries({ queryKey: ["datasets"] });
@@ -381,7 +414,9 @@ export function DatasetsPage() {
     try {
       const result = await resumeDatasetImport(dataset.id);
       setActionError("");
-      setProgress({
+      forcedControl.current = null;
+      setControlPending(null);
+      const queued: ImportProgress = {
         jobId: result.jobId,
         datasetId: result.datasetId,
         status: "queued",
@@ -393,7 +428,8 @@ export function DatasetsPage() {
         invalidRecords: 0,
         duplicateRecords: 0,
         message: "Resume queued",
-      });
+      };
+      setProgress((current) => mergeImportProgress(current, queued));
     } catch (error) {
       setActionError(String(error));
     } finally {
@@ -402,55 +438,65 @@ export function DatasetsPage() {
   }
 
   async function requestPause(jobId: string) {
+    forcedControl.current = { jobId, status: "paused" };
+    setControlPending("paused");
+    setProgress((current) => {
+      const snapshot = current ?? activeImport.data ?? null;
+      return snapshot?.jobId === jobId
+        ? mergeImportProgress(current, snapshot, "paused")
+        : current;
+    });
     try {
       await pauseImport(jobId);
       setActionError("");
-      setProgress((current) => {
-        const snapshot = current ?? activeImport.data ?? null;
-        return snapshot?.jobId === jobId
-          ? { ...snapshot, status: "paused", message: "Import paused" }
-          : current;
-      });
     } catch (error) {
+      forcedControl.current = null;
       setActionError(String(error));
+      setProgress((await getActiveImport()) ?? null);
+    } finally {
+      setControlPending(null);
     }
   }
 
   async function requestContinue(jobId: string) {
+    forcedControl.current = { jobId, status: "running" };
+    setControlPending("running");
+    setProgress((current) => {
+      const snapshot = current ?? activeImport.data ?? null;
+      return snapshot?.jobId === jobId
+        ? mergeImportProgress(current, snapshot, "running")
+        : current;
+    });
     try {
       await resumeImport(jobId);
       setActionError("");
-      setProgress((current) => {
-        const snapshot = current ?? activeImport.data ?? null;
-        return snapshot?.jobId === jobId
-          ? {
-              ...snapshot,
-              status: "running",
-              message: "Indexing local records",
-            }
-          : current;
-      });
     } catch (error) {
+      forcedControl.current = null;
       setActionError(String(error));
+      setProgress((await getActiveImport()) ?? null);
+    } finally {
+      setControlPending(null);
     }
   }
 
   async function requestCancel(jobId: string) {
+    forcedControl.current = { jobId, status: "cancelling" };
+    setControlPending("cancelling");
+    setProgress((current) => {
+      const snapshot = current ?? activeImport.data ?? null;
+      return snapshot?.jobId === jobId
+        ? mergeImportProgress(current, snapshot, "cancelling")
+        : current;
+    });
     try {
       await cancelImport(jobId);
       setActionError("");
-      setProgress((current) => {
-        const snapshot = current ?? activeImport.data ?? null;
-        return snapshot?.jobId === jobId
-          ? {
-              ...snapshot,
-              status: "cancelling",
-              message: "Finishing cancellation safely",
-            }
-          : current;
-      });
     } catch (error) {
+      forcedControl.current = null;
       setActionError(String(error));
+      setProgress((await getActiveImport()) ?? null);
+    } finally {
+      setControlPending(null);
     }
   }
 
@@ -674,6 +720,7 @@ export function DatasetsPage() {
                   </span>
                 ) : visibleProgress.status === "paused" ? (
                   <Button
+                    disabled={controlPending !== null}
                     onClick={() => void requestContinue(visibleProgress.jobId)}
                     size="sm"
                     variant="outline"
@@ -683,6 +730,7 @@ export function DatasetsPage() {
                   </Button>
                 ) : (
                   <Button
+                    disabled={controlPending !== null}
                     onClick={() => void requestPause(visibleProgress.jobId)}
                     size="sm"
                     variant="outline"
@@ -693,6 +741,7 @@ export function DatasetsPage() {
                 )}
                 {visibleProgress.status !== "cancelling" ? (
                   <Button
+                    disabled={controlPending !== null}
                     onClick={() => void requestCancel(visibleProgress.jobId)}
                     size="sm"
                     variant="outline"

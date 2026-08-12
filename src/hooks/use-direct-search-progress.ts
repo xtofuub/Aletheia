@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelDirectSearch,
@@ -72,6 +72,9 @@ export function applyPendingControl(
 
 export function useDirectSearchProgress() {
   const [progress, setProgress] = useState<DirectSearchProgress | null>(null);
+  const latestProgress = useRef<DirectSearchProgress | null>(null);
+  const pendingProgress = useRef<DirectSearchProgress | null>(null);
+  const animationFrame = useRef<number | null>(null);
   const [pendingControl, setPendingControl] = useState<PendingControl | null>(
     null,
   );
@@ -80,40 +83,56 @@ export function useDirectSearchProgress() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenDirectSearchProgress((next) => {
-      setProgress((previous) => mergeDirectSearchProgress(previous, next));
+      const merged = mergeDirectSearchProgress(latestProgress.current, next);
+      latestProgress.current = merged;
+      pendingProgress.current = merged;
+      if (animationFrame.current === null) {
+        animationFrame.current = window.requestAnimationFrame(() => {
+          animationFrame.current = null;
+          if (pendingProgress.current) setProgress(pendingProgress.current);
+        });
+      }
     }).then((value) => {
       unlisten = value;
     });
-    return () => unlisten?.();
+    return () => {
+      unlisten?.();
+      if (animationFrame.current !== null) {
+        window.cancelAnimationFrame(animationFrame.current);
+      }
+    };
   }, []);
 
   const begin = useCallback((start: DirectSearchStart) => {
-    setProgress((previous) =>
-      mergeDirectSearchProgress(previous, {
-        jobId: start.jobId,
-        sequence: 0,
-        status: "running",
-        currentSource: null,
-        sourceCount: start.sourceCount,
-        filesScanned: 0,
-        totalBytes: start.totalBytes,
-        sourceBytesScanned: 0,
-        contentBytesScanned: 0,
-        matches: 0,
-        elapsedMs: 0,
-        bytesPerSecond: 0,
-        estimatedRemainingMs: null,
-        queryCount: start.queryCount,
-        truncated: false,
-        message: "Scanning local sources",
-        hits: [],
-      }),
-    );
+    const merged = mergeDirectSearchProgress(latestProgress.current, {
+      jobId: start.jobId,
+      sequence: 0,
+      status: "running",
+      currentSource: null,
+      sourceCount: start.sourceCount,
+      filesScanned: 0,
+      totalBytes: start.totalBytes,
+      sourceBytesScanned: 0,
+      contentBytesScanned: 0,
+      matches: 0,
+      elapsedMs: 0,
+      bytesPerSecond: 0,
+      estimatedRemainingMs: null,
+      queryCount: start.queryCount,
+      truncated: false,
+      message: "Scanning local sources",
+      hits: [],
+    });
+    latestProgress.current = merged;
+    pendingProgress.current = merged;
+    setProgress(merged);
     setPendingControl(null);
     setControlError("");
   }, []);
 
   const clear = useCallback(() => {
+    latestProgress.current = null;
+    pendingProgress.current = null;
     setProgress(null);
     setPendingControl(null);
     setControlError("");
