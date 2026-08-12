@@ -70,6 +70,7 @@ await page
   .fill("synthetic@example.test\nportal.example.com");
 await page.getByRole("button", { name: "Scan", exact: true }).click();
 await page.getByText("Live search complete").waitFor();
+await page.waitForTimeout(300);
 await page.screenshot({
   path: "docs/screenshots/search-live.jpg",
   quality: 88,
@@ -81,6 +82,7 @@ await page.getByRole("heading", { name: "Domains" }).waitFor();
 await page.getByLabel("Search domains").fill("example.co.uk");
 await page.getByRole("button", { name: "Scan & store" }).click();
 await page.getByText("2 Live rows stored locally").waitFor();
+await page.waitForTimeout(300);
 await page.screenshot({
   path: "docs/screenshots/domains-live.jpg",
   quality: 88,
