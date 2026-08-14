@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import { SearchIcon } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 
@@ -8,6 +8,10 @@ import {
   formatChartAxisTick,
   formatChartTooltipDate,
 } from "@/components/formater";
+import {
+  HistoryRangeToggle,
+  type HistoryRangeDays,
+} from "@/components/history-range-toggle";
 import { Button } from "@/components/ui/button";
 import {
   CardContent,
@@ -35,7 +39,7 @@ import {
 } from "@/lib/dashboard-chart-data";
 import type { DatasetSummary, LiveSearchActivity } from "@/lib/desktop";
 
-const VISIBLE_DAYS = 7;
+const DEFAULT_VISIBLE_DAYS = 30;
 
 const chartConfig = {
   indexed: { label: "Indexed records", color: "var(--chart-2)" },
@@ -51,7 +55,10 @@ export function ChannelSalesChart({
 }) {
   const chartUid = useId().replace(/:/g, "");
   const lineGlowId = `search-activity-line-glow-${chartUid}`;
-  const rows = buildSearchActivityRows(datasets, liveSearches, VISIBLE_DAYS);
+  const [visibleDays, setVisibleDays] =
+    useState<HistoryRangeDays>(DEFAULT_VISIBLE_DAYS);
+  const rows = buildSearchActivityRows(datasets, liveSearches, visibleDays);
+  const hasActivity = rows.some((row) => row.indexed > 0 || row.live > 0);
   const firstTotal = (rows[0]?.indexed ?? 0) + (rows[0]?.live ?? 0);
   const lastTotal = (rows.at(-1)?.indexed ?? 0) + (rows.at(-1)?.live ?? 0);
   const growth = growthPercent(firstTotal, lastTotal);
@@ -59,21 +66,27 @@ export function ChannelSalesChart({
   return (
     <DashboardCard className="gap-0 md:col-span-2">
       <CardHeader className="gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle>Search activity</CardTitle>
-          {rows.length ? (
-            <Delta value={growth} variant="badge">
-              <DeltaIcon variant="trend" />
-              <DeltaValue />
-            </Delta>
-          ) : null}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle>Investigation activity</CardTitle>
+              {hasActivity ? (
+                <Delta value={growth} variant="badge">
+                  <DeltaIcon variant="trend" />
+                  <DeltaValue />
+                </Delta>
+              ) : null}
+            </div>
+            <CardDescription>
+              Indexed completions and Live matches · rolling {visibleDays}-day
+              window.
+            </CardDescription>
+          </div>
+          <HistoryRangeToggle onChange={setVisibleDays} value={visibleDays} />
         </div>
-        <CardDescription>
-          Daily index completions and Live matches, latest seven days.
-        </CardDescription>
       </CardHeader>
       <CardContent>
-        {rows.length ? (
+        {hasActivity ? (
           <ChartContainer
             className="aspect-auto h-60 w-full p-0 md:h-80"
             config={chartConfig}
@@ -87,10 +100,8 @@ export function ChannelSalesChart({
               <XAxis
                 axisLine={false}
                 dataKey="date"
-                interval={0}
-                tickFormatter={(value) =>
-                  formatChartAxisTick(String(value), VISIBLE_DAYS)
-                }
+                tickFormatter={(value) => formatChartAxisTick(String(value))}
+                minTickGap={32}
                 tickLine={false}
                 tickMargin={8}
               />
@@ -150,9 +161,9 @@ export function ChannelSalesChart({
               <EmptyMedia variant="icon">
                 <SearchIcon />
               </EmptyMedia>
-              <EmptyTitle>No recent activity</EmptyTitle>
+              <EmptyTitle>No activity in this range</EmptyTitle>
               <EmptyDescription>
-                Run an indexed search or Live scan to see activity.
+                Choose a longer range or run an indexed search or Live scan.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>

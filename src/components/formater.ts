@@ -25,15 +25,8 @@ export function formatDate(isoDate: string, style: DashboardDateStyle): string {
   });
 }
 
-/** X-axis for range charts: weekday when showing ~a week, otherwise month + day. */
-export function formatChartAxisTick(
-  isoDate: string,
-  periodDays: number,
-): string {
-  const date = parseIsoCalendarDate(isoDate);
-  if (periodDays <= 7) {
-    return date.toLocaleDateString(DASHBOARD_LOCALE, { weekday: "short" });
-  }
+/** Unambiguous rolling-range label; unlike weekdays, it remains clear across weeks. */
+export function formatChartAxisTick(isoDate: string): string {
   return formatDate(isoDate, "day-month");
 }
 

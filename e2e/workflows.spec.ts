@@ -18,7 +18,7 @@ test("core investigation routes stay reachable", async ({ page }) => {
   }
 });
 
-test("overview keeps the Efferd activity charts and hover details", async ({
+test("overview keeps rolling activity charts and hover details", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -57,15 +57,16 @@ test("overview keeps the Efferd activity charts and hover details", async ({
   await page.goto("/#/overview");
 
   const indexCard = page.locator('[data-slot="card"]').filter({
-    has: page.getByText("Index growth", { exact: true }),
+    has: page.getByText("Indexed footprint", { exact: true }),
   });
   const searchCard = page.locator('[data-slot="card"]').filter({
-    has: page.getByText("Search activity", { exact: true }),
+    has: page.getByText("Investigation activity", { exact: true }),
   });
 
   await expect(indexCard).toBeVisible();
   await expect(searchCard).toBeVisible();
-  await expect(indexCard.locator("linearGradient")).toHaveCount(7);
+  await expect(indexCard.getByLabel("History range")).toContainText("30D");
+  await expect(indexCard.locator("linearGradient")).toHaveCount(30);
   await expect(searchCard.locator(".recharts-line-curve")).toHaveCount(2);
 
   const latestBar = indexCard.locator('rect[fill^="url("]').last();

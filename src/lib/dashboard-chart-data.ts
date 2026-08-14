@@ -34,6 +34,15 @@ function latestDay(days: Array<string | null>): string | null {
   );
 }
 
+function todayDay(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function rollingEndDay(eventDays: string[], endDay?: string): string | null {
+  if (!eventDays.length) return null;
+  return latestDay([endDay ?? todayDay(), ...eventDays]);
+}
+
 function dateWindow(endDay: string, visibleDays: number): string[] {
   const days = Math.max(1, visibleDays);
   return Array.from({ length: days }, (_, index) =>
@@ -44,15 +53,19 @@ function dateWindow(endDay: string, visibleDays: number): string[] {
 export function buildIndexGrowthRows(
   datasets: DatasetSummary[],
   visibleDays = 7,
+  endDay?: string,
 ): IndexGrowthRow[] {
   const events = datasets.flatMap((dataset) => {
     const date = timestampDay(dataset.lastIndexedAt ?? dataset.createdAt);
     return date ? [{ date, records: Math.max(0, dataset.recordCount) }] : [];
   });
-  const endDay = latestDay(events.map((event) => event.date));
-  if (!endDay) return [];
+  const rollingEnd = rollingEndDay(
+    events.map((event) => event.date),
+    endDay,
+  );
+  if (!rollingEnd) return [];
 
-  return dateWindow(endDay, visibleDays).map((date) => ({
+  return dateWindow(rollingEnd, visibleDays).map((date) => ({
     date,
     records: events.reduce(
       (total, event) => total + (event.date <= date ? event.records : 0),
@@ -65,6 +78,7 @@ export function buildSearchActivityRows(
   datasets: DatasetSummary[],
   liveSearches: LiveSearchActivity[],
   visibleDays = 7,
+  endDay?: string,
 ): SearchActivityRow[] {
   const indexedEvents = datasets.flatMap((dataset) => {
     const date = timestampDay(dataset.lastIndexedAt ?? dataset.createdAt);
@@ -74,13 +88,16 @@ export function buildSearchActivityRows(
     const date = timestampDay(activity.completedAt);
     return date ? [{ date, matches: Math.max(0, activity.matches) }] : [];
   });
-  const endDay = latestDay([
-    ...indexedEvents.map((event) => event.date),
-    ...liveEvents.map((event) => event.date),
-  ]);
-  if (!endDay) return [];
+  const rollingEnd = rollingEndDay(
+    [
+      ...indexedEvents.map((event) => event.date),
+      ...liveEvents.map((event) => event.date),
+    ],
+    endDay,
+  );
+  if (!rollingEnd) return [];
 
-  return dateWindow(endDay, visibleDays).map((date) => ({
+  return dateWindow(rollingEnd, visibleDays).map((date) => ({
     date,
     indexed: indexedEvents.reduce(
       (total, event) => total + (event.date === date ? event.records : 0),

@@ -1,10 +1,17 @@
-import type * as React from "react";
+import { useState, type SVGProps } from "react";
 import { DatabaseIcon } from "lucide-react";
 import { Bar, BarChart, XAxis } from "recharts";
 
 import { DashboardCard } from "@/components/dashboard-card";
 import { Delta, DeltaIcon, DeltaValue } from "@/components/delta";
-import { formatChartAxisTick } from "@/components/formater";
+import {
+  formatChartAxisTick,
+  formatChartTooltipDate,
+} from "@/components/formater";
+import {
+  HistoryRangeToggle,
+  type HistoryRangeDays,
+} from "@/components/history-range-toggle";
 import { Button } from "@/components/ui/button";
 import {
   CardContent,
@@ -33,14 +40,14 @@ import {
 import type { DatasetSummary } from "@/lib/desktop";
 import { formatCount } from "@/lib/format";
 
-const VISIBLE_DAYS = 7;
+const DEFAULT_VISIBLE_DAYS = 30;
 
 const chartConfig = {
   records: { label: "Indexed records", color: "var(--chart-2)" },
 } satisfies ChartConfig;
 
 function CustomGradientBar(
-  props: React.SVGProps<SVGRectElement> & {
+  props: SVGProps<SVGRectElement> & {
     index?: number;
     dataKey?: string | number;
   },
@@ -78,7 +85,9 @@ function CustomGradientBar(
 }
 
 export function NetRevenueChart({ datasets }: { datasets: DatasetSummary[] }) {
-  const rows = buildIndexGrowthRows(datasets, VISIBLE_DAYS);
+  const [visibleDays, setVisibleDays] =
+    useState<HistoryRangeDays>(DEFAULT_VISIBLE_DAYS);
+  const rows = buildIndexGrowthRows(datasets, visibleDays);
   const total = datasets.reduce((sum, dataset) => sum + dataset.recordCount, 0);
   const growth = growthPercent(
     rows[0]?.records ?? 0,
@@ -88,18 +97,24 @@ export function NetRevenueChart({ datasets }: { datasets: DatasetSummary[] }) {
   return (
     <DashboardCard className="gap-0 md:col-span-2">
       <CardHeader className="gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <CardTitle>Index growth</CardTitle>
-          {rows.length ? (
-            <Delta value={growth} variant="badge">
-              <DeltaIcon variant="trend" />
-              <DeltaValue />
-            </Delta>
-          ) : null}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <CardTitle>Indexed footprint</CardTitle>
+              {rows.length ? (
+                <Delta value={growth} variant="badge">
+                  <DeltaIcon variant="trend" />
+                  <DeltaValue />
+                </Delta>
+              ) : null}
+            </div>
+            <CardDescription>
+              {formatCount(total)} cumulative records · rolling {visibleDays}
+              -day window.
+            </CardDescription>
+          </div>
+          <HistoryRangeToggle onChange={setVisibleDays} value={visibleDays} />
         </div>
-        <CardDescription>
-          {formatCount(total)} cumulative records across the latest seven days.
-        </CardDescription>
       </CardHeader>
       <CardContent>
         {rows.length ? (
@@ -111,15 +126,20 @@ export function NetRevenueChart({ datasets }: { datasets: DatasetSummary[] }) {
               <XAxis
                 axisLine={false}
                 dataKey="date"
-                interval={0}
-                tickFormatter={(value) =>
-                  formatChartAxisTick(String(value), VISIBLE_DAYS)
-                }
+                interval="preserveStartEnd"
+                tickFormatter={(value) => formatChartAxisTick(String(value))}
+                minTickGap={32}
                 tickLine={false}
                 tickMargin={10}
               />
               <ChartTooltip
-                content={<ChartTooltipContent hideLabel />}
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(value) =>
+                      formatChartTooltipDate(String(value), "long")
+                    }
+                  />
+                }
                 cursor={false}
               />
               <Bar

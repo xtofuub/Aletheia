@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replaced ambiguous weekday-only Overview charts with rolling 7-, 30-, and 90-day views, real date labels, clearer names, and date-aware hover details.
 - Replaced repeated Live buffer rescans with one-pass 8 MiB chunk matching, bounded line resolution only after a match, and CPU-parallel chunk workers for a single large plain file.
 - Added persistent Tantivy readers and verified bigram/trigram candidate indexes for new indexes, while older generated indexes open immediately through a compatible fallback instead of blocking the window for a hidden rebuild.
 - Moved system-status and first search-index opening work off the command thread so slow local storage cannot freeze the window.
