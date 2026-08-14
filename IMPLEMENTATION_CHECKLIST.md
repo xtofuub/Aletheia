@@ -174,7 +174,9 @@ Status key: `[ ]` pending, `[x]` complete.
 - [x] Add exact identifier fast paths before substring index scans
 - [x] Keep import progress monotonic across queued, paused, resumed, and cancelled events
 - [x] Coalesce Live scan progress and hit batches to one browser render per frame
-- [x] Skip complete nonmatching Live scan buffers in bulk
+- [x] Search each plain Live-source byte block once and resolve lines only for matches
+- [x] Parallelize one large plain file through a bounded sequential-read chunk pipeline
+- [x] Reuse a Tantivy reader per storage root and verify indexed bigram/trigram Contains candidates
 - [x] Bound long Search and Domain panes and verify no page-level horizontal overflow
 - [x] Verify one-query and 512-query optimized scanner throughput with generated data
 - [x] Pass frontend, Rust, browser workflow, build, and repository safety gates

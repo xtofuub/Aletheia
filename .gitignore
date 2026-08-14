@@ -38,6 +38,9 @@ E_848.txt
 index/
 indexes/
 tantivy/
+search-index/
+search-index-v1-backup/
+search-index-v2-building/
 storage/
 *.db
 *.db-shm

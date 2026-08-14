@@ -15,14 +15,14 @@ Contains searches split a likely person name into meaningful tokens. A query suc
 
 The Search page uses one query control and one source selector. Choosing an indexed dataset or saved Live source automatically selects the matching engine. The selector reports indexed and Live counts separately and includes an **All saved Live sources** option that deduplicates their selected paths before scanning.
 
-Live scans expose a result limit, 1-8 file workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, pause/resume/cancel controls, and paginated results. More workers help only when the drive and archive decoder can feed them; one huge archive is processed by one worker. The native scanner skips complete nonmatching buffer regions in bulk, while streamed result batches are coalesced to the display refresh rate and remain available after completion.
+Live scans expose a result limit, 1-8 workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, pause/resume/cancel controls, and paginated results. Plain files use a sequential large-block reader and can distribute matching across CPU workers when one file is at least 128 MiB; one worker remains the recommended HDD setting. One huge archive is processed by one decoder worker. The native scanner searches each plain byte block once, resolves line boundaries only after a match, and coalesces larger result batches to the display refresh rate.
 
 ## Advanced mode
 
 - **Exact** matches a complete normalized field value. A bare domain or
   `domain:` query also matches hostnames extracted from URLs and their
   registrable parent.
-- **Contains** performs a bounded literal substring match over complete safe indexed values and requires at least two characters.
+- **Contains** intersects indexed bigram/trigram candidates and verifies the complete normalized safe values before returning results; it requires at least two characters and never exposes n-gram false positives.
 - **Prefix** matches safe indexed values beginning with the query.
 
 Queries are limited to 512 characters. Choose 25, 50, 100, or 200 records per page; the result range, editable

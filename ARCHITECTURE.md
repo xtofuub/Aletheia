@@ -103,7 +103,7 @@ Aletheia exposes both search engines through one source-aware command deck. The 
 Automatic mode recognizes common query shapes. Email, IP, phone, and service-ID queries use field-boundary matching; indexed domain queries use normalized domain links with an exact-first fallback, while live domain queries use literal containment so matches inside emails, URLs, and subdomains are not missed. Advanced mode exposes exact, contains, prefix, dataset, field, archive, case, worker, and result-limit controls.
 
 - Exact: normalized term query
-- Contains: escaped literal regex over safe normalized terms
+- Contains: intersected bigram/trigram candidates followed by stored normalized-value verification, so substring results have no n-gram false positives
 - Prefix: escaped prefix regex over safe normalized terms
 
 Exact domain queries use the record-to-domain SQLite index so parent domains
@@ -112,7 +112,9 @@ before query compilation.
 
 Every hit includes dataset ID, source file ID, line or record position, parser, import time, and match reason.
 
-The live path compiles literal queries into a release-tuned Aho-Corasick DFA once per scan, skips complete nonmatching buffer regions in bulk, checks pause and cancellation between bounded reads, emits results in small batches, and stops the whole worker set at the configured result cap. It emits throttled progress after every 1 MiB of decoded content, tracks physical source bytes separately from expanded archive bytes, and calculates an estimated remaining time from physical progress. React coalesces progress and result events to one render per animation frame. Per-worker memory is bounded by a 1 MiB line buffer plus decoder state. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Reusable secret-like fragments are filtered in Rust before events reach React; complete non-secret line contents remain visible.
+The live path compiles literal queries into a release-tuned Aho-Corasick DFA once per scan. Plain files are read once in 8 MiB newline-aligned blocks, searched as raw bytes, and only matching offsets pay the cost of line-boundary resolution and bounded excerpt sanitation. One large plain file can feed up to eight CPU workers through a bounded queue while retaining sequential disk reads that are friendly to HDDs; selecting one worker keeps the entire path sequential. Streamed archives use single-pass bounded line readers. Pause and cancellation are checked between bounded reads, results are emitted in batches of 128, and the whole worker set stops at the configured result cap. Progress is throttled, physical source bytes are tracked separately from expanded archive bytes, and ETA uses physical progress. React coalesces events to one render per animation frame and reuses accumulated hits for progress-only events. ZIP and RAR archives are entry-count and decompression-ratio limited; encrypted RAR text entries are rejected. Reusable secret-like fragments are filtered in Rust before events reach React; complete non-secret line contents remain visible.
+
+Tantivy uses a reader cached per active storage root and its commit-aware reload policy instead of opening and reloading a reader for every query. Exact and Prefix keep their dedicated term-dictionary paths. Contains intersects indexed bigrams/trigrams, then verifies candidates against stored normalized safe values while collecting the exact count and requested page in one pass. The generated-index schema is detected explicitly; older indexes are rebuilt from local SQLite metadata into a temporary directory and atomically swapped without reading or changing source datasets.
 
 Result pages support 25, 50, 100, or 200 records with explicit ranges and
 navigation. Search hit metadata and fields are loaded in batches instead of one

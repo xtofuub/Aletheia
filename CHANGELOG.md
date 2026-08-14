@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Replaced repeated Live buffer rescans with one-pass 8 MiB chunk matching, bounded line resolution only after a match, and CPU-parallel chunk workers for a single large plain file.
+- Added persistent Tantivy readers and verified bigram/trigram candidate indexes for Contains search, including a one-time local rebuild for older generated indexes.
+- Increased native Live result batches from 20 to 128 and stopped rebuilding the full frontend hit map for progress-only events.
+- Added 100,000- and 1,000,000-line Live benchmarks plus 100,000-record exact, prefix, modern Contains, and legacy-regex comparisons.
 - Fixed Live ZIP, GZIP, and RAR scans staying at 0% by reporting compressed-source progress while data is read, and show visible sub-1% progress for very large archives.
 - Removed the native blue autofill and text-selection treatment from search fields so focused queries stay inside Aletheia's neutral theme.
 - Split Domains into dedicated Live-source and indexed-evidence workspaces, stream matching lines while a Live scan runs, and keep pause, continue, cancel, throughput, and progress controls visible across page navigation.
