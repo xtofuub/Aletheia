@@ -186,13 +186,16 @@ test("Domains scans saved Live sources and stores matching lines", async ({
       exact: false,
     }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Pause", exact: true }).last().click();
+  await expect(
+    page.getByRole("button", { name: "Continue", exact: true }).last(),
+  ).toBeVisible();
   await page.goto("/#/overview");
   const activeScan = page.getByLabel("Active domain scan");
   await expect(activeScan).toBeVisible();
   await expect(
     activeScan.getByRole("button", { name: "Open Domains" }),
   ).toBeVisible();
-  await activeScan.getByRole("button", { name: "Pause" }).click();
   await expect(
     activeScan.getByRole("button", { name: "Continue" }),
   ).toBeVisible();
