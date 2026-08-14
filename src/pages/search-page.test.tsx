@@ -31,6 +31,7 @@ describe("SearchPage query composer", () => {
 
     const query = await screen.findByRole("textbox", { name: "Search query" });
     expect(query.tagName).toBe("INPUT");
+    expect(query.getAttribute("autocomplete")).toBe("off");
 
     await user.type(query, "zzzz-not-present{Enter}");
     expect(await screen.findByText("No matches")).toBeTruthy();
