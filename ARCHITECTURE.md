@@ -103,7 +103,7 @@ Aletheia exposes both search engines through one source-aware command deck. The 
 Automatic mode recognizes common query shapes. Email, IP, phone, and service-ID queries use field-boundary matching; indexed domain queries use normalized domain links with an exact-first fallback, while live domain queries use literal containment so matches inside emails, URLs, and subdomains are not missed. Advanced mode exposes exact, contains, prefix, dataset, field, archive, case, worker, and result-limit controls.
 
 - Exact: normalized term query
-- Contains: intersected bigram/trigram candidates followed by stored normalized-value verification, so substring results have no n-gram false positives
+- Contains: intersected bigram/trigram candidates followed by stored normalized-value verification for new indexes, with a compatible Tantivy-regex fallback for older generated indexes so startup never performs a blocking schema rebuild
 - Prefix: escaped prefix regex over safe normalized terms
 
 Exact domain queries use the record-to-domain SQLite index so parent domains

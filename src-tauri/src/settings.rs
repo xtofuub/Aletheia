@@ -4,7 +4,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::State;
 
-use crate::{search_index::SearchIndex, storage::AppState};
+use crate::storage::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,39 +202,45 @@ pub fn update_security_settings(
 }
 
 #[tauri::command]
-pub fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatus, String> {
-    let storage_root = state.current_storage_root().map_err(sanitize)?;
-    let metadata_bytes = fs::metadata(storage_root.join("metadata.sqlite3"))
-        .map(|metadata| metadata.len())
-        .unwrap_or(0);
-    let index_bytes = directory_size(&storage_root.join("search-index")).unwrap_or(0);
-    let dataset_count = state
-        .database
-        .lock()
-        .map_err(|_| "metadata database is unavailable".to_string())?
-        .query_row("SELECT COUNT(*) FROM datasets", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .map_err(sanitize)? as u64;
-    let indexed_documents = if storage_root.join("search-index").join("meta.json").exists() {
-        SearchIndex::open_or_create(&storage_root)
-            .and_then(|index| index.document_count())
-            .unwrap_or(0)
-    } else {
-        0
-    };
+pub async fn get_system_status(state: State<'_, AppState>) -> Result<SystemStatus, String> {
+    let app_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let storage_root = app_state.current_storage_root().map_err(sanitize)?;
+        let metadata_bytes = fs::metadata(storage_root.join("metadata.sqlite3"))
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let index_bytes = directory_size(&storage_root.join("search-index")).unwrap_or(0);
+        let dataset_count = app_state
+            .database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?
+            .query_row("SELECT COUNT(*) FROM datasets", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(sanitize)? as u64;
+        let indexed_documents = if storage_root.join("search-index").join("meta.json").exists() {
+            app_state
+                .current_search_index()
+                .and_then(|index| index.document_count())
+                .unwrap_or(0)
+        } else {
+            0
+        };
 
-    Ok(SystemStatus {
-        database_ready: true,
-        offline: true,
-        metadata_bytes,
-        index_bytes,
-        dataset_count,
-        indexed_documents,
-        orphaned_index: is_orphaned_index(dataset_count, indexed_documents),
-        storage_root: storage_root.to_string_lossy().into_owned(),
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        Ok(SystemStatus {
+            database_ready: true,
+            offline: true,
+            metadata_bytes,
+            index_bytes,
+            dataset_count,
+            indexed_documents,
+            orphaned_index: is_orphaned_index(dataset_count, indexed_documents),
+            storage_root: storage_root.to_string_lossy().into_owned(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+        })
     })
+    .await
+    .map_err(|_| "system status task failed".to_string())?
 }
 
 fn is_orphaned_index(dataset_count: u64, indexed_documents: u64) -> bool {

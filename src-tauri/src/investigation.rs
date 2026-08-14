@@ -66,8 +66,9 @@ pub async fn search_records(
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
-    let index = state.current_search_index()?;
+    let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let index = app_state.current_search_index()?;
         let connection = open_worker_database(&root)
             .map_err(|_| "search database worker could not start".to_string())?;
         search_records_inner(request, &connection, &index, true)
@@ -84,8 +85,9 @@ pub async fn search_identity_records(
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
-    let index = state.current_search_index()?;
+    let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let index = app_state.current_search_index()?;
         let connection = open_worker_database(&root)
             .map_err(|_| "identity search database worker could not start".to_string())?;
         search_records_inner(request, &connection, &index, true)

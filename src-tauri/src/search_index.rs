@@ -1,7 +1,6 @@
 use std::{collections::HashSet, fs, path::Path, sync::Mutex};
 
 use once_cell::sync::Lazy;
-use rusqlite::Connection;
 use tantivy::{
     DocAddress, Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term,
     collector::{Count, TopDocs},
@@ -13,7 +12,6 @@ use crate::models::SearchMode;
 
 pub const INDEX_DIRECTORY: &str = "search-index";
 const WRITER_MEMORY_BYTES: usize = 30_000_000;
-const DATABASE_FILE: &str = "metadata.sqlite3";
 static INDEX_OPEN_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Clone, Copy)]
@@ -21,8 +19,8 @@ pub struct IndexFields {
     pub record_id: Field,
     pub dataset_id: Field,
     pub exact_values: Field,
-    pub search_grams: Field,
-    pub search_values: Field,
+    pub search_grams: Option<Field>,
+    pub search_values: Option<Field>,
 }
 
 pub struct SearchIndex {
@@ -38,9 +36,6 @@ impl SearchIndex {
             .map_err(|_| "search index lock is unavailable".to_string())?;
         let path = storage_root.join(INDEX_DIRECTORY);
         fs::create_dir_all(&path).map_err(sanitized)?;
-        if path.join("meta.json").exists() && !has_current_schema(&path)? {
-            rebuild_legacy_index(storage_root, &path)?;
-        }
         let index = if path.join("meta.json").exists() {
             Index::open_in_dir(&path).map_err(sanitized)?
         } else {
@@ -152,21 +147,34 @@ impl SearchIndex {
                 .as_ref()
                 .cloned()
                 .unwrap_or_else(|| vec![value.to_string()]);
-            let gram_query = with_dataset_filter(
-                ngram_query(&gram_values, self.fields.search_grams)?,
-                dataset_id,
-                self.fields.dataset_id,
-            );
-            return collect_verified_contains(
-                &searcher,
-                &gram_query,
-                self.fields,
+            if let (Some(search_grams), Some(_)) =
+                (self.fields.search_grams, self.fields.search_values)
+            {
+                let gram_query = with_dataset_filter(
+                    ngram_query(&gram_values, search_grams)?,
+                    dataset_id,
+                    self.fields.dataset_id,
+                );
+                return collect_verified_contains(
+                    &searcher,
+                    &gram_query,
+                    self.fields,
+                    requested_type,
+                    value,
+                    flexible_tokens.as_deref(),
+                    offset,
+                    limit,
+                );
+            }
+
+            let legacy_query = legacy_contains_query(
                 requested_type,
                 value,
                 flexible_tokens.as_deref(),
-                offset,
-                limit,
-            );
+                self.fields.exact_values,
+            )?;
+            let query = with_dataset_filter(legacy_query, dataset_id, self.fields.dataset_id);
+            return collect_record_ids(&searcher, &query, self.fields.record_id, offset, limit);
         }
 
         let value_query: Box<dyn Query> = match mode {
@@ -187,6 +195,32 @@ impl SearchIndex {
         let query = with_dataset_filter(value_query, dataset_id, self.fields.dataset_id);
         collect_record_ids(&searcher, &query, self.fields.record_id, offset, limit)
     }
+}
+
+fn legacy_contains_query(
+    requested_type: Option<&str>,
+    value: &str,
+    flexible_tokens: Option<&[String]>,
+    field: Field,
+) -> Result<Box<dyn Query>, String> {
+    let values = flexible_tokens
+        .map(|tokens| tokens.to_vec())
+        .unwrap_or_else(|| {
+            vec![
+                requested_type
+                    .map(|kind| format!("{kind}:{value}"))
+                    .unwrap_or_else(|| value.to_string()),
+            ]
+        });
+    let clauses = values
+        .iter()
+        .map(|value| {
+            RegexQuery::from_pattern(&format!(".*{}.*", escape_tantivy_regex(value)), field)
+                .map(|query| (Occur::Must, Box::new(query) as Box<dyn Query>))
+                .map_err(sanitized)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Box::new(BooleanQuery::new(clauses)))
 }
 
 fn with_dataset_filter(
@@ -295,7 +329,9 @@ fn collect_verified_contains(
                 };
                 if !document_matches_contains(
                     &document,
-                    fields.search_values,
+                    fields
+                        .search_values
+                        .expect("verified search requires stored search values"),
                     requested_type,
                     value,
                     flexible_tokens,
@@ -408,13 +444,19 @@ pub fn make_document(
     let mut grams = HashSet::new();
     for value in exact_values {
         document.add_text(fields.exact_values, value);
-        document.add_text(fields.search_values, value);
-        for gram in indexed_grams(value) {
-            grams.insert(gram);
+        if let Some(search_values) = fields.search_values {
+            document.add_text(search_values, value);
+        }
+        if fields.search_grams.is_some() {
+            for gram in indexed_grams(value) {
+                grams.insert(gram);
+            }
         }
     }
-    for gram in grams {
-        document.add_text(fields.search_grams, gram);
+    if let Some(search_grams) = fields.search_grams {
+        for gram in grams {
+            document.add_text(search_grams, gram);
+        }
     }
     document
 }
@@ -437,124 +479,9 @@ fn fields(schema: &Schema) -> Result<IndexFields, String> {
         record_id: schema.get_field("record_id").map_err(sanitized)?,
         dataset_id: schema.get_field("dataset_id").map_err(sanitized)?,
         exact_values: schema.get_field("exact_values").map_err(sanitized)?,
-        search_grams: schema.get_field("search_grams").map_err(sanitized)?,
-        search_values: schema.get_field("search_values").map_err(sanitized)?,
+        search_grams: schema.get_field("search_grams").ok(),
+        search_values: schema.get_field("search_values").ok(),
     })
-}
-
-fn has_current_schema(path: &Path) -> Result<bool, String> {
-    let index = Index::open_in_dir(path).map_err(sanitized)?;
-    let schema = index.schema();
-    Ok(schema.get_field("search_grams").is_ok() && schema.get_field("search_values").is_ok())
-}
-
-fn rebuild_legacy_index(storage_root: &Path, index_path: &Path) -> Result<(), String> {
-    let database_path = storage_root.join(DATABASE_FILE);
-    if !database_path.exists() {
-        return Err("the search index requires a workspace rebuild".to_string());
-    }
-    let temporary_path = storage_root.join("search-index-v2-building");
-    let backup_path = storage_root.join("search-index-v1-backup");
-    remove_generated_index_dir(&temporary_path)?;
-    remove_generated_index_dir(&backup_path)?;
-    fs::create_dir_all(&temporary_path).map_err(sanitized)?;
-
-    let rebuild = (|| -> Result<(), String> {
-        let index = Index::create_in_dir(&temporary_path, schema()).map_err(sanitized)?;
-        let index_fields = fields(&index.schema())?;
-        let mut writer = index.writer(WRITER_MEMORY_BYTES).map_err(sanitized)?;
-        let connection = Connection::open(&database_path).map_err(sanitized)?;
-        let mut statement = connection
-            .prepare(
-                "SELECT record_id, dataset_id, value
-                 FROM (
-                   SELECT r.id AS record_id, r.dataset_id AS dataset_id,
-                          fv.normalized_value AS value
-                   FROM records r
-                   JOIN field_values fv ON fv.record_id = r.id
-                   WHERE fv.is_sensitive = 0 AND fv.normalized_value <> ''
-                   UNION ALL
-                   SELECT r.id, r.dataset_id,
-                          fv.field_type || ':' || fv.normalized_value
-                   FROM records r
-                   JOIN field_values fv ON fv.record_id = r.id
-                   WHERE fv.is_sensitive = 0 AND fv.normalized_value <> ''
-                   UNION ALL
-                   SELECT r.id, r.dataset_id, rd.hostname
-                   FROM records r JOIN record_domains rd ON rd.record_id = r.id
-                   UNION ALL
-                   SELECT r.id, r.dataset_id, 'domain:' || rd.hostname
-                   FROM records r JOIN record_domains rd ON rd.record_id = r.id
-                   UNION ALL
-                   SELECT r.id, r.dataset_id, rdp.registrable_domain
-                   FROM records r JOIN record_domain_parents rdp ON rdp.record_id = r.id
-                   UNION ALL
-                   SELECT r.id, r.dataset_id, 'domain:' || rdp.registrable_domain
-                   FROM records r JOIN record_domain_parents rdp ON rdp.record_id = r.id
-                 )
-                 ORDER BY record_id, value",
-            )
-            .map_err(sanitized)?;
-        let mut rows = statement.query([]).map_err(sanitized)?;
-        let mut current_record = String::new();
-        let mut current_dataset = String::new();
-        let mut values = Vec::new();
-        while let Some(row) = rows.next().map_err(sanitized)? {
-            let record_id = row.get::<_, String>(0).map_err(sanitized)?;
-            let dataset_id = row.get::<_, String>(1).map_err(sanitized)?;
-            let value = row.get::<_, String>(2).map_err(sanitized)?;
-            if !current_record.is_empty() && record_id != current_record {
-                values.sort_unstable();
-                values.dedup();
-                writer
-                    .add_document(make_document(
-                        index_fields,
-                        &current_record,
-                        &current_dataset,
-                        &values,
-                    ))
-                    .map_err(sanitized)?;
-                values.clear();
-            }
-            if record_id != current_record {
-                current_record = record_id;
-                current_dataset = dataset_id;
-            }
-            values.push(value);
-        }
-        if !current_record.is_empty() {
-            values.sort_unstable();
-            values.dedup();
-            writer
-                .add_document(make_document(
-                    index_fields,
-                    &current_record,
-                    &current_dataset,
-                    &values,
-                ))
-                .map_err(sanitized)?;
-        }
-        writer.commit().map_err(sanitized)?;
-        writer.wait_merging_threads().map_err(sanitized)
-    })();
-    if let Err(error) = rebuild {
-        let _ = fs::remove_dir_all(&temporary_path);
-        return Err(error);
-    }
-
-    fs::rename(index_path, &backup_path).map_err(sanitized)?;
-    if fs::rename(&temporary_path, index_path).is_err() {
-        let _ = fs::rename(&backup_path, index_path);
-        return Err("search index upgrade could not be activated".to_string());
-    }
-    remove_generated_index_dir(&backup_path)
-}
-
-fn remove_generated_index_dir(path: &Path) -> Result<(), String> {
-    if path.exists() {
-        fs::remove_dir_all(path).map_err(sanitized)?;
-    }
-    Ok(())
 }
 
 fn split_structured_query(query: &str) -> (Option<&str>, &str) {
@@ -732,47 +659,35 @@ mod tests {
     }
 
     #[test]
-    fn legacy_indexes_rebuild_from_local_metadata() {
+    fn legacy_indexes_open_without_a_blocking_rebuild() {
         let directory = tempdir().expect("temporary directory");
-        let database = rusqlite::Connection::open(directory.path().join("metadata.sqlite3"))
-            .expect("metadata database");
-        database
-            .execute_batch(
-                "CREATE TABLE records(id TEXT PRIMARY KEY, dataset_id TEXT NOT NULL);
-                 CREATE TABLE field_values(
-                   record_id TEXT NOT NULL, field_type TEXT NOT NULL,
-                   normalized_value TEXT NOT NULL, is_sensitive INTEGER NOT NULL
-                 );
-                 CREATE TABLE record_domains(
-                   record_id TEXT NOT NULL, hostname TEXT NOT NULL,
-                   registrable_domain TEXT NOT NULL
-                 );
-                 CREATE TABLE record_domain_parents(
-                   record_id TEXT NOT NULL, registrable_domain TEXT NOT NULL
-                 );
-                 INSERT INTO records VALUES ('record-legacy', 'dataset-legacy');
-                 INSERT INTO field_values VALUES (
-                   'record-legacy', 'email', 'legacy@example.test', 0
-                 );",
-            )
-            .expect("legacy metadata");
-
         let mut builder = Schema::builder();
         let record_id = builder.add_text_field("record_id", STRING | STORED);
-        builder.add_text_field("dataset_id", STRING);
-        builder.add_text_field("exact_values", STRING);
+        let dataset_id = builder.add_text_field("dataset_id", STRING);
+        let exact_values = builder.add_text_field("exact_values", STRING);
         let legacy_path = directory.path().join(super::INDEX_DIRECTORY);
         std::fs::create_dir_all(&legacy_path).expect("legacy index directory");
         let legacy = Index::create_in_dir(&legacy_path, builder.build()).expect("legacy index");
         let mut writer = legacy.writer(15_000_000).expect("legacy writer");
         let mut document = TantivyDocument::default();
         document.add_text(record_id, "record-legacy");
+        document.add_text(dataset_id, "dataset-legacy");
+        document.add_text(exact_values, "legacy@example.test");
+        document.add_text(exact_values, "email:legacy@example.test");
         writer.add_document(document).expect("legacy document");
         writer.commit().expect("legacy commit");
         drop(writer);
         drop(legacy);
 
-        let current = SearchIndex::open_or_create(directory.path()).expect("upgraded index");
+        let stale_build = directory.path().join("search-index-v2-building");
+        std::fs::create_dir_all(&stale_build).expect("stale build directory");
+        std::fs::write(
+            stale_build.join("marker"),
+            b"leave generated data untouched",
+        )
+        .expect("stale build marker");
+
+        let current = SearchIndex::open_or_create(directory.path()).expect("legacy index");
         let (_, hits) = current
             .search_record_ids(
                 "legacy@example.test",
@@ -782,9 +697,9 @@ mod tests {
                 0,
                 20,
             )
-            .expect("upgraded search");
+            .expect("legacy fallback search");
         assert_eq!(hits, ["record-legacy"]);
         assert!(!directory.path().join("search-index-v1-backup").exists());
-        assert!(!directory.path().join("search-index-v2-building").exists());
+        assert!(stale_build.join("marker").exists());
     }
 }

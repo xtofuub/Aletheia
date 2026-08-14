@@ -78,6 +78,7 @@ impl JobControl {
     }
 }
 
+#[derive(Clone)]
 pub struct AppState {
     pub database: Arc<Mutex<Connection>>,
     pub storage_root: Arc<RwLock<PathBuf>>,
