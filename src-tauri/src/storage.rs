@@ -13,6 +13,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::search_index::SearchIndex;
+
+type SearchIndexCache = Arc<RwLock<Option<(PathBuf, Arc<SearchIndex>)>>>;
+
 const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_V2: &str = include_str!("../migrations/0002_search_history.sql");
 const MIGRATION_V3: &str = include_str!("../migrations/0003_import_performance.sql");
@@ -79,6 +83,7 @@ pub struct AppState {
     pub storage_root: Arc<RwLock<PathBuf>>,
     pub import_jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
     pub scan_jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    search_index: SearchIndexCache,
     app_data_dir: PathBuf,
 }
 
@@ -100,6 +105,7 @@ impl AppState {
             storage_root: Arc::new(RwLock::new(storage_root)),
             import_jobs: Arc::new(Mutex::new(HashMap::new())),
             scan_jobs: Arc::new(Mutex::new(HashMap::new())),
+            search_index: Arc::new(RwLock::new(None)),
             app_data_dir,
         })
     }
@@ -109,6 +115,25 @@ impl AppState {
             .read()
             .map(|path| path.clone())
             .map_err(|_| StorageError::LockUnavailable)
+    }
+
+    pub fn current_search_index(&self) -> Result<Arc<SearchIndex>, String> {
+        let root = self
+            .current_storage_root()
+            .map_err(|_| "storage location is unavailable".to_string())?;
+        if let Ok(cache) = self.search_index.read()
+            && let Some((cached_root, index)) = cache.as_ref()
+            && cached_root == &root
+        {
+            return Ok(Arc::clone(index));
+        }
+        let index = Arc::new(SearchIndex::open_or_create(&root)?);
+        let mut cache = self
+            .search_index
+            .write()
+            .map_err(|_| "search index cache is unavailable".to_string())?;
+        *cache = Some((root, Arc::clone(&index)));
+        Ok(index)
     }
 
     pub fn switch_storage_root(&self, root: &Path) -> Result<(), StorageError> {
@@ -136,6 +161,9 @@ impl AppState {
 
         *database = next_database;
         *storage_root = normalized;
+        if let Ok(mut search_index) = self.search_index.write() {
+            *search_index = None;
+        }
         Ok(())
     }
 }

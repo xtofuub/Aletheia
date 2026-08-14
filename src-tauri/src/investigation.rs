@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -67,10 +66,11 @@ pub async fn search_records(
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
+    let index = state.current_search_index()?;
     tauri::async_runtime::spawn_blocking(move || {
         let connection = open_worker_database(&root)
             .map_err(|_| "search database worker could not start".to_string())?;
-        search_records_inner(request, &connection, &root, true)
+        search_records_inner(request, &connection, &index, true)
     })
     .await
     .map_err(|_| "search task failed".to_string())?
@@ -84,10 +84,11 @@ pub async fn search_identity_records(
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
+    let index = state.current_search_index()?;
     tauri::async_runtime::spawn_blocking(move || {
         let connection = open_worker_database(&root)
             .map_err(|_| "identity search database worker could not start".to_string())?;
-        search_records_inner(request, &connection, &root, true)
+        search_records_inner(request, &connection, &index, true)
     })
     .await
     .map_err(|_| "identity search task failed".to_string())?
@@ -96,7 +97,7 @@ pub async fn search_identity_records(
 fn search_records_inner(
     request: SearchRequest,
     connection: &Connection,
-    root: &Path,
+    index: &SearchIndex,
     reveal_non_secret: bool,
 ) -> Result<SearchResponse, String> {
     if request
@@ -118,7 +119,6 @@ fn search_records_inner(
         if domain_results.0 > 0 {
             domain_results
         } else {
-            let index = SearchIndex::open_or_create(root)?;
             let field_type = request.field_type.map(FieldType::as_str);
             index.search_record_ids(
                 &request.query,
@@ -130,7 +130,6 @@ fn search_records_inner(
             )?
         }
     } else {
-        let index = SearchIndex::open_or_create(root)?;
         let field_type = request.field_type.map(FieldType::as_str);
         index.search_record_ids(
             &request.query,
