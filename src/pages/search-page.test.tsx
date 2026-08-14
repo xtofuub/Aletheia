@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SearchPage } from "./search-page";
+import { DirectSearchProgressProvider } from "@/hooks/use-direct-search-progress";
 
 function renderSearch(initialSource = "index:all") {
   const queryClient = new QueryClient({
@@ -11,7 +12,9 @@ function renderSearch(initialSource = "index:all") {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SearchPage initialSource={initialSource} />
+      <DirectSearchProgressProvider>
+        <SearchPage initialSource={initialSource} />
+      </DirectSearchProgressProvider>
     </QueryClientProvider>,
   );
 }

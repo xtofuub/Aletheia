@@ -173,13 +173,73 @@ test("Domains scans saved Live sources and stores matching lines", async ({
     );
   });
   await page.goto("/#/domains");
+  await expect(page.getByRole("tab", { name: "Live sources" })).toHaveAttribute(
+    "data-active",
+  );
   await page.getByLabel("Search domains").fill("example.co.uk");
+  await expect(page.getByText("Loading stored Live lines")).toHaveCount(0);
   await page.getByRole("button", { name: "Scan & store" }).click();
 
-  await expect(page.getByText("2 Live rows stored locally")).toBeVisible();
-  await expect(page.getByText("Stored Live scans")).toBeVisible();
+  await expect(page.getByText("Streaming matching Live lines")).toBeVisible();
   await expect(
-    page.getByText("synthetic@example.com portal.example.com"),
+    page.getByText("synthetic@example.com portal.example.com", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await page.goto("/#/overview");
+  const activeScan = page.getByLabel("Active domain scan");
+  await expect(activeScan).toBeVisible();
+  await expect(
+    activeScan.getByRole("button", { name: "Open Domains" }),
+  ).toBeVisible();
+  await activeScan.getByRole("button", { name: "Pause" }).click();
+  await expect(
+    activeScan.getByRole("button", { name: "Continue" }),
+  ).toBeVisible();
+  await activeScan.getByRole("button", { name: "Continue" }).click();
+  await page.goto("/#/domains");
+  await expect(page.getByText("2 Live rows stored locally")).toBeVisible();
+  await expect(page.getByText("Stored Live evidence")).toBeVisible();
+  await expect(
+    page
+      .getByText("synthetic@example.com portal.example.com", { exact: false })
+      .first(),
+  ).toBeVisible();
+
+  await page.getByRole("tab", { name: "Indexed evidence" }).click();
+  await expect(
+    page.getByText("Indexed domain groups", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Scan saved Live sources", { exact: true }),
+  ).toHaveCount(0);
+});
+
+test("a Live domain scan can be cancelled", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "aletheia.browser.live-sources",
+      JSON.stringify([
+        {
+          id: "live-domain-cancel",
+          name: "Cancelable corpus",
+          paths: ["C:\\Synthetic\\Cancelable corpus"],
+          includeArchives: true,
+          createdAt: new Date().toISOString(),
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/domains");
+  await page.getByLabel("Search domains").fill("cancel.example");
+  await page.getByRole("button", { name: "Scan & store" }).click();
+  await page
+    .getByRole("button", { name: "Cancel", exact: true })
+    .first()
+    .click();
+  await expect(page.getByText("Live scan cancelled").first()).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Dismiss", exact: true }),
   ).toBeVisible();
 });
 
