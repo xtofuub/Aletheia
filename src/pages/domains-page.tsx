@@ -31,6 +31,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -46,7 +47,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Progress,
   ProgressLabel,
@@ -65,6 +66,7 @@ import {
   getSettings,
   getDomainDetails,
   listDomains,
+  listDatasets,
   listLiveDomainCollections,
   listLiveDomainEvidence,
   listLiveSources,
@@ -78,6 +80,13 @@ import { cn } from "@/lib/utils";
 
 const pageSize = 25;
 const allLiveSourcesId = "all-saved-live-sources";
+const sourceViewStorageKey = "aletheia.domains.source-view";
+
+function initialSourceView(): "live" | "indexed" {
+  return window.sessionStorage.getItem(sourceViewStorageKey) === "live"
+    ? "live"
+    : "indexed";
+}
 
 function isDomainQuery(value: string) {
   return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(
@@ -87,7 +96,9 @@ function isDomainQuery(value: string) {
 
 export function DomainsPage() {
   const queryClient = useQueryClient();
-  const [sourceView, setSourceView] = useState<"live" | "indexed">("live");
+  const [sourceView, setSourceView] = useState<"live" | "indexed">(
+    initialSourceView,
+  );
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [offset, setOffset] = useState(0);
@@ -115,6 +126,7 @@ export function DomainsPage() {
   } = useDirectSearchProgress();
 
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
   const liveSources = useQuery({
     queryKey: ["live-sources"],
     queryFn: listLiveSources,
@@ -165,8 +177,14 @@ export function DomainsPage() {
   });
 
   const domains = useQuery({
-    queryKey: ["domains", submittedQuery, offset],
-    queryFn: () => listDomains(submittedQuery, offset, pageSize),
+    queryKey: ["domains", submittedQuery, datasetId, offset],
+    queryFn: () =>
+      listDomains(
+        submittedQuery,
+        offset,
+        pageSize,
+        datasetId === "all" ? null : datasetId,
+      ),
     enabled: sourceView === "indexed",
   });
 
@@ -320,12 +338,20 @@ export function DomainsPage() {
   }, [currentLiveProgress, liveScanContext, markHandled, storeLiveEvidence]);
 
   const datasetItems = [
-    { label: "All linked datasets", value: "all" },
-    ...(details.data?.breaches ?? []).map((breach) => ({
-      label: `${breach.datasetName} (${breach.recordCount})`,
-      value: breach.datasetId,
-    })),
+    {
+      label: `All indexed datasets (${(datasets.data ?? []).filter((dataset) => dataset.recordCount > 0).length})`,
+      value: "all",
+    },
+    ...(datasets.data ?? [])
+      .filter((dataset) => dataset.recordCount > 0)
+      .map((dataset) => ({
+        label: `${dataset.name} (${formatCount(dataset.recordCount)} records)`,
+        value: dataset.id,
+      })),
   ];
+  const selectedIndexedDataset = (datasets.data ?? []).find(
+    (dataset) => dataset.id === datasetId,
+  );
   const domainToScan = query.trim() || activeDomain || "";
   const liveBusy =
     liveScan.isPending ||
@@ -391,7 +417,7 @@ export function DomainsPage() {
             </Button>
           ) : null
         }
-        description="Scan saved Live sources or browse indexed domain groups in separate workspaces."
+        description="Choose an indexed dataset for instant domain lookup, or scan saved Live sources on demand."
         title="Domains"
       />
       {repairNotice ? (
@@ -399,31 +425,43 @@ export function DomainsPage() {
           {repairNotice}
         </p>
       ) : null}
-      <Tabs
-        className="mb-3"
-        onValueChange={(value) => {
-          const nextView = value as "live" | "indexed";
-          setSourceView(nextView);
-          setOffset(0);
-          setSelectedDomain(null);
-          setHostname(null);
-          setDatasetId("all");
-          setRecordOffset(0);
-          setLiveRecordOffset(0);
-        }}
-        value={sourceView}
-      >
-        <TabsList variant="line">
-          <TabsTrigger value="live">
-            <ArchiveIcon />
-            Live sources
-          </TabsTrigger>
-          <TabsTrigger value="indexed">
-            <DatabaseIcon />
-            Indexed evidence
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <Field className="mb-4 flex-row flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <FieldLabel>Evidence source</FieldLabel>
+          <FieldDescription>
+            {sourceView === "indexed"
+              ? "Browse domain groups already extracted from persistent indexes."
+              : "Search saved files, folders, and archives without indexing them first."}
+          </FieldDescription>
+        </div>
+        <ToggleGroup
+          aria-label="Domain evidence source"
+          onValueChange={(values) => {
+            const nextView = values[0] as "live" | "indexed" | undefined;
+            if (!nextView) return;
+            setSourceView(nextView);
+            window.sessionStorage.setItem(sourceViewStorageKey, nextView);
+            setOffset(0);
+            setSelectedDomain(null);
+            setHostname(null);
+            setDatasetId("all");
+            setRecordOffset(0);
+            setLiveRecordOffset(0);
+          }}
+          size="sm"
+          value={[sourceView]}
+          variant="outline"
+        >
+          <ToggleGroupItem value="indexed">
+            <DatabaseIcon data-icon="inline-start" />
+            Indexed datasets
+          </ToggleGroupItem>
+          <ToggleGroupItem value="live">
+            <ArchiveIcon data-icon="inline-start" />
+            Live source scans
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </Field>
       <div className="grid grid-cols-1 gap-px bg-border p-px xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
         <DashboardCard className="min-w-0 gap-0">
           <CardHeader className="border-b">
@@ -435,10 +473,42 @@ export function DomainsPage() {
             <CardDescription>
               {sourceView === "live"
                 ? `${storedCollections.data?.total ?? 0} saved result groups`
-                : `${domains.data?.total ?? 0} indexed groups`}
+                : `${domains.data?.total ?? 0} groups · ${selectedIndexedDataset?.name ?? "all indexed datasets"}`}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 p-3">
+            {sourceView === "indexed" ? (
+              <Field>
+                <FieldLabel>Indexed dataset</FieldLabel>
+                <Select
+                  items={datasetItems}
+                  onValueChange={(value) => {
+                    setDatasetId(String(value));
+                    setOffset(0);
+                    setSelectedDomain(null);
+                    setHostname(null);
+                    setRecordOffset(0);
+                  }}
+                  value={datasetId}
+                >
+                  <SelectTrigger aria-label="Indexed dataset">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {datasetItems.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  Group counts and linked lines stay inside this dataset scope.
+                </FieldDescription>
+              </Field>
+            ) : null}
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -457,7 +527,7 @@ export function DomainsPage() {
                   placeholder={
                     sourceView === "live"
                       ? "Domain to scan or open"
-                      : "Filter indexed domains"
+                      : "Search domain or subdomain"
                   }
                   value={query}
                 />
@@ -662,33 +732,82 @@ export function DomainsPage() {
                     <DatabaseIcon />
                     Indexed groups
                   </div>
-                  {(domains.data?.groups ?? []).map((group) => (
-                    <Button
-                      className="h-auto w-full justify-between px-3 py-2"
-                      key={group.registrableDomain}
-                      onClick={() => {
-                        const reloadActiveDomain =
-                          activeDomain === group.registrableDomain;
-                        setSelectedDomain(group.registrableDomain);
-                        setHostname(null);
-                        setDatasetId("all");
-                        setRecordOffset(0);
-                        if (reloadActiveDomain) void details.refetch();
-                      }}
-                      variant={
-                        activeDomain === group.registrableDomain
-                          ? "secondary"
-                          : "ghost"
-                      }
-                    >
-                      <span className="truncate">
-                        {group.registrableDomain}
-                      </span>
-                      <Badge variant="outline">
-                        {formatCount(group.recordCount)}
-                      </Badge>
-                    </Button>
-                  ))}
+                  {domains.isPending ? (
+                    <div className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
+                      <Spinner />
+                      Loading indexed groups
+                    </div>
+                  ) : domains.isError ? (
+                    <Empty className="min-h-48 rounded-none border-0">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <AlertCircleIcon />
+                        </EmptyMedia>
+                        <EmptyTitle>Could not load indexed domains</EmptyTitle>
+                        <EmptyDescription>
+                          {String(domains.error)}
+                        </EmptyDescription>
+                        <Button
+                          onClick={() => void domains.refetch()}
+                          size="sm"
+                          variant="outline"
+                        >
+                          Try again
+                        </Button>
+                      </EmptyHeader>
+                    </Empty>
+                  ) : (domains.data?.groups ?? []).length ? (
+                    (domains.data?.groups ?? []).map((group) => (
+                      <Button
+                        className="h-auto w-full justify-between px-3 py-2"
+                        key={group.registrableDomain}
+                        onClick={() => {
+                          const reloadActiveDomain =
+                            activeDomain === group.registrableDomain;
+                          setSelectedDomain(group.registrableDomain);
+                          setHostname(null);
+                          setRecordOffset(0);
+                          if (reloadActiveDomain) void details.refetch();
+                        }}
+                        variant={
+                          activeDomain === group.registrableDomain
+                            ? "secondary"
+                            : "ghost"
+                        }
+                      >
+                        <span className="truncate">
+                          {group.registrableDomain}
+                        </span>
+                        <Badge variant="outline">
+                          {formatCount(group.recordCount)}
+                        </Badge>
+                      </Button>
+                    ))
+                  ) : (
+                    <Empty className="min-h-48 rounded-none border-0">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <DatabaseIcon />
+                        </EmptyMedia>
+                        <EmptyTitle>No domains in this scope</EmptyTitle>
+                        <EmptyDescription>
+                          Change the dataset or rebuild domain links from
+                          indexed records.
+                        </EmptyDescription>
+                        <Button
+                          disabled={domainRepair.isPending}
+                          onClick={() => domainRepair.mutate()}
+                          size="sm"
+                          variant="outline"
+                        >
+                          {domainRepair.isPending ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : null}
+                          Rebuild links
+                        </Button>
+                      </EmptyHeader>
+                    </Empty>
+                  )}
                 </div>
               )}
             </ScrollArea>
@@ -737,7 +856,7 @@ export function DomainsPage() {
                   ? "Loading indexed records..."
                   : details.isError
                     ? "Indexed records could not be loaded."
-                    : `${formatCount(details.data?.totalRecords ?? 0)} indexed lines`}
+                    : `${formatCount(details.data?.totalRecords ?? 0)} indexed lines · ${selectedIndexedDataset?.name ?? "all datasets"}`}
             </CardDescription>
           </CardHeader>
           {activeDomain || (sourceView === "live" && currentLiveProgress) ? (
@@ -795,7 +914,10 @@ export function DomainsPage() {
                         ))}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-col gap-2">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Linked indexed datasets
+                      </p>
                       <div className="flex flex-wrap gap-2">
                         {(details.data?.breaches ?? []).map((breach) => (
                           <Badge key={breach.datasetId} variant="outline">
@@ -803,27 +925,6 @@ export function DomainsPage() {
                           </Badge>
                         ))}
                       </div>
-                      <Select
-                        items={datasetItems}
-                        onValueChange={(value) => {
-                          setDatasetId(String(value));
-                          setRecordOffset(0);
-                        }}
-                        value={datasetId}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {datasetItems.map((item) => (
-                              <SelectItem key={item.value} value={item.value}>
-                                {item.label}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
                     </div>
                   </CardContent>
                   <CardContent className="px-0">

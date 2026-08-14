@@ -171,6 +171,7 @@ fn search_records_inner(
 #[tauri::command]
 pub async fn list_domains(
     query: String,
+    dataset_id: Option<String>,
     offset: usize,
     limit: usize,
     state: State<'_, AppState>,
@@ -178,13 +179,16 @@ pub async fn list_domains(
     if query.chars().count() > 253 {
         return Err("domain search exceeds 253 characters".to_string());
     }
+    if dataset_id.as_ref().is_some_and(|value| value.len() > 128) {
+        return Err("dataset filter is invalid".to_string());
+    }
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let connection = open_worker_database(&root)
             .map_err(|_| "domain database worker could not start".to_string())?;
-        search_domain_groups(&connection, &query, offset, limit)
+        search_domain_groups(&connection, &query, dataset_id.as_deref(), offset, limit)
     })
     .await
     .map_err(|_| "domain search task failed".to_string())?
@@ -238,6 +242,7 @@ pub async fn get_domain_details(
 fn search_domain_groups(
     connection: &Connection,
     query: &str,
+    dataset_id: Option<&str>,
     offset: usize,
     limit: usize,
 ) -> Result<DomainSearchResponse, String> {
@@ -249,56 +254,83 @@ fn search_domain_groups(
         return Err("domain search contains unsupported characters".to_string());
     }
     let pattern = format!("{query}*");
-    let filter = if query.is_empty() {
-        ""
+    let (count_sql, data_sql) = if dataset_id.is_some() {
+        (
+            "SELECT COUNT(*) FROM (
+               SELECT d.registrable_domain
+               FROM domains d
+               JOIN hostname_dataset_counts hc
+                 ON hc.hostname = d.hostname AND hc.dataset_id = ?3
+               WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
+               GROUP BY d.registrable_domain
+             )",
+            "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
+                    MAX(dc.record_count)
+             FROM domains d
+             JOIN hostname_dataset_counts hc
+               ON hc.hostname = d.hostname AND hc.dataset_id = ?3
+             JOIN domain_dataset_counts dc
+               ON dc.registrable_domain = d.registrable_domain
+              AND dc.dataset_id = ?3
+             WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
+             GROUP BY d.registrable_domain
+             ORDER BY 4 DESC, d.registrable_domain
+             LIMIT ?4 OFFSET ?5",
+        )
     } else {
-        "WHERE d.registrable_domain GLOB ?1 OR d.hostname GLOB ?1"
+        (
+            "SELECT COUNT(*) FROM (
+               SELECT d.registrable_domain
+               FROM domains d
+               WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
+               GROUP BY d.registrable_domain
+             )",
+            "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
+                    COALESCE(
+                      NULLIF((
+                        SELECT SUM(c.record_count)
+                        FROM domain_dataset_counts c
+                        WHERE c.registrable_domain = d.registrable_domain
+                      ), 0),
+                      SUM(d.record_count)
+                    )
+             FROM domains d
+             WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
+             GROUP BY d.registrable_domain
+             ORDER BY 4 DESC, d.registrable_domain
+             LIMIT ?3 OFFSET ?4",
+        )
     };
-    let count_sql = format!(
-        "SELECT COUNT(*) FROM (
-           SELECT d.registrable_domain FROM domains d
-           {filter}
-           GROUP BY d.registrable_domain
-         )"
-    );
-    let total = if query.is_empty() {
+    let total = if let Some(dataset_id) = dataset_id {
         connection
-            .query_row(&count_sql, [], |row| row.get::<_, i64>(0))
+            .query_row(count_sql, params![query, pattern, dataset_id], |row| {
+                row.get::<_, i64>(0)
+            })
             .map_err(sanitized)?
     } else {
         connection
-            .query_row(&count_sql, [&pattern], |row| row.get::<_, i64>(0))
+            .query_row(count_sql, params![query, pattern], |row| {
+                row.get::<_, i64>(0)
+            })
             .map_err(sanitized)?
     };
 
-    let data_sql = format!(
-        "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
-                COALESCE(
-                  NULLIF((
-                    SELECT SUM(c.record_count)
-                    FROM domain_dataset_counts c
-                    WHERE c.registrable_domain = d.registrable_domain
-                  ), 0),
-                  SUM(d.record_count)
-                )
-         FROM domains d
-         {filter}
-         GROUP BY d.registrable_domain
-         ORDER BY 4 DESC, d.registrable_domain
-         LIMIT ?{} OFFSET ?{}",
-        if query.is_empty() { 1 } else { 2 },
-        if query.is_empty() { 2 } else { 3 }
-    );
-    let mut statement = connection.prepare(&data_sql).map_err(sanitized)?;
+    let mut statement = connection.prepare(data_sql).map_err(sanitized)?;
     let bounded_limit = limit.clamp(1, 100) as i64;
     let bounded_offset = offset.min(i64::MAX as usize) as i64;
-    let mut rows = if query.is_empty() {
+    let mut rows = if let Some(dataset_id) = dataset_id {
         statement
-            .query(params![bounded_limit, bounded_offset])
+            .query(params![
+                query,
+                pattern,
+                dataset_id,
+                bounded_limit,
+                bounded_offset
+            ])
             .map_err(sanitized)?
     } else {
         statement
-            .query(params![pattern, bounded_limit, bounded_offset])
+            .query(params![query, pattern, bounded_limit, bounded_offset])
             .map_err(sanitized)?
     };
     let mut groups = Vec::with_capacity(bounded_limit as usize);
@@ -1719,13 +1751,27 @@ mod tests {
                  INSERT INTO record_domains(record_id, hostname, registrable_domain)
                  VALUES ('record-1', 'portal.example.co.uk', 'example.co.uk');
                  INSERT INTO record_domain_parents(record_id, registrable_domain)
-                 VALUES ('record-1', 'example.co.uk');",
+                 VALUES ('record-1', 'example.co.uk');
+                 INSERT INTO domain_dataset_counts(
+                    registrable_domain, dataset_id, record_count
+                 ) VALUES ('example.co.uk', 'dataset-1', 1);
+                 INSERT INTO hostname_dataset_counts(hostname, dataset_id, record_count)
+                 VALUES ('portal.example.co.uk', 'dataset-1', 1);",
             )
             .expect("synthetic domain data");
 
-        let groups = search_domain_groups(&connection, "portal", 0, 50).expect("domain search");
+        let groups =
+            search_domain_groups(&connection, "portal", None, 0, 50).expect("domain search");
         assert_eq!(groups.total, 1);
         assert_eq!(groups.groups[0].registrable_domain, "example.co.uk");
+        let dataset_groups = search_domain_groups(&connection, "portal", Some("dataset-1"), 0, 50)
+            .expect("dataset domain search");
+        assert_eq!(dataset_groups.total, 1);
+        assert_eq!(dataset_groups.groups[0].record_count, 1);
+        let missing_dataset =
+            search_domain_groups(&connection, "portal", Some("dataset-missing"), 0, 50)
+                .expect("missing dataset domain search");
+        assert_eq!(missing_dataset.total, 0);
 
         let request = SearchRequest {
             query: "example.co.uk".to_string(),

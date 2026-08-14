@@ -174,9 +174,10 @@ test("Domains scans saved Live sources and stores matching lines", async ({
     );
   });
   await page.goto("/#/domains");
-  await expect(page.getByRole("tab", { name: "Live sources" })).toHaveAttribute(
-    "data-active",
-  );
+  await page.getByRole("button", { name: "Live source scans" }).click();
+  await expect(
+    page.getByRole("button", { name: "Live source scans" }),
+  ).toHaveAttribute("aria-pressed", "true");
   await page.getByLabel("Search domains").fill("example.co.uk");
   await expect(page.getByText("Loading stored Live lines")).toHaveCount(0);
   await page.getByRole("button", { name: "Scan & store" }).click();
@@ -210,7 +211,7 @@ test("Domains scans saved Live sources and stores matching lines", async ({
       .first(),
   ).toBeVisible();
 
-  await page.getByRole("tab", { name: "Indexed evidence" }).click();
+  await page.getByRole("button", { name: "Indexed datasets" }).click();
   await expect(
     page.getByText("Indexed domain groups", { exact: true }),
   ).toBeVisible();
@@ -235,6 +236,7 @@ test("a Live domain scan can be cancelled", async ({ page }) => {
     );
   });
   await page.goto("/#/domains");
+  await page.getByRole("button", { name: "Live source scans" }).click();
   await page.getByLabel("Search domains").fill("cancel.example");
   await page.getByRole("button", { name: "Scan & store" }).click();
   await page
@@ -245,6 +247,60 @@ test("a Live domain scan can be cancelled", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "Dismiss", exact: true }),
   ).toBeVisible();
+});
+
+test("Domains filters indexed groups by dataset", async ({ page }) => {
+  await page.addInitScript(() => {
+    const now = new Date().toISOString();
+    window.localStorage.setItem(
+      "aletheia.browser.datasets",
+      JSON.stringify([
+        {
+          id: "dataset-synthetic",
+          name: "Authorized synthetic fixture",
+          status: "ready",
+          recordCount: 67,
+          fileCount: 1,
+          totalBytes: 1024,
+          warningCount: 0,
+          createdAt: now,
+          lastIndexedAt: now,
+        },
+        {
+          id: "dataset-empty",
+          name: "Unrelated index",
+          status: "ready",
+          recordCount: 12,
+          fileCount: 1,
+          totalBytes: 512,
+          warningCount: 0,
+          createdAt: now,
+          lastIndexedAt: now,
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/domains");
+  await expect(
+    page.getByRole("button", { name: "Indexed datasets" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByText("example.co.uk", { exact: true }).first(),
+  ).toBeVisible();
+
+  await page.getByLabel("Indexed dataset").click();
+  await page.getByRole("option", { name: /Unrelated index/ }).click();
+  await expect(page.getByText("No domains in this scope")).toBeVisible();
+
+  await page.getByLabel("Indexed dataset").click();
+  await page
+    .getByRole("option", { name: /Authorized synthetic fixture/ })
+    .click();
+  await page.getByLabel("Search domains").fill("portal");
+  await expect(
+    page.getByText("example.co.uk", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(page.getByText(/67 indexed lines/)).toBeVisible();
 });
 
 test("indexed results show complete identifiers and wrap safely", async ({

@@ -1434,23 +1434,26 @@ export async function listDomains(
   query = "",
   offset = 0,
   limit = 50,
+  datasetId: string | null = null,
 ): Promise<DomainSearchResponse> {
   if (isTauriRuntime()) {
     return invoke<DomainSearchResponse>("list_domains", {
       query,
       offset,
       limit,
+      datasetId,
     });
   }
   const normalizedQuery = query.trim().toLowerCase();
   const groups = syntheticDomainGroups.filter(
     (group) =>
-      !normalizedQuery ||
-      group.registrableDomain.startsWith(normalizedQuery) ||
-      (group.registrableDomain === "example.co.uk" &&
-        syntheticDomains.some((domain) =>
-          domain.hostname.startsWith(normalizedQuery),
-        )),
+      (!datasetId || datasetId === "dataset-synthetic") &&
+      (!normalizedQuery ||
+        group.registrableDomain.startsWith(normalizedQuery) ||
+        (group.registrableDomain === "example.co.uk" &&
+          syntheticDomains.some((domain) =>
+            domain.hostname.startsWith(normalizedQuery),
+          ))),
   );
   return {
     total: groups.length,
