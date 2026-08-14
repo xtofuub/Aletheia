@@ -18,6 +18,64 @@ test("core investigation routes stay reachable", async ({ page }) => {
   }
 });
 
+test("overview keeps the Efferd activity charts and hover details", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const now = new Date().toISOString();
+    window.localStorage.setItem(
+      "aletheia.browser.datasets",
+      JSON.stringify([
+        {
+          id: "chart-index",
+          name: "Synthetic chart index",
+          status: "ready",
+          recordCount: 4_000_000,
+          fileCount: 1,
+          totalBytes: 2_560_000_000,
+          warningCount: 0,
+          createdAt: now,
+          lastIndexedAt: now,
+        },
+      ]),
+    );
+    window.localStorage.setItem(
+      "aletheia.browser.live-search-activity",
+      JSON.stringify([
+        {
+          jobId: "chart-live-job",
+          sourceId: "chart-live-source",
+          sourceName: "Synthetic chart source",
+          matches: 42,
+          filesScanned: 1,
+          bytesScanned: 1_024,
+          completedAt: now,
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/overview");
+
+  const indexCard = page.locator('[data-slot="card"]').filter({
+    has: page.getByText("Index growth", { exact: true }),
+  });
+  const searchCard = page.locator('[data-slot="card"]').filter({
+    has: page.getByText("Search activity", { exact: true }),
+  });
+
+  await expect(indexCard).toBeVisible();
+  await expect(searchCard).toBeVisible();
+  await expect(indexCard.locator("linearGradient")).toHaveCount(7);
+  await expect(searchCard.locator(".recharts-line-curve")).toHaveCount(2);
+
+  const latestBar = indexCard.locator('rect[fill^="url("]').last();
+  await expect(latestBar).toBeVisible();
+  await latestBar.hover();
+  await expect(indexCard.locator(".recharts-tooltip-wrapper")).toContainText(
+    "Indexed records",
+  );
+});
+
 test("saved Live source searches many values in one pass", async ({ page }) => {
   await page.goto("/#/datasets");
   await page.getByRole("button", { name: "Save folder" }).click();

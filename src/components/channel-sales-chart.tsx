@@ -1,15 +1,26 @@
+import { useId } from "react";
 import { SearchIcon } from "lucide-react";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 
-import type { DatasetSummary, LiveSearchActivity } from "@/lib/desktop";
 import { DashboardCard } from "@/components/dashboard-card";
+import { Delta, DeltaIcon, DeltaValue } from "@/components/delta";
+import {
+  formatChartAxisTick,
+  formatChartTooltipDate,
+} from "@/components/formater";
+import { Button } from "@/components/ui/button";
 import {
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
 import {
   Empty,
   EmptyContent,
@@ -19,15 +30,16 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import {
-  type ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
+  buildSearchActivityRows,
+  growthPercent,
+} from "@/lib/dashboard-chart-data";
+import type { DatasetSummary, LiveSearchActivity } from "@/lib/desktop";
+
+const VISIBLE_DAYS = 7;
 
 const chartConfig = {
-  records: { label: "Indexed records", color: "var(--chart-2)" },
-  liveMatches: { label: "Live matches", color: "var(--chart-1)" },
+  indexed: { label: "Indexed records", color: "var(--chart-2)" },
+  live: { label: "Live matches", color: "var(--chart-1)" },
 } satisfies ChartConfig;
 
 export function ChannelSalesChart({
@@ -37,40 +49,33 @@ export function ChannelSalesChart({
   datasets: DatasetSummary[];
   liveSearches: LiveSearchActivity[];
 }) {
-  const rows = [
-    ...datasets.map((dataset) => ({
-      timestamp: dataset.lastIndexedAt ?? dataset.createdAt,
-      records: dataset.recordCount,
-      liveMatches: null,
-    })),
-    ...liveSearches.map((activity) => ({
-      timestamp: activity.completedAt,
-      records: null,
-      liveMatches: activity.matches,
-    })),
-  ]
-    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-    .slice(-8)
-    .map((item) => ({
-      label: new Date(item.timestamp).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-      }),
-      records: item.records,
-      liveMatches: item.liveMatches,
-    }));
+  const chartUid = useId().replace(/:/g, "");
+  const lineGlowId = `search-activity-line-glow-${chartUid}`;
+  const rows = buildSearchActivityRows(datasets, liveSearches, VISIBLE_DAYS);
+  const firstTotal = (rows[0]?.indexed ?? 0) + (rows[0]?.live ?? 0);
+  const lastTotal = (rows.at(-1)?.indexed ?? 0) + (rows.at(-1)?.live ?? 0);
+  const growth = growthPercent(firstTotal, lastTotal);
+
   return (
     <DashboardCard className="gap-0 md:col-span-2">
-      <CardHeader>
-        <CardTitle>Search activity</CardTitle>
+      <CardHeader className="gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle>Search activity</CardTitle>
+          {rows.length ? (
+            <Delta value={growth} variant="badge">
+              <DeltaIcon variant="trend" />
+              <DeltaValue />
+            </Delta>
+          ) : null}
+        </div>
         <CardDescription>
-          Recent index completions and Live scan results.
+          Daily index completions and Live matches, latest seven days.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {rows.length ? (
           <ChartContainer
-            className="aspect-auto h-60 w-full md:h-72"
+            className="aspect-auto h-60 w-full p-0 md:h-80"
             config={chartConfig}
           >
             <LineChart
@@ -78,56 +83,74 @@ export function ChannelSalesChart({
               data={rows}
               margin={{ left: 12, right: 12, top: 8 }}
             >
-              <CartesianGrid vertical={false} />
+              <CartesianGrid className="stroke-border" vertical={false} />
               <XAxis
                 axisLine={false}
-                dataKey="label"
+                dataKey="date"
+                interval={0}
+                tickFormatter={(value) =>
+                  formatChartAxisTick(String(value), VISIBLE_DAYS)
+                }
                 tickLine={false}
                 tickMargin={8}
               />
-              <YAxis hide yAxisId="records" />
-              <YAxis hide orientation="right" yAxisId="liveMatches" />
+              <YAxis domain={[0, "auto"]} hide yAxisId="indexed" />
+              <YAxis
+                domain={[0, "auto"]}
+                hide
+                orientation="right"
+                yAxisId="live"
+              />
               <ChartTooltip
-                allowEscapeViewBox={{ x: true, y: true }}
                 content={
                   <ChartTooltipContent
                     indicator="line"
-                    labelFormatter={(value) => String(value)}
+                    labelFormatter={(value) =>
+                      formatChartTooltipDate(String(value), "long")
+                    }
                   />
                 }
-                cursor={{ stroke: "var(--border)" }}
-                isAnimationActive={false}
-                wrapperStyle={{ zIndex: 20 }}
+                cursor={false}
               />
+              <defs>
+                <filter
+                  height="140%"
+                  id={lineGlowId}
+                  width="140%"
+                  x="-20%"
+                  y="-20%"
+                >
+                  <feGaussianBlur result="blur" stdDeviation="10" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
               <Line
-                activeDot={{ r: 4 }}
-                connectNulls
-                dataKey="records"
-                dot={{ r: 2 }}
-                stroke="var(--color-records)"
+                dataKey="live"
+                dot={false}
+                filter={`url(#${lineGlowId})`}
+                stroke="var(--color-live)"
                 strokeWidth={2}
                 type="step"
-                yAxisId="records"
+                yAxisId="live"
               />
               <Line
-                activeDot={{ r: 4 }}
-                connectNulls
-                dataKey="liveMatches"
-                dot={{ r: 2 }}
-                stroke="var(--color-liveMatches)"
+                dataKey="indexed"
+                dot={false}
+                filter={`url(#${lineGlowId})`}
+                stroke="var(--color-indexed)"
                 strokeWidth={2}
                 type="step"
-                yAxisId="liveMatches"
+                yAxisId="indexed"
               />
             </LineChart>
           </ChartContainer>
         ) : (
-          <Empty className="h-60 rounded-none border-0 md:h-72">
+          <Empty className="h-60 rounded-none border-0 md:h-80">
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <SearchIcon />
               </EmptyMedia>
-              <EmptyTitle>No recent searches</EmptyTitle>
+              <EmptyTitle>No recent activity</EmptyTitle>
               <EmptyDescription>
                 Run an indexed search or Live scan to see activity.
               </EmptyDescription>

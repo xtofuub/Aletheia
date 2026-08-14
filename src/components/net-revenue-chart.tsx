@@ -1,16 +1,23 @@
+import type * as React from "react";
 import { DatabaseIcon } from "lucide-react";
 import { Bar, BarChart, XAxis } from "recharts";
 
-import type { DatasetSummary } from "@/lib/desktop";
-import { formatCount } from "@/lib/format";
 import { DashboardCard } from "@/components/dashboard-card";
+import { Delta, DeltaIcon, DeltaValue } from "@/components/delta";
+import { formatChartAxisTick } from "@/components/formater";
+import { Button } from "@/components/ui/button";
 import {
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import {
+  type ChartConfig,
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+} from "@/components/ui/chart";
 import {
   Empty,
   EmptyContent,
@@ -20,75 +27,110 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import {
-  type ChartConfig,
-  ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart";
+  buildIndexGrowthRows,
+  growthPercent,
+} from "@/lib/dashboard-chart-data";
+import type { DatasetSummary } from "@/lib/desktop";
+import { formatCount } from "@/lib/format";
+
+const VISIBLE_DAYS = 7;
 
 const chartConfig = {
-  records: { label: "Records", color: "var(--chart-2)" },
+  records: { label: "Indexed records", color: "var(--chart-2)" },
 } satisfies ChartConfig;
 
+function CustomGradientBar(
+  props: React.SVGProps<SVGRectElement> & {
+    index?: number;
+    dataKey?: string | number;
+  },
+) {
+  const {
+    fill,
+    x = 0,
+    y = 0,
+    width = 0,
+    height = 0,
+    dataKey = "records",
+    index = 0,
+  } = props;
+  const gradientId = `index-growth-${String(dataKey)}-${index}`;
+
+  return (
+    <>
+      <rect
+        fill={`url(#${gradientId})`}
+        height={height}
+        stroke="none"
+        width={width}
+        x={x}
+        y={y}
+      />
+      <rect fill={fill} height={2} stroke="none" width={width} x={x} y={y} />
+      <defs>
+        <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={fill} stopOpacity={0.5} />
+          <stop offset="100%" stopColor={fill} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+    </>
+  );
+}
+
 export function NetRevenueChart({ datasets }: { datasets: DatasetSummary[] }) {
-  const rows = datasets
-    .slice()
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .slice(-8)
-    .map((dataset) => ({
-      label: dataset.name.slice(0, 12),
-      records: dataset.recordCount,
-    }));
+  const rows = buildIndexGrowthRows(datasets, VISIBLE_DAYS);
   const total = datasets.reduce((sum, dataset) => sum + dataset.recordCount, 0);
+  const growth = growthPercent(
+    rows[0]?.records ?? 0,
+    rows.at(-1)?.records ?? 0,
+  );
 
   return (
     <DashboardCard className="gap-0 md:col-span-2">
-      <CardHeader>
-        <CardTitle>Index growth</CardTitle>
+      <CardHeader className="gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <CardTitle>Index growth</CardTitle>
+          {rows.length ? (
+            <Delta value={growth} variant="badge">
+              <DeltaIcon variant="trend" />
+              <DeltaValue />
+            </Delta>
+          ) : null}
+        </div>
         <CardDescription>
-          {formatCount(total)} records across the latest persistent indexes.
+          {formatCount(total)} cumulative records across the latest seven days.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {rows.length ? (
           <ChartContainer
-            className="aspect-auto h-60 w-full md:h-72"
+            className="aspect-auto h-60 w-full md:h-80"
             config={chartConfig}
           >
             <BarChart accessibilityLayer data={rows}>
               <XAxis
                 axisLine={false}
-                dataKey="label"
+                dataKey="date"
+                interval={0}
+                tickFormatter={(value) =>
+                  formatChartAxisTick(String(value), VISIBLE_DAYS)
+                }
                 tickLine={false}
                 tickMargin={10}
               />
               <ChartTooltip
-                allowEscapeViewBox={{ x: true, y: true }}
-                content={
-                  <ChartTooltipContent
-                    className="animate-in fade-in-0 zoom-in-95 duration-150"
-                    labelFormatter={(value) => String(value)}
-                  />
-                }
-                cursor={{ fill: "var(--muted)", fillOpacity: 0.35 }}
-                wrapperStyle={{ zIndex: 20 }}
+                content={<ChartTooltipContent hideLabel />}
+                cursor={false}
               />
               <Bar
-                activeBar={{
-                  fill: "var(--color-records)",
-                  fillOpacity: 0.78,
-                  stroke: "var(--foreground)",
-                  strokeWidth: 1,
-                }}
                 dataKey="records"
                 fill="var(--color-records)"
-                maxBarSize={72}
-                radius={2}
+                shape={<CustomGradientBar />}
               />
             </BarChart>
           </ChartContainer>
         ) : (
-          <Empty className="h-60 rounded-none border-0 md:h-72">
+          <Empty className="h-60 rounded-none border-0 md:h-80">
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <DatabaseIcon />
