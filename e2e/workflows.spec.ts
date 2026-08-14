@@ -178,7 +178,7 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   await expect(
     page.getByRole("button", { name: "Live source scans" }),
   ).toHaveAttribute("aria-pressed", "true");
-  await page.getByLabel("Search domains").fill("example.co.uk");
+  await page.getByLabel("Parent domain").fill("example.co.uk");
   await expect(page.getByText("Loading stored Live lines")).toHaveCount(0);
   await page.getByRole("button", { name: "Scan & store" }).click();
 
@@ -204,6 +204,8 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   await activeScan.getByRole("button", { name: "Continue" }).click();
   await page.goto("/#/domains");
   await expect(page.getByText("2 Live rows stored locally")).toBeVisible();
+  await expect(page.getByLabel("Parent domain")).toBeVisible();
+  await expect(page.getByLabel("Saved Live source")).toBeVisible();
   await expect(page.getByText("Stored Live evidence")).toBeVisible();
   await expect(
     page
@@ -237,7 +239,7 @@ test("a Live domain scan can be cancelled", async ({ page }) => {
   });
   await page.goto("/#/domains");
   await page.getByRole("button", { name: "Live source scans" }).click();
-  await page.getByLabel("Search domains").fill("cancel.example");
+  await page.getByLabel("Parent domain").fill("cancel.example");
   await page.getByRole("button", { name: "Scan & store" }).click();
   await page
     .getByRole("button", { name: "Cancel", exact: true })
@@ -301,6 +303,20 @@ test("Domains filters indexed groups by dataset", async ({ page }) => {
     page.getByText("example.co.uk", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByText(/67 indexed lines/)).toBeVisible();
+});
+
+test("Domains builds the complete indexed catalog without a query", async ({
+  page,
+}) => {
+  await page.goto("/#/domains");
+  await expect(page.getByLabel("Search domains")).toHaveValue("");
+  await page.getByRole("button", { name: "Build all domains" }).click();
+  await expect(page.getByText("Domain catalog ready")).toBeVisible();
+  await expect(
+    page.getByText(
+      /parent domain groups are ready, including their linked subdomains/i,
+    ),
+  ).toBeVisible();
 });
 
 test("indexed results show complete identifiers and wrap safely", async ({

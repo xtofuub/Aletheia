@@ -238,6 +238,7 @@ export interface DirectSearchRequest {
   paths: string[];
   query: string;
   mode: SearchMode;
+  domainMatch?: boolean;
   caseSensitive: boolean;
   includeArchives: boolean;
   maxResults: number;
@@ -1095,8 +1096,9 @@ export async function startDirectSearch(
     archiveEntry: request.includeArchives ? "records/synthetic.txt" : null,
     sourceLocation: "line 42",
     excerpt: `synthetic@example.com portal.example.com ${primaryQuery}`,
-    matchReason:
-      queryCount > 1
+    matchReason: request.domainMatch
+      ? "Parent or subdomain found"
+      : queryCount > 1
         ? "Batch value found"
         : request.mode === "exact"
           ? "Exact field match"

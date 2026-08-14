@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircleIcon,
   ArchiveIcon,
+  CheckCircle2Icon,
   DatabaseIcon,
   FileSearchIcon,
   Globe2Icon,
@@ -19,6 +20,12 @@ import { PaginationControls } from "@/components/pagination-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import {
   CardContent,
   CardDescription,
   CardHeader,
@@ -31,7 +38,14 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
@@ -47,6 +61,7 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Progress,
@@ -110,6 +125,7 @@ export function DomainsPage() {
   const [recordOffset, setRecordOffset] = useState(0);
   const [liveRecordOffset, setLiveRecordOffset] = useState(0);
   const [liveSourceId, setLiveSourceId] = useState(allLiveSourcesId);
+  const [liveDomainInput, setLiveDomainInput] = useState("");
   const [repairNotice, setRepairNotice] = useState("");
   const [liveNotice, setLiveNotice] = useState("");
   const attemptedStoreJobId = useRef<string | null>(null);
@@ -165,15 +181,17 @@ export function DomainsPage() {
 
   const domainRepair = useMutation({
     mutationFn: rebuildDomains,
+    onMutate: () => setRepairNotice(""),
     onSuccess: async (count) => {
-      setRepairNotice(`${formatCount(count)} domain groups linked`);
+      setRepairNotice(
+        `${formatCount(count)} parent domain groups are ready, including their linked subdomains.`,
+      );
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["domains"] }),
         queryClient.invalidateQueries({ queryKey: ["domain-details"] }),
       ]);
     },
-    onError: (error) =>
-      setRepairNotice(`Domain rebuild failed: ${String(error)}`),
+    onError: (error) => setRepairNotice(String(error)),
   });
 
   const domains = useQuery({
@@ -279,6 +297,7 @@ export function DomainsPage() {
         paths: source.paths,
         query: domain,
         mode: "contains",
+        domainMatch: true,
         caseSensitive: false,
         includeArchives: source.includeArchives,
         maxResults: 5_000,
@@ -352,7 +371,7 @@ export function DomainsPage() {
   const selectedIndexedDataset = (datasets.data ?? []).find(
     (dataset) => dataset.id === datasetId,
   );
-  const domainToScan = query.trim() || activeDomain || "";
+  const domainToScan = liveDomainInput.trim();
   const liveBusy =
     liveScan.isPending ||
     storeLiveEvidence.isPending ||
@@ -413,17 +432,38 @@ export function DomainsPage() {
               {domainRepair.isPending ? (
                 <Spinner data-icon="inline-start" />
               ) : null}
-              {domainRepair.isPending ? "Rebuilding links…" : "Rebuild links"}
+              {domainRepair.isPending
+                ? "Building all domains…"
+                : "Build all domains"}
             </Button>
           ) : null
         }
         description="Choose an indexed dataset for instant domain lookup, or scan saved Live sources on demand."
         title="Domains"
       />
-      {repairNotice ? (
-        <p className="mb-3 text-xs text-muted-foreground" role="status">
-          {repairNotice}
-        </p>
+      {domainRepair.isPending ? (
+        <Alert className="mb-4" role="status">
+          <Spinner />
+          <AlertTitle>Building every indexed domain</AlertTitle>
+          <AlertDescription>
+            Scanning indexed fields and linking parent domains with their
+            subdomains. No search term is needed; large indexes can take time.
+          </AlertDescription>
+        </Alert>
+      ) : repairNotice ? (
+        <Alert
+          className="mb-4"
+          role="status"
+          variant={domainRepair.isError ? "destructive" : "default"}
+        >
+          {domainRepair.isError ? <AlertCircleIcon /> : <CheckCircle2Icon />}
+          <AlertTitle>
+            {domainRepair.isError
+              ? "Domain build failed"
+              : "Domain catalog ready"}
+          </AlertTitle>
+          <AlertDescription>{repairNotice}</AlertDescription>
+        </Alert>
       ) : null}
       <Field className="mb-4 flex-row flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
@@ -447,6 +487,8 @@ export function DomainsPage() {
             setDatasetId("all");
             setRecordOffset(0);
             setLiveRecordOffset(0);
+            setQuery("");
+            setSubmittedQuery("");
           }}
           size="sm"
           value={[sourceView]}
@@ -509,183 +551,256 @@ export function DomainsPage() {
                 </FieldDescription>
               </Field>
             ) : null}
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                setOffset(0);
-                setSelectedDomain(null);
-                setSubmittedQuery(query.trim());
-              }}
-            >
-              <InputGroup>
-                <InputGroupAddon>
-                  <SearchIcon />
-                </InputGroupAddon>
-                <InputGroupInput
-                  aria-label="Search domains"
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder={
-                    sourceView === "live"
-                      ? "Domain to scan or open"
-                      : "Search domain or subdomain"
-                  }
-                  value={query}
-                />
-                {(
-                  sourceView === "live"
-                    ? storedCollections.isFetching
-                    : domains.isFetching
-                ) ? (
-                  <InputGroupAddon align="inline-end">
-                    <Spinner />
+            <Field>
+              <FieldLabel htmlFor="domain-filter">
+                {sourceView === "live"
+                  ? "Filter saved results"
+                  : "Filter domain catalog"}
+              </FieldLabel>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  setOffset(0);
+                  setSelectedDomain(null);
+                  setSubmittedQuery(query.trim());
+                }}
+              >
+                <InputGroup>
+                  <InputGroupAddon>
+                    <SearchIcon />
                   </InputGroupAddon>
-                ) : null}
-              </InputGroup>
-            </form>
+                  <InputGroupInput
+                    aria-label="Search domains"
+                    id="domain-filter"
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder={
+                      sourceView === "live"
+                        ? "Find a saved domain"
+                        : "Parent domain or subdomain"
+                    }
+                    value={query}
+                  />
+                  {(
+                    sourceView === "live"
+                      ? storedCollections.isFetching
+                      : domains.isFetching
+                  ) ? (
+                    <InputGroupAddon align="inline-end">
+                      <Spinner />
+                    </InputGroupAddon>
+                  ) : null}
+                </InputGroup>
+              </form>
+              <FieldDescription>
+                {sourceView === "live"
+                  ? "This only filters domain scans already stored on this device."
+                  : "Leave empty to browse every domain built from the selected index."}
+              </FieldDescription>
+            </Field>
             {sourceView === "live" ? (
-              <div className="flex flex-col gap-2 border p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">
-                      Scan saved Live sources
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Find up to 5,000 matching lines and keep them in this
-                      domain.
-                    </p>
-                  </div>
-                  <ArchiveIcon className="shrink-0 text-muted-foreground" />
-                </div>
-                {liveSourceItems.length ? (
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <Select
-                      items={liveSourceItems}
-                      onValueChange={(value) => setLiveSourceId(String(value))}
-                      value={selectedLiveSource?.id ?? allLiveSourcesId}
-                    >
-                      <SelectTrigger className="min-w-0 flex-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {liveSourceItems.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      disabled={
-                        liveBusy ||
-                        !selectedLiveSource ||
-                        !isDomainQuery(domainToScan)
-                      }
-                      onClick={() => {
-                        if (selectedLiveSource && isDomainQuery(domainToScan)) {
-                          liveScan.mutate({
-                            domain: domainToScan,
-                            source: selectedLiveSource,
-                          });
+              <>
+                <Separator />
+                <FieldSet>
+                  <FieldLegend>New Live domain scan</FieldLegend>
+                  <FieldDescription>
+                    Search saved files, folders, ZIPs, and RARs without building
+                    a persistent index.
+                  </FieldDescription>
+                  {liveSourceItems.length ? (
+                    <FieldGroup className="gap-4">
+                      <Field
+                        data-invalid={
+                          Boolean(liveDomainInput.trim()) &&
+                          !isDomainQuery(liveDomainInput)
                         }
-                      }}
-                      size="sm"
-                    >
-                      {liveBusy ? (
-                        <Spinner data-icon="inline-start" />
-                      ) : (
-                        <FileSearchIcon data-icon="inline-start" />
-                      )}
-                      {storeLiveEvidence.isPending
-                        ? "Storing..."
-                        : liveBusy
-                          ? "Scanning..."
-                          : "Scan & store"}
-                    </Button>
-                  </div>
-                ) : (
-                  <Button
-                    nativeButton={false}
-                    render={<a href="#/datasets" />}
-                    size="sm"
-                    variant="outline"
-                  >
-                    Add a Live source
-                  </Button>
-                )}
-                {currentLiveProgress ? (
-                  <div className="flex flex-col gap-2">
-                    <Progress value={livePercent}>
-                      <ProgressLabel>
-                        {currentLiveProgress.message}
-                      </ProgressLabel>
-                      <ProgressValue>
-                        {() => formatProgressPercent(livePercent)}
-                      </ProgressValue>
-                    </Progress>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">
-                        {formatBytes(currentLiveProgress.bytesPerSecond)}/s
-                      </Badge>
-                      <Badge variant="outline">
-                        {formatCount(currentLiveProgress.matches)} matches
-                      </Badge>
-                      {currentLiveProgress.status === "running" ? (
-                        <Button
-                          className="ms-auto"
-                          disabled={controlPending !== null}
-                          onClick={() =>
-                            void pauseLiveSearch(currentLiveProgress.jobId)
+                      >
+                        <FieldLabel htmlFor="live-domain-input">
+                          Parent domain
+                        </FieldLabel>
+                        <InputGroup>
+                          <InputGroupAddon>
+                            <Globe2Icon />
+                          </InputGroupAddon>
+                          <InputGroupInput
+                            aria-invalid={
+                              Boolean(liveDomainInput.trim()) &&
+                              !isDomainQuery(liveDomainInput)
+                            }
+                            id="live-domain-input"
+                            onChange={(event) =>
+                              setLiveDomainInput(event.target.value)
+                            }
+                            placeholder="example.com"
+                            value={liveDomainInput}
+                          />
+                        </InputGroup>
+                        <FieldDescription>
+                          A parent such as example.com includes the parent and
+                          every subdomain, including portal.example.com.
+                        </FieldDescription>
+                      </Field>
+                      <Field>
+                        <FieldLabel>Saved Live source</FieldLabel>
+                        <Select
+                          items={liveSourceItems}
+                          onValueChange={(value) =>
+                            setLiveSourceId(String(value))
                           }
+                          value={selectedLiveSource?.id ?? allLiveSourcesId}
+                        >
+                          <SelectTrigger aria-label="Saved Live source">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              {liveSourceItems.map((item) => (
+                                <SelectItem key={item.value} value={item.value}>
+                                  {item.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Button
+                        disabled={
+                          liveBusy ||
+                          !selectedLiveSource ||
+                          !isDomainQuery(domainToScan)
+                        }
+                        onClick={() => {
+                          if (
+                            selectedLiveSource &&
+                            isDomainQuery(domainToScan)
+                          ) {
+                            liveScan.mutate({
+                              domain: domainToScan,
+                              source: selectedLiveSource,
+                            });
+                          }
+                        }}
+                        size="sm"
+                      >
+                        {liveBusy ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <FileSearchIcon data-icon="inline-start" />
+                        )}
+                        {storeLiveEvidence.isPending
+                          ? "Storing..."
+                          : liveBusy
+                            ? "Scanning..."
+                            : "Scan & store"}
+                      </Button>
+                    </FieldGroup>
+                  ) : (
+                    <Alert>
+                      <ArchiveIcon />
+                      <AlertTitle>No saved Live sources</AlertTitle>
+                      <AlertDescription>
+                        Add a file, folder, or archive before starting a Live
+                        domain scan.
+                      </AlertDescription>
+                      <AlertAction>
+                        <Button
+                          nativeButton={false}
+                          render={<a href="#/datasets" />}
                           size="sm"
                           variant="outline"
                         >
-                          <PauseIcon data-icon="inline-start" />
-                          Pause
+                          Add source
                         </Button>
-                      ) : currentLiveProgress.status === "paused" ? (
-                        <Button
-                          className="ms-auto"
-                          disabled={controlPending !== null}
-                          onClick={() =>
-                            void resumeLiveSearch(currentLiveProgress.jobId)
-                          }
-                          size="sm"
-                          variant="outline"
-                        >
-                          <PlayIcon data-icon="inline-start" />
-                          Continue
-                        </Button>
-                      ) : null}
-                      {["running", "paused", "cancelling"].includes(
+                      </AlertAction>
+                    </Alert>
+                  )}
+                  {currentLiveProgress ? (
+                    <Alert role="status">
+                      {["running", "cancelling"].includes(
                         currentLiveProgress.status,
                       ) ? (
-                        <Button
-                          className={cn(
-                            currentLiveProgress.status === "cancelling" &&
-                              "ms-auto",
-                          )}
-                          disabled={controlPending !== null}
-                          onClick={() =>
-                            void cancelLiveSearch(currentLiveProgress.jobId)
-                          }
-                          size="sm"
-                          variant="outline"
-                        >
-                          <SquareIcon data-icon="inline-start" />
-                          Cancel
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-                {displayedLiveNotice ? (
-                  <p className="text-xs text-muted-foreground" role="status">
-                    {displayedLiveNotice}
-                  </p>
-                ) : null}
-              </div>
+                        <Spinner />
+                      ) : currentLiveProgress.status === "completed" ? (
+                        <CheckCircle2Icon />
+                      ) : (
+                        <PauseIcon />
+                      )}
+                      <AlertTitle>{currentLiveProgress.message}</AlertTitle>
+                      <AlertDescription className="flex flex-col gap-3">
+                        <Progress value={livePercent}>
+                          <ProgressLabel>
+                            {formatCount(currentLiveProgress.matches)} matches
+                          </ProgressLabel>
+                          <ProgressValue>
+                            {() => formatProgressPercent(livePercent)}
+                          </ProgressValue>
+                        </Progress>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline">
+                            {formatBytes(currentLiveProgress.bytesPerSecond)}/s
+                          </Badge>
+                          <Badge variant="outline">
+                            {formatCount(currentLiveProgress.filesScanned)} of{" "}
+                            {formatCount(currentLiveProgress.sourceCount)} files
+                          </Badge>
+                          {currentLiveProgress.status === "running" ? (
+                            <Button
+                              className="ms-auto"
+                              disabled={controlPending !== null}
+                              onClick={() =>
+                                void pauseLiveSearch(currentLiveProgress.jobId)
+                              }
+                              size="sm"
+                              variant="outline"
+                            >
+                              <PauseIcon data-icon="inline-start" />
+                              Pause
+                            </Button>
+                          ) : currentLiveProgress.status === "paused" ? (
+                            <Button
+                              className="ms-auto"
+                              disabled={controlPending !== null}
+                              onClick={() =>
+                                void resumeLiveSearch(currentLiveProgress.jobId)
+                              }
+                              size="sm"
+                              variant="outline"
+                            >
+                              <PlayIcon data-icon="inline-start" />
+                              Continue
+                            </Button>
+                          ) : null}
+                          {["running", "paused", "cancelling"].includes(
+                            currentLiveProgress.status,
+                          ) ? (
+                            <Button
+                              className={cn(
+                                currentLiveProgress.status === "cancelling" &&
+                                  "ms-auto",
+                              )}
+                              disabled={controlPending !== null}
+                              onClick={() =>
+                                void cancelLiveSearch(currentLiveProgress.jobId)
+                              }
+                              size="sm"
+                              variant="outline"
+                            >
+                              <SquareIcon data-icon="inline-start" />
+                              Cancel
+                            </Button>
+                          ) : null}
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  {displayedLiveNotice ? (
+                    <Alert role="status">
+                      <CheckCircle2Icon />
+                      <AlertTitle>Live scan update</AlertTitle>
+                      <AlertDescription>{displayedLiveNotice}</AlertDescription>
+                    </Alert>
+                  ) : null}
+                </FieldSet>
+              </>
             ) : null}
             <ScrollArea className="h-[26rem] pe-2">
               {sourceView === "live" ? (
@@ -702,6 +817,7 @@ export function DomainsPage() {
                           key={collection.registrableDomain}
                           onClick={() => {
                             setSelectedDomain(collection.registrableDomain);
+                            setLiveDomainInput(collection.registrableDomain);
                             setLiveRecordOffset(0);
                           }}
                           variant={
@@ -791,8 +907,8 @@ export function DomainsPage() {
                         </EmptyMedia>
                         <EmptyTitle>No domains in this scope</EmptyTitle>
                         <EmptyDescription>
-                          Change the dataset or rebuild domain links from
-                          indexed records.
+                          Change the dataset or build the complete domain
+                          catalog from indexed records. No domain is required.
                         </EmptyDescription>
                         <Button
                           disabled={domainRepair.isPending}
@@ -803,7 +919,9 @@ export function DomainsPage() {
                           {domainRepair.isPending ? (
                             <Spinner data-icon="inline-start" />
                           ) : null}
-                          Rebuild links
+                          {domainRepair.isPending
+                            ? "Building all domains…"
+                            : "Build all domains"}
                         </Button>
                       </EmptyHeader>
                     </Empty>
