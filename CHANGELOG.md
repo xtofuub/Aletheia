@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Split Domains into dedicated Live-source and indexed-evidence workspaces, stream matching lines while a Live scan runs, and keep pause, continue, cancel, throughput, and progress controls visible across page navigation.
 - Restored the Efferd Dashboard 2 gradient-bar and glowing dual-line treatments for Index growth and Search activity, backed by real seven-day workspace activity and reliable hover details.
 - Separated persistent import controls from Live scan controls so searches no longer appear as active imports or block unrelated dataset actions.
 - Isolated domain reads and rebuilds from the shared application database connection, and skipped redundant first-open domain repairs when aggregate links already exist.
