@@ -170,6 +170,57 @@ test("Identity Builder reuses a saved Live source", async ({ page }) => {
   await expect(page.getByText("Live search complete")).toBeVisible();
 });
 
+test("Identity Builder scopes indexed evidence to one dataset", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const now = new Date().toISOString();
+    window.localStorage.setItem(
+      "aletheia.browser.datasets",
+      JSON.stringify([
+        {
+          id: "identity-index-one",
+          name: "Primary identity index",
+          status: "ready",
+          recordCount: 40,
+          fileCount: 1,
+          totalBytes: 1024,
+          warningCount: 0,
+          createdAt: now,
+          lastIndexedAt: now,
+        },
+        {
+          id: "identity-index-two",
+          name: "Secondary identity index",
+          status: "ready",
+          recordCount: 12,
+          fileCount: 1,
+          totalBytes: 512,
+          warningCount: 0,
+          createdAt: now,
+          lastIndexedAt: now,
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/identities");
+  await page.getByRole("tab", { name: "Build identity" }).click();
+
+  await page.getByLabel("Identity indexed dataset").click();
+  await page.getByRole("option", { name: /Secondary identity index/ }).click();
+  await expect(
+    page.getByText("12 searchable records in Secondary identity index."),
+  ).toBeVisible();
+
+  await page
+    .getByLabel("Find identity evidence")
+    .fill("synthetic@example.test");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(
+    page.getByText("Secondary identity index").first(),
+  ).toBeVisible();
+});
+
 test("Domains scans saved Live sources and stores matching lines", async ({
   page,
 }) => {

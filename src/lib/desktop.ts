@@ -980,7 +980,14 @@ export async function searchRecords(
   const requestedField =
     request.fieldType ??
     (inlineField?.[1]?.toLowerCase() as FieldType | undefined);
-  const hit = syntheticSearchHit();
+  const browserDatasets = await listDatasets();
+  const scopedDataset = request.datasetId
+    ? browserDatasets.find((dataset) => dataset.id === request.datasetId)
+    : browserDatasets[0];
+  if (request.datasetId && browserDatasets.length && !scopedDataset) {
+    return { total: 0, offset: request.offset, hits: [] };
+  }
+  const hit = syntheticSearchHit(0, scopedDataset);
   const candidates = hit.fields
     .filter((field) => !requestedField || field.fieldType === requestedField)
     .map((field) => field.displayValue.toLowerCase());
@@ -1005,7 +1012,8 @@ export async function searchRecords(
           {
             length: Math.max(0, Math.min(request.limit, 137 - request.offset)),
           },
-          (_, index) => syntheticSearchHit(request.offset + index),
+          (_, index) =>
+            syntheticSearchHit(request.offset + index, scopedDataset),
         )
       : [],
   };
@@ -1932,11 +1940,14 @@ function syntheticInspection(paths: string[] = []): InspectionResult {
   };
 }
 
-function syntheticSearchHit(index = 0): SearchHit {
+function syntheticSearchHit(
+  index = 0,
+  dataset?: Pick<DatasetSummary, "id" | "name">,
+): SearchHit {
   return {
     recordId: `record-synthetic-${index}`,
-    datasetId: "dataset-synthetic",
-    datasetName: "Authorized synthetic fixture",
+    datasetId: dataset?.id ?? "dataset-synthetic",
+    datasetName: dataset?.name ?? "Authorized synthetic fixture",
     sourceFileId: "file-synthetic",
     sourceFile: "records_valid.csv",
     sourceLocation: `line ${index + 2}`,

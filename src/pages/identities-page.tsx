@@ -81,6 +81,7 @@ import {
   applyIdentityAction,
   createManualIdentity,
   getSettings,
+  listDatasets,
   listIdentities,
   listIdentityMembers,
   listLiveSources,
@@ -110,6 +111,7 @@ export function IdentitiesPage() {
   const [memberOffset, setMemberOffset] = useState(0);
   const [manualQuery, setManualQuery] = useState("");
   const [submittedManualQuery, setSubmittedManualQuery] = useState("");
+  const [manualDatasetId, setManualDatasetId] = useState("all");
   const [manualOffset, setManualOffset] = useState(0);
   const [manualName, setManualName] = useState("");
   const [manualSelection, setManualSelection] = useState<Set<string>>(
@@ -137,6 +139,7 @@ export function IdentitiesPage() {
   } = useDirectSearchProgress();
 
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+  const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
   const identities = useQuery({
     queryKey: ["identities"],
     queryFn: listIdentities,
@@ -148,6 +151,31 @@ export function IdentitiesPage() {
   const liveSourceList = useMemo(
     () => liveSources.data ?? [],
     [liveSources.data],
+  );
+  const indexedDatasetList = useMemo(
+    () => (datasets.data ?? []).filter((dataset) => dataset.recordCount > 0),
+    [datasets.data],
+  );
+  const activeManualDatasetId = indexedDatasetList.some(
+    (dataset) => dataset.id === manualDatasetId,
+  )
+    ? manualDatasetId
+    : "all";
+  const manualDatasetOptions = useMemo(
+    () => [
+      {
+        label: `All indexed datasets (${indexedDatasetList.length})`,
+        value: "all",
+      },
+      ...indexedDatasetList.map((dataset) => ({
+        label: `${dataset.name} · ${formatCount(dataset.recordCount)} records`,
+        value: dataset.id,
+      })),
+    ],
+    [indexedDatasetList],
+  );
+  const selectedManualDataset = indexedDatasetList.find(
+    (dataset) => dataset.id === activeManualDatasetId,
   );
   const activeLiveSourceId = liveSourceList.some(
     (source) => source.id === selectedLiveSourceId,
@@ -192,17 +220,23 @@ export function IdentitiesPage() {
   });
 
   const manualResults = useQuery({
-    queryKey: ["identity-builder-search", submittedManualQuery, manualOffset],
+    queryKey: [
+      "identity-builder-search",
+      submittedManualQuery,
+      activeManualDatasetId,
+      manualOffset,
+    ],
     queryFn: () =>
       searchIdentityRecords({
         query: submittedManualQuery,
         mode: "contains",
-        datasetId: null,
+        datasetId:
+          activeManualDatasetId === "all" ? null : activeManualDatasetId,
         fieldType: null,
         offset: manualOffset,
         limit: memberLimit,
       }),
-    enabled: Boolean(submittedManualQuery),
+    enabled: Boolean(submittedManualQuery && indexedDatasetList.length),
   });
 
   const rebuild = useMutation({
@@ -700,35 +734,103 @@ export function IdentitiesPage() {
                     <form
                       onSubmit={(event) => {
                         event.preventDefault();
+                        if (!manualQuery.trim() || !indexedDatasetList.length)
+                          return;
                         setManualOffset(0);
                         setSubmittedManualQuery(manualQuery.trim());
                       }}
                     >
-                      <InputGroup>
-                        <InputGroupAddon>
-                          <SearchIcon />
-                        </InputGroupAddon>
-                        <InputGroupInput
-                          aria-label="Find identity evidence"
-                          onChange={(event) =>
-                            setManualQuery(event.target.value)
-                          }
-                          placeholder="Name, email, username, phone, or account ID"
-                          value={manualQuery}
-                        />
-                        <InputGroupAddon align="inline-end">
-                          <Button
-                            disabled={manualResults.isFetching}
-                            size="sm"
-                            type="submit"
-                          >
-                            {manualResults.isFetching ? (
-                              <Spinner data-icon="inline-start" />
-                            ) : null}
-                            {manualResults.isFetching ? "Searching…" : "Search"}
-                          </Button>
-                        </InputGroupAddon>
-                      </InputGroup>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel>1. Choose an indexed dataset</FieldLabel>
+                          <div className="flex min-w-0 items-center gap-2">
+                            <Select
+                              disabled={!indexedDatasetList.length}
+                              items={manualDatasetOptions}
+                              onValueChange={(value) => {
+                                setManualDatasetId(String(value));
+                                setManualOffset(0);
+                                setSubmittedManualQuery("");
+                              }}
+                              value={activeManualDatasetId}
+                            >
+                              <SelectTrigger
+                                aria-label="Identity indexed dataset"
+                                className="min-w-0 flex-1"
+                              >
+                                <SelectValue placeholder="Choose an indexed dataset" />
+                              </SelectTrigger>
+                              <SelectContent alignItemWithTrigger={false}>
+                                <SelectGroup>
+                                  {manualDatasetOptions.map((option) => (
+                                    <SelectItem
+                                      key={option.value}
+                                      value={option.value}
+                                    >
+                                      <DatabaseIcon />
+                                      {option.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              nativeButton={false}
+                              render={<a href="#/datasets" />}
+                              size="sm"
+                              variant="outline"
+                            >
+                              <FolderOpenIcon data-icon="inline-start" />
+                              Manage
+                            </Button>
+                          </div>
+                          <FieldDescription>
+                            {selectedManualDataset
+                              ? `${formatCount(selectedManualDataset.recordCount)} searchable records in ${selectedManualDataset.name}.`
+                              : indexedDatasetList.length
+                                ? `Search across all ${formatCount(indexedDatasetList.length)} persistent indexes.`
+                                : "Index a dataset before building an identity from indexed evidence."}
+                          </FieldDescription>
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor="identity-evidence-query">
+                            2. Search this dataset
+                          </FieldLabel>
+                          <InputGroup>
+                            <InputGroupAddon>
+                              <SearchIcon />
+                            </InputGroupAddon>
+                            <InputGroupInput
+                              aria-label="Find identity evidence"
+                              disabled={!indexedDatasetList.length}
+                              id="identity-evidence-query"
+                              onChange={(event) =>
+                                setManualQuery(event.target.value)
+                              }
+                              placeholder="Name, email, username, phone, or account ID"
+                              value={manualQuery}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <Button
+                                disabled={
+                                  !manualQuery.trim() ||
+                                  !indexedDatasetList.length ||
+                                  manualResults.isFetching
+                                }
+                                size="sm"
+                                type="submit"
+                              >
+                                {manualResults.isFetching ? (
+                                  <Spinner data-icon="inline-start" />
+                                ) : null}
+                                {manualResults.isFetching
+                                  ? "Searching…"
+                                  : "Search"}
+                              </Button>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </Field>
+                      </FieldGroup>
                     </form>
                   </CardContent>
                   <CardContent className="px-0">
