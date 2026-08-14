@@ -254,99 +254,169 @@ fn search_domain_groups(
         return Err("domain search contains unsupported characters".to_string());
     }
     let pattern = format!("{query}*");
-    let (count_sql, data_sql) = if dataset_id.is_some() {
-        (
-            "SELECT COUNT(*) FROM (
-               SELECT d.registrable_domain
-               FROM domains d
-               JOIN hostname_dataset_counts hc
-                 ON hc.hostname = d.hostname AND hc.dataset_id = ?3
-               WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
-               GROUP BY d.registrable_domain
-             )",
-            "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
-                    MAX(dc.record_count)
-             FROM domains d
-             JOIN hostname_dataset_counts hc
-               ON hc.hostname = d.hostname AND hc.dataset_id = ?3
-             JOIN domain_dataset_counts dc
-               ON dc.registrable_domain = d.registrable_domain
-              AND dc.dataset_id = ?3
-             WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
-             GROUP BY d.registrable_domain
-             ORDER BY 4 DESC, d.registrable_domain
-             LIMIT ?4 OFFSET ?5",
-        )
-    } else {
-        (
-            "SELECT COUNT(*) FROM (
-               SELECT d.registrable_domain
-               FROM domains d
-               WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
-               GROUP BY d.registrable_domain
-             )",
-            "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
-                    COALESCE(
-                      NULLIF((
-                        SELECT SUM(c.record_count)
-                        FROM domain_dataset_counts c
-                        WHERE c.registrable_domain = d.registrable_domain
-                      ), 0),
-                      SUM(d.record_count)
-                    )
-             FROM domains d
-             WHERE (?1 = '' OR d.registrable_domain GLOB ?2 OR d.hostname GLOB ?2)
-             GROUP BY d.registrable_domain
-             ORDER BY 4 DESC, d.registrable_domain
-             LIMIT ?3 OFFSET ?4",
-        )
-    };
-    let total = if let Some(dataset_id) = dataset_id {
-        connection
-            .query_row(count_sql, params![query, pattern, dataset_id], |row| {
-                row.get::<_, i64>(0)
-            })
-            .map_err(sanitized)?
-    } else {
-        connection
-            .query_row(count_sql, params![query, pattern], |row| {
-                row.get::<_, i64>(0)
-            })
-            .map_err(sanitized)?
-    };
-
-    let mut statement = connection.prepare(data_sql).map_err(sanitized)?;
     let bounded_limit = limit.clamp(1, 100) as i64;
     let bounded_offset = offset.min(i64::MAX as usize) as i64;
-    let mut rows = if let Some(dataset_id) = dataset_id {
-        statement
-            .query(params![
-                query,
-                pattern,
-                dataset_id,
-                bounded_limit,
-                bounded_offset
-            ])
-            .map_err(sanitized)?
-    } else {
-        statement
-            .query(params![query, pattern, bounded_limit, bounded_offset])
-            .map_err(sanitized)?
+    let (total, groups) = match (dataset_id, query.is_empty()) {
+        (None, true) => {
+            let total = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM (
+                       SELECT registrable_domain
+                       FROM domain_dataset_counts
+                       GROUP BY registrable_domain
+                     )",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(sanitized)?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT dc.registrable_domain,
+                            (SELECT MIN(d.public_suffix)
+                             FROM domains d
+                             WHERE d.registrable_domain = dc.registrable_domain),
+                            (SELECT COUNT(*)
+                             FROM domains d
+                             WHERE d.registrable_domain = dc.registrable_domain),
+                            SUM(dc.record_count)
+                     FROM domain_dataset_counts dc
+                     GROUP BY dc.registrable_domain
+                     ORDER BY 4 DESC, dc.registrable_domain
+                     LIMIT ?1 OFFSET ?2",
+                )
+                .map_err(sanitized)?;
+            let mut rows = statement
+                .query(params![bounded_limit, bounded_offset])
+                .map_err(sanitized)?;
+            (total, collect_domain_groups(&mut rows, bounded_limit)?)
+        }
+        (None, false) => {
+            let total = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM (
+                       SELECT d.registrable_domain
+                       FROM domains d
+                       WHERE d.registrable_domain GLOB ?1 OR d.hostname GLOB ?1
+                       GROUP BY d.registrable_domain
+                     )",
+                    [&pattern],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(sanitized)?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
+                            COALESCE(
+                              NULLIF((
+                                SELECT SUM(c.record_count)
+                                FROM domain_dataset_counts c
+                                WHERE c.registrable_domain = d.registrable_domain
+                              ), 0),
+                              SUM(d.record_count)
+                            )
+                     FROM domains d
+                     WHERE d.registrable_domain GLOB ?1 OR d.hostname GLOB ?1
+                     GROUP BY d.registrable_domain
+                     ORDER BY 4 DESC, d.registrable_domain
+                     LIMIT ?2 OFFSET ?3",
+                )
+                .map_err(sanitized)?;
+            let mut rows = statement
+                .query(params![pattern, bounded_limit, bounded_offset])
+                .map_err(sanitized)?;
+            (total, collect_domain_groups(&mut rows, bounded_limit)?)
+        }
+        (Some(dataset_id), true) => {
+            let total = connection
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM domain_dataset_counts
+                     WHERE dataset_id = ?1",
+                    [dataset_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(sanitized)?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT dc.registrable_domain,
+                            (SELECT MIN(d.public_suffix)
+                             FROM domains d
+                             WHERE d.registrable_domain = dc.registrable_domain),
+                            (SELECT COUNT(*)
+                             FROM hostname_dataset_counts hc
+                             JOIN domains d ON d.hostname = hc.hostname
+                             WHERE hc.dataset_id = dc.dataset_id
+                               AND d.registrable_domain = dc.registrable_domain),
+                            dc.record_count
+                     FROM domain_dataset_counts dc
+                     WHERE dc.dataset_id = ?1
+                     ORDER BY dc.record_count DESC, dc.registrable_domain
+                     LIMIT ?2 OFFSET ?3",
+                )
+                .map_err(sanitized)?;
+            let mut rows = statement
+                .query(params![dataset_id, bounded_limit, bounded_offset])
+                .map_err(sanitized)?;
+            (total, collect_domain_groups(&mut rows, bounded_limit)?)
+        }
+        (Some(dataset_id), false) => {
+            let total = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM (
+                       SELECT d.registrable_domain
+                       FROM domains d
+                       JOIN hostname_dataset_counts hc
+                         ON hc.hostname = d.hostname AND hc.dataset_id = ?2
+                       WHERE d.registrable_domain GLOB ?1 OR d.hostname GLOB ?1
+                       GROUP BY d.registrable_domain
+                     )",
+                    params![pattern, dataset_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(sanitized)?;
+            let mut statement = connection
+                .prepare(
+                    "SELECT d.registrable_domain, MIN(d.public_suffix), COUNT(*),
+                            MAX(dc.record_count)
+                     FROM domains d
+                     JOIN hostname_dataset_counts hc
+                       ON hc.hostname = d.hostname AND hc.dataset_id = ?2
+                     JOIN domain_dataset_counts dc
+                       ON dc.registrable_domain = d.registrable_domain
+                      AND dc.dataset_id = ?2
+                     WHERE d.registrable_domain GLOB ?1 OR d.hostname GLOB ?1
+                     GROUP BY d.registrable_domain
+                     ORDER BY 4 DESC, d.registrable_domain
+                     LIMIT ?3 OFFSET ?4",
+                )
+                .map_err(sanitized)?;
+            let mut rows = statement
+                .query(params![pattern, dataset_id, bounded_limit, bounded_offset])
+                .map_err(sanitized)?;
+            (total, collect_domain_groups(&mut rows, bounded_limit)?)
+        }
     };
-    let mut groups = Vec::with_capacity(bounded_limit as usize);
-    while let Some(row) = rows.next().map_err(sanitized)? {
-        groups.push(DomainGroupSummary {
-            registrable_domain: row.get(0).map_err(sanitized)?,
-            public_suffix: row.get(1).map_err(sanitized)?,
-            hostname_count: row.get::<_, i64>(2).map_err(sanitized)? as u64,
-            record_count: row.get::<_, i64>(3).map_err(sanitized)? as u64,
-        });
-    }
     Ok(DomainSearchResponse {
         total: total as u64,
         offset,
         groups,
     })
+}
+
+fn collect_domain_groups(
+    rows: &mut rusqlite::Rows<'_>,
+    limit: i64,
+) -> Result<Vec<DomainGroupSummary>, String> {
+    let mut groups = Vec::with_capacity(limit as usize);
+    while let Some(row) = rows.next().map_err(sanitized)? {
+        groups.push(DomainGroupSummary {
+            registrable_domain: row.get(0).map_err(sanitized)?,
+            public_suffix: row.get(1).map_err(sanitized)?,
+            hostname_count: row.get::<_, i64>(2).map_err(sanitized)?.max(0) as u64,
+            record_count: row.get::<_, i64>(3).map_err(sanitized)?.max(0) as u64,
+        });
+    }
+    Ok(groups)
 }
 
 fn load_domain_details(
@@ -457,39 +527,75 @@ fn load_domain_details(
         })
         .map_err(sanitized)?;
 
-    let record_sql = format!(
-        "SELECT r.id, d.id, d.name, sf.relative_path,
-                r.source_location, r.parser
-         FROM {link_table} domain_link
-         JOIN records r ON r.id = domain_link.record_id
-         JOIN datasets d ON d.id = r.dataset_id
-         JOIN source_files sf ON sf.id = r.source_file_id
-         WHERE domain_link.{link_column} = ?1
-           AND (?2 IS NULL OR r.dataset_id = ?2)
-         ORDER BY domain_link.record_id
-         LIMIT ?3 OFFSET ?4"
-    );
+    let record_sql = if dataset_id.is_some() {
+        format!(
+            "SELECT r.id, d.id, d.name, sf.relative_path,
+                    r.source_location, r.parser
+             FROM (
+               SELECT domain_link.record_id
+               FROM {link_table} domain_link
+               JOIN records filtered_record
+                 ON filtered_record.id = domain_link.record_id
+               WHERE domain_link.{link_column} = ?1
+                 AND filtered_record.dataset_id = ?2
+               ORDER BY domain_link.record_id
+               LIMIT ?3 OFFSET ?4
+             ) page
+             JOIN records r ON r.id = page.record_id
+             JOIN datasets d ON d.id = r.dataset_id
+             JOIN source_files sf ON sf.id = r.source_file_id
+             ORDER BY page.record_id"
+        )
+    } else {
+        format!(
+            "SELECT r.id, d.id, d.name, sf.relative_path,
+                    r.source_location, r.parser
+             FROM (
+               SELECT record_id
+               FROM {link_table}
+               WHERE {link_column} = ?1
+               ORDER BY record_id
+               LIMIT ?2 OFFSET ?3
+             ) page
+             JOIN records r ON r.id = page.record_id
+             JOIN datasets d ON d.id = r.dataset_id
+             JOIN source_files sf ON sf.id = r.source_file_id
+             ORDER BY page.record_id"
+        )
+    };
     let mut record_statement = connection.prepare(&record_sql).map_err(sanitized)?;
     let bounded_limit = record_limit.clamp(1, 100) as i64;
     let bounded_offset = record_offset.min(i64::MAX as usize) as i64;
-    let mut records = record_statement
-        .query_map(
-            params![link_value, dataset_id, bounded_limit, bounded_offset],
-            |row| {
-                Ok(DomainRecordSummary {
-                    record_id: row.get(0)?,
-                    dataset_id: row.get(1)?,
-                    dataset_name: row.get(2)?,
-                    source_file: row.get(3)?,
-                    source_location: row.get(4)?,
-                    parser: row.get(5)?,
-                    fields: Vec::new(),
-                })
-            },
-        )
-        .map_err(sanitized)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(sanitized)?;
+    let map_record = |row: &rusqlite::Row<'_>| {
+        Ok(DomainRecordSummary {
+            record_id: row.get(0)?,
+            dataset_id: row.get(1)?,
+            dataset_name: row.get(2)?,
+            source_file: row.get(3)?,
+            source_location: row.get(4)?,
+            parser: row.get(5)?,
+            fields: Vec::new(),
+        })
+    };
+    let mut records = if let Some(dataset_id) = dataset_id {
+        record_statement
+            .query_map(
+                params![link_value, dataset_id, bounded_limit, bounded_offset],
+                map_record,
+            )
+            .map_err(sanitized)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sanitized)?
+    } else {
+        record_statement
+            .query_map(
+                params![link_value, bounded_limit, bounded_offset],
+                map_record,
+            )
+            .map_err(sanitized)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sanitized)?
+    };
     drop(record_statement);
     let record_ids = records
         .iter()
@@ -1764,10 +1870,19 @@ mod tests {
             search_domain_groups(&connection, "portal", None, 0, 50).expect("domain search");
         assert_eq!(groups.total, 1);
         assert_eq!(groups.groups[0].registrable_domain, "example.co.uk");
+        let all_groups =
+            search_domain_groups(&connection, "", None, 0, 50).expect("complete domain catalog");
+        assert_eq!(all_groups.total, 1);
+        assert_eq!(all_groups.groups[0].hostname_count, 1);
+        assert_eq!(all_groups.groups[0].record_count, 1);
         let dataset_groups = search_domain_groups(&connection, "portal", Some("dataset-1"), 0, 50)
             .expect("dataset domain search");
         assert_eq!(dataset_groups.total, 1);
         assert_eq!(dataset_groups.groups[0].record_count, 1);
+        let all_dataset_groups = search_domain_groups(&connection, "", Some("dataset-1"), 0, 50)
+            .expect("complete dataset domain catalog");
+        assert_eq!(all_dataset_groups.total, 1);
+        assert_eq!(all_dataset_groups.groups[0].hostname_count, 1);
         let missing_dataset =
             search_domain_groups(&connection, "portal", Some("dataset-missing"), 0, 50)
                 .expect("missing dataset domain search");

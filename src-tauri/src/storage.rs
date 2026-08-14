@@ -27,6 +27,7 @@ const MIGRATION_V6: &str =
 const MIGRATION_V7: &str = include_str!("../migrations/0007_identity_live_evidence.sql");
 const MIGRATION_V8: &str = include_str!("../migrations/0008_live_sources.sql");
 const MIGRATION_V9: &str = include_str!("../migrations/0009_live_domain_evidence.sql");
+const MIGRATION_V10: &str = include_str!("../migrations/0010_domain_query_indexes.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -297,6 +298,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 10 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V10)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (10)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -556,7 +566,20 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("live source tables");
-        assert_eq!(version, 9);
+        let domain_query_index_count: i64 = upgraded
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index'
+                   AND name IN (
+                     'domain_dataset_counts_dataset_records_idx',
+                     'hostname_dataset_counts_dataset_hostname_idx'
+                   )",
+                [],
+                |row| row.get(0),
+            )
+            .expect("domain query indexes");
+        assert_eq!(version, 10);
         assert_eq!(live_table_count, 3);
+        assert_eq!(domain_query_index_count, 2);
     }
 }
