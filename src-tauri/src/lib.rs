@@ -1,5 +1,5 @@
 pub mod detection;
-mod direct_scan;
+pub mod direct_scan;
 pub mod domain_analysis;
 mod export_cleanup;
 mod importer;

@@ -6,6 +6,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -37,9 +38,12 @@ const MAX_LINE_BYTES: usize = 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 100_000;
 const MAX_DECOMPRESSION_RATIO: u64 = 250;
 const MIN_DECOMPRESSION_LIMIT: u64 = 8 * 1024 * 1024 * 1024;
-const HIT_BATCH_SIZE: usize = 20;
+const HIT_BATCH_SIZE: usize = 128;
 const PROGRESS_EMIT_INTERVAL_MS: u64 = 250;
 const PROGRESS_BYTE_INTERVAL: u64 = 1024 * 1024;
+const PLAIN_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+const PARALLEL_PLAIN_THRESHOLD: u64 = 128 * 1024 * 1024;
+const RAW_EXCERPT_BYTES: usize = 1024;
 
 static SECRET_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(password|passwd|pwd|token|cookie|secret|api[_-]?key)\s*[:=]\s*[^\s,;|]+")
@@ -114,6 +118,7 @@ struct Candidate {
 
 struct CandidateSourceProgress {
     total_bytes: u64,
+    physical_bytes: AtomicU64,
     reported_bytes: AtomicU64,
     decoded_bytes: AtomicU64,
     decoded_total_bytes: AtomicU64,
@@ -123,6 +128,7 @@ impl CandidateSourceProgress {
     fn new(total_bytes: u64) -> Self {
         Self {
             total_bytes,
+            physical_bytes: AtomicU64::new(0),
             reported_bytes: AtomicU64::new(0),
             decoded_bytes: AtomicU64::new(0),
             decoded_total_bytes: AtomicU64::new(0),
@@ -159,8 +165,11 @@ impl CandidateSourceProgress {
         if bytes == 0 {
             return;
         }
-        let current = self.reported_bytes.load(Ordering::Relaxed);
-        let added = self.advance_to(current.saturating_add(bytes), false);
+        let target = self
+            .physical_bytes
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes);
+        let added = self.advance_to(target, false);
         shared.add_source_bytes(added);
     }
 
@@ -367,38 +376,6 @@ impl QueryMatcher {
             };
             matches.then_some(*index)
         })
-    }
-
-    fn could_match_block(&self, block: &[u8]) -> bool {
-        if let Some((matcher, pattern_count)) = &self.flexible_name {
-            let mut found = 0_u8;
-            for matched in matcher.find_iter(block) {
-                found |= 1_u8 << matched.pattern().as_usize();
-                if found.count_ones() as usize == *pattern_count {
-                    return true;
-                }
-            }
-            return false;
-        }
-        if self
-            .literal
-            .as_ref()
-            .is_some_and(|matcher| matcher.is_match(block))
-        {
-            return true;
-        }
-        if self.unicode_queries.is_empty() {
-            return false;
-        }
-        let text = String::from_utf8_lossy(block);
-        let haystack = if self.case_sensitive {
-            text.into_owned()
-        } else {
-            text.to_lowercase()
-        };
-        self.unicode_queries
-            .iter()
-            .any(|(_, needle)| haystack.contains(needle))
     }
 
     fn is_flexible_name(&self) -> bool {
@@ -879,15 +856,399 @@ fn scan_plain(
 ) -> Result<(), String> {
     let file = File::open(&candidate.path)
         .map_err(|_| "a source could not be opened read-only".to_string())?;
-    scan_reader(
-        BufReader::with_capacity(1024 * 1024, file),
-        &candidate.path.to_string_lossy(),
-        &file_name(&candidate.path),
-        None,
-        true,
-        shared,
-        source_progress,
+    let workers = if candidate.size >= PARALLEL_PLAIN_THRESHOLD && shared.source_count == 1 {
+        shared.request.worker_limit.clamp(1, 8)
+    } else {
+        1
+    };
+    if workers == 1 {
+        scan_plain_sequential(file, candidate, shared, source_progress)
+    } else {
+        scan_plain_parallel(file, candidate, shared, source_progress, workers)
+    }
+}
+
+struct PlainBlock {
+    bytes: Vec<u8>,
+    start_line: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlainMatch {
+    line_start: usize,
+    line_end: usize,
+    line_number: u64,
+    query_index: usize,
+}
+
+fn scan_plain_sequential(
+    file: File,
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) -> Result<(), String> {
+    read_plain_blocks(file, shared, source_progress, |block| {
+        scan_plain_block(&block, candidate, shared, source_progress);
+        Ok(())
+    })
+}
+
+fn scan_plain_parallel(
+    file: File,
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+    workers: usize,
+) -> Result<(), String> {
+    let (sender, receiver) = mpsc::sync_channel::<PlainBlock>(workers.saturating_mul(2));
+    let receiver = Arc::new(Mutex::new(receiver));
+    let mut read_result = Ok(());
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            let receiver = Arc::clone(&receiver);
+            let shared = Arc::clone(shared);
+            let source_progress = Arc::clone(source_progress);
+            scope.spawn(move || {
+                loop {
+                    if !shared.wait_until_running() {
+                        break;
+                    }
+                    let block = match receiver.lock() {
+                        Ok(receiver) => receiver.recv().ok(),
+                        Err(_) => None,
+                    };
+                    let Some(block) = block else { break };
+                    scan_plain_block(&block, candidate, &shared, &source_progress);
+                }
+            });
+        }
+        read_result = read_plain_blocks(file, shared, source_progress, |block| {
+            sender
+                .send(block)
+                .map_err(|_| "live search workers stopped".to_string())
+        });
+        drop(sender);
+    });
+    if shared.should_stop() {
+        Ok(())
+    } else {
+        read_result
+    }
+}
+
+fn read_plain_blocks<F>(
+    file: File,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+    consume: F,
+) -> Result<(), String>
+where
+    F: FnMut(PlainBlock) -> Result<(), String>,
+{
+    read_plain_blocks_from(
+        file,
+        PLAIN_CHUNK_BYTES,
+        || shared.wait_until_running(),
+        |bytes| account_plain_bytes(bytes, shared, source_progress),
+        consume,
     )
+}
+
+fn read_plain_blocks_from<R, C, A, F>(
+    mut reader: R,
+    chunk_bytes: usize,
+    mut should_continue: C,
+    mut account_discarded: A,
+    mut consume: F,
+) -> Result<(), String>
+where
+    R: Read,
+    C: FnMut() -> bool,
+    A: FnMut(u64),
+    F: FnMut(PlainBlock) -> Result<(), String>,
+{
+    let chunk_bytes = chunk_bytes.max(1);
+    let mut read_buffer = vec![0_u8; chunk_bytes];
+    let mut pending = Vec::with_capacity(chunk_bytes.saturating_add(MAX_LINE_BYTES));
+    let mut start_line = 1_u64;
+    let mut discarding_long_line = false;
+
+    loop {
+        if !should_continue() {
+            break;
+        }
+        let bytes_read = reader
+            .read(&mut read_buffer)
+            .map_err(|_| "source read failed".to_string())?;
+        if bytes_read == 0 {
+            break;
+        }
+        let mut incoming = &read_buffer[..bytes_read];
+        if discarding_long_line {
+            if let Some(newline) = memchr::memchr(b'\n', incoming) {
+                account_discarded((newline + 1) as u64);
+                start_line = start_line.saturating_add(1);
+                incoming = &incoming[newline + 1..];
+                discarding_long_line = false;
+            } else {
+                account_discarded(incoming.len() as u64);
+                continue;
+            }
+        }
+        pending.extend_from_slice(incoming);
+
+        if let Some(last_newline) = memchr::memrchr(b'\n', &pending) {
+            let tail = pending.split_off(last_newline + 1);
+            let complete = std::mem::replace(&mut pending, tail);
+            let line_count = memchr::memchr_iter(b'\n', &complete).count() as u64;
+            consume(PlainBlock {
+                bytes: complete,
+                start_line,
+            })?;
+            start_line = start_line.saturating_add(line_count);
+        } else if pending.len() > MAX_LINE_BYTES {
+            account_discarded(pending.len() as u64);
+            pending.clear();
+            discarding_long_line = true;
+        }
+    }
+
+    if should_continue() && !discarding_long_line && !pending.is_empty() {
+        consume(PlainBlock {
+            bytes: pending,
+            start_line,
+        })?;
+    }
+    Ok(())
+}
+
+fn scan_plain_block(
+    block: &PlainBlock,
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) {
+    if !shared.should_stop() {
+        let source_path = candidate.path.to_string_lossy();
+        let source_file = file_name(&candidate.path);
+        let mut hits = Vec::with_capacity(HIT_BATCH_SIZE);
+        for matched in find_plain_matches(
+            &block.bytes,
+            block.start_line,
+            &shared.matcher,
+            shared.request.max_results,
+        ) {
+            if shared.should_stop() {
+                break;
+            }
+            let line = block.bytes[matched.line_start..matched.line_end]
+                .strip_suffix(b"\r")
+                .unwrap_or(&block.bytes[matched.line_start..matched.line_end]);
+            if let Some(hit) = make_hit(
+                &source_path,
+                &source_file,
+                None,
+                matched.line_number,
+                line,
+                matched.query_index,
+                shared,
+            ) {
+                hits.push(hit);
+                if hits.len() >= HIT_BATCH_SIZE {
+                    shared.emit(
+                        "running",
+                        Some(source_file.clone()),
+                        "Matches found",
+                        std::mem::take(&mut hits),
+                    );
+                }
+            }
+        }
+        if !hits.is_empty() {
+            shared.emit("running", Some(source_file), "Matches found", hits);
+        }
+    }
+    account_plain_bytes(block.bytes.len() as u64, shared, source_progress);
+}
+
+fn find_plain_matches(
+    block: &[u8],
+    start_line: u64,
+    matcher: &QueryMatcher,
+    limit: usize,
+) -> Vec<PlainMatch> {
+    if !matcher.unicode_queries.is_empty() {
+        return find_plain_matches_by_line(block, start_line, matcher, limit);
+    }
+    if let Some((candidate_matcher, _)) = &matcher.flexible_name {
+        return find_plain_matches_at_offsets(
+            block,
+            start_line,
+            matcher,
+            candidate_matcher
+                .find_iter(block)
+                .map(|matched| matched.start()),
+            limit,
+        );
+    }
+    if let Some(candidate_matcher) = &matcher.literal {
+        return find_plain_matches_at_offsets(
+            block,
+            start_line,
+            matcher,
+            candidate_matcher
+                .find_iter(block)
+                .map(|matched| matched.start()),
+            limit,
+        );
+    }
+    Vec::new()
+}
+
+fn find_plain_matches_at_offsets<I>(
+    block: &[u8],
+    start_line: u64,
+    matcher: &QueryMatcher,
+    offsets: I,
+    limit: usize,
+) -> Vec<PlainMatch>
+where
+    I: Iterator<Item = usize>,
+{
+    let mut matches = Vec::new();
+    let mut last_line_start = usize::MAX;
+    let mut line_cursor = 0_usize;
+    let mut line_number = start_line;
+    for offset in offsets {
+        if matches.len() >= limit {
+            break;
+        }
+        let line_start = memchr::memrchr(b'\n', &block[..offset]).map_or(0, |newline| newline + 1);
+        if line_start == last_line_start {
+            continue;
+        }
+        last_line_start = line_start;
+        line_number = line_number.saturating_add(
+            memchr::memchr_iter(b'\n', &block[line_cursor..line_start]).count() as u64,
+        );
+        line_cursor = line_start;
+        let line_end = memchr::memchr(b'\n', &block[line_start..])
+            .map_or(block.len(), |newline| line_start + newline);
+        let line = block[line_start..line_end]
+            .strip_suffix(b"\r")
+            .unwrap_or(&block[line_start..line_end]);
+        if line.len() > MAX_LINE_BYTES {
+            continue;
+        }
+        if let Some(query_index) = matcher.find_match(line) {
+            matches.push(PlainMatch {
+                line_start,
+                line_end,
+                line_number,
+                query_index,
+            });
+        }
+    }
+    matches
+}
+
+fn find_plain_matches_by_line(
+    block: &[u8],
+    start_line: u64,
+    matcher: &QueryMatcher,
+    limit: usize,
+) -> Vec<PlainMatch> {
+    let mut start = 0_usize;
+    let mut line_number = start_line;
+    let mut matches = Vec::new();
+    while start < block.len() && matches.len() < limit {
+        let end =
+            memchr::memchr(b'\n', &block[start..]).map_or(block.len(), |newline| start + newline);
+        let line = block[start..end]
+            .strip_suffix(b"\r")
+            .unwrap_or(&block[start..end]);
+        if line.len() <= MAX_LINE_BYTES
+            && let Some(query_index) = matcher.find_match(line)
+        {
+            matches.push(PlainMatch {
+                line_start: start,
+                line_end: end,
+                line_number,
+                query_index,
+            });
+        }
+        if end == block.len() {
+            break;
+        }
+        start = end + 1;
+        line_number = line_number.saturating_add(1);
+    }
+    matches
+}
+
+#[doc(hidden)]
+pub fn benchmark_plain_scan_bytes(
+    bytes: &[u8],
+    query: &str,
+    mode: SearchMode,
+    case_sensitive: bool,
+    workers: usize,
+) -> Result<usize, String> {
+    let matcher = QueryMatcher::new(query, mode, case_sensitive)?;
+    let mut chunks = Vec::new();
+    let mut start = 0_usize;
+    while start < bytes.len() {
+        let desired_end = start.saturating_add(PLAIN_CHUNK_BYTES).min(bytes.len());
+        let end = if desired_end == bytes.len() {
+            desired_end
+        } else {
+            memchr::memchr(b'\n', &bytes[desired_end..])
+                .map_or(bytes.len(), |newline| desired_end + newline + 1)
+        };
+        chunks.push(&bytes[start..end]);
+        start = end;
+    }
+    if workers <= 1 || chunks.len() <= 1 {
+        return Ok(chunks
+            .iter()
+            .map(|chunk| find_plain_matches(chunk, 1, &matcher, usize::MAX).len())
+            .sum());
+    }
+    let next = AtomicUsize::new(0);
+    let total = AtomicUsize::new(0);
+    thread::scope(|scope| {
+        for _ in 0..workers.clamp(1, 8) {
+            let chunks = &chunks;
+            let matcher = &matcher;
+            let next = &next;
+            let total = &total;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(chunk) = chunks.get(index) else {
+                        break;
+                    };
+                    total.fetch_add(
+                        find_plain_matches(chunk, 1, matcher, usize::MAX).len(),
+                        Ordering::Relaxed,
+                    );
+                }
+            });
+        }
+    });
+    Ok(total.load(Ordering::Relaxed))
+}
+
+fn account_plain_bytes(
+    bytes: u64,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) {
+    shared.add_content_bytes(bytes);
+    source_progress.add_physical_bytes(bytes, shared);
+    if bytes >= PROGRESS_BYTE_INTERVAL {
+        shared.emit("running", None, "Scanning local sources", Vec::new());
+    }
 }
 
 fn scan_gzip(
@@ -1044,32 +1405,6 @@ fn scan_reader<R: BufRead>(
         if !shared.wait_until_running() {
             break;
         }
-        let skippable = {
-            let available = reader
-                .fill_buf()
-                .map_err(|_| "source read failed".to_string())?;
-            skippable_complete_prefix(available, &shared.matcher)
-        };
-        if let Some((bytes, lines)) = skippable {
-            reader.consume(bytes);
-            let bytes = bytes as u64;
-            line_number = line_number.saturating_add(lines as u64);
-            shared.add_content_bytes(bytes);
-            bytes_since_progress = bytes_since_progress.saturating_add(bytes);
-            if track_source_bytes {
-                source_progress.add_physical_bytes(bytes, shared);
-            }
-            if bytes_since_progress >= PROGRESS_BYTE_INTERVAL {
-                shared.emit(
-                    "running",
-                    Some(source_file.to_string()),
-                    "Scanning local sources",
-                    Vec::new(),
-                );
-                bytes_since_progress = 0;
-            }
-            continue;
-        }
         let (bytes, exceeded) = read_bounded_line(&mut reader, &mut line)?;
         if bytes == 0 {
             break;
@@ -1092,14 +1427,17 @@ fn scan_reader<R: BufRead>(
         if exceeded || line.is_empty() {
             continue;
         }
-        if let Some(hit) = make_hit(
-            source_path,
-            source_file,
-            archive_entry.as_deref(),
-            line_number,
-            &line,
-            shared,
-        ) {
+        if let Some(query_index) = shared.matcher.find_match(&line)
+            && let Some(hit) = make_hit(
+                source_path,
+                source_file,
+                archive_entry.as_deref(),
+                line_number,
+                &line,
+                query_index,
+                shared,
+            )
+        {
             hits.push(hit);
             if hits.len() >= HIT_BATCH_SIZE {
                 shared.emit(
@@ -1120,15 +1458,6 @@ fn scan_reader<R: BufRead>(
         );
     }
     Ok(())
-}
-
-fn skippable_complete_prefix(block: &[u8], matcher: &QueryMatcher) -> Option<(usize, usize)> {
-    let end = memchr::memrchr(b'\n', block)?.saturating_add(1);
-    let complete_lines = &block[..end];
-    if matcher.could_match_block(complete_lines) {
-        return None;
-    }
-    Some((end, memchr::memchr_iter(b'\n', complete_lines).count()))
 }
 
 fn read_bounded_line<R: BufRead>(
@@ -1172,9 +1501,9 @@ fn make_hit(
     archive_entry: Option<&str>,
     line_number: u64,
     line: &[u8],
+    query_index: usize,
     shared: &Arc<SharedScan>,
 ) -> Option<DirectSearchHit> {
-    let query_index = shared.matcher.find_match(line)?;
     if !shared.reserve_hit() {
         return None;
     }
@@ -1184,7 +1513,11 @@ fn make_hit(
         source_file: source_file.to_string(),
         archive_entry: archive_entry.map(ToString::to_string),
         source_location: format!("line {line_number}"),
-        excerpt: display_excerpt(&String::from_utf8_lossy(line)),
+        excerpt: display_excerpt(
+            line,
+            shared.matcher.query(query_index),
+            shared.matcher.case_sensitive,
+        ),
         match_reason: if shared.matcher.is_flexible_name() {
             "Name tokens found"
         } else if shared.matcher.query_count() > 1 {
@@ -1221,7 +1554,22 @@ fn field_tokens(value: &str) -> impl Iterator<Item = &str> {
         .filter(|token| !token.is_empty())
 }
 
-fn display_excerpt(value: &str) -> String {
+fn display_excerpt(line: &[u8], query: &str, case_sensitive: bool) -> String {
+    let query_bytes = query.as_bytes();
+    let match_start = if query.is_ascii() {
+        if case_sensitive {
+            memchr::memmem::find(line, query_bytes)
+        } else {
+            line.windows(query_bytes.len().max(1))
+                .position(|window| window.eq_ignore_ascii_case(query_bytes))
+        }
+    } else {
+        None
+    }
+    .unwrap_or(0);
+    let start = match_start.saturating_sub(RAW_EXCERPT_BYTES / 3);
+    let end = start.saturating_add(RAW_EXCERPT_BYTES).min(line.len());
+    let value = String::from_utf8_lossy(&line[start..end]);
     let normalized: String = value
         .chars()
         .map(|character| {
@@ -1234,9 +1582,28 @@ fn display_excerpt(value: &str) -> String {
         .collect();
     let secrets = SECRET_PATTERN.replace_all(&normalized, "");
     let pairs = EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, "$1");
-    let compact = pairs.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut excerpt: String = compact.chars().take(360).collect();
-    if compact.chars().count() > 360 {
+    let mut excerpt = String::with_capacity(361);
+    let mut character_count = 0_usize;
+    let mut pending_space = false;
+    let mut truncated = end < line.len();
+    for character in pairs.chars() {
+        if character.is_whitespace() {
+            pending_space = !excerpt.is_empty();
+            continue;
+        }
+        if pending_space && character_count < 360 {
+            excerpt.push(' ');
+            character_count += 1;
+        }
+        pending_space = false;
+        if character_count >= 360 {
+            truncated = true;
+            break;
+        }
+        excerpt.push(character);
+        character_count += 1;
+    }
+    if truncated {
         excerpt.push('…');
     }
     excerpt
@@ -1282,14 +1649,17 @@ impl RarLineWriter {
             self.pending.pop();
         }
         self.line_number += 1;
-        if let Some(hit) = make_hit(
-            &self.source_path,
-            &self.source_file,
-            Some(&self.archive_entry),
-            self.line_number,
-            &self.pending,
-            &self.shared,
-        ) {
+        if let Some(query_index) = self.shared.matcher.find_match(&self.pending)
+            && let Some(hit) = make_hit(
+                &self.source_path,
+                &self.source_file,
+                Some(&self.archive_entry),
+                self.line_number,
+                &self.pending,
+                query_index,
+                &self.shared,
+            )
+        {
             self.hits.push(hit);
             if self.hits.len() >= HIT_BATCH_SIZE {
                 self.shared.emit(
@@ -1402,7 +1772,8 @@ fn file_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        io::{BufRead, BufReader, Read, Write},
+        cell::Cell,
+        io::{Cursor, Read, Write},
         path::Path,
         sync::{
             Arc, Mutex,
@@ -1418,8 +1789,7 @@ mod tests {
     use super::{
         ArchiveReader, CandidateSourceProgress, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher,
         active_elapsed_ms, display_excerpt, estimate_remaining_ms, extension, field_tokens,
-        is_text_extension, line_matches, parse_queries, read_bounded_line,
-        skippable_complete_prefix,
+        find_plain_matches, is_text_extension, line_matches, parse_queries, read_plain_blocks_from,
     };
     use crate::models::SearchMode;
 
@@ -1504,28 +1874,131 @@ mod tests {
     }
 
     #[test]
-    fn block_prefilter_skips_complete_nonmatching_lines_without_crossing_a_tail() {
-        let matcher = QueryMatcher::new(
-            "needle@example.test\nportal.example.test",
-            SearchMode::Contains,
-            false,
-        )
-        .expect("batch matcher");
-        let block = b"first absent line\nsecond absent line\npartial tail";
-        assert_eq!(skippable_complete_prefix(block, &matcher), Some((37, 2)));
-        assert!(
-            skippable_complete_prefix(
-                b"first absent line\nneedle@example.test appears here\n",
-                &matcher,
-            )
-            .is_none()
-        );
-        let name_matcher =
-            QueryMatcher::new("Jane Doe", SearchMode::Contains, false).expect("name matcher");
+    fn chunk_scanner_preserves_lines_newlines_and_invalid_utf8() {
+        let matcher = QueryMatcher::new("needle", SearchMode::Contains, false).expect("matcher");
+        let block = b"needle first\r\nabsent\ninvalid-\xff-NEEDLE\nlast needle";
+        let matches = find_plain_matches(block, 1, &matcher, 20);
         assert_eq!(
-            skippable_complete_prefix(b"unrelated generated row\n", &name_matcher),
-            Some((24, 1))
+            matches
+                .iter()
+                .map(|matched| matched.line_number)
+                .collect::<Vec<_>>(),
+            vec![1, 3, 4]
         );
+    }
+
+    #[test]
+    fn chunk_scanner_keeps_exact_prefix_and_unicode_semantics() {
+        let block = "prefix=value\nfield=exact\nlabel=Grüße\nnotexactly\n".as_bytes();
+        let prefix = QueryMatcher::new("val", SearchMode::Prefix, false).expect("prefix matcher");
+        let exact = QueryMatcher::new("exact", SearchMode::Exact, false).expect("exact matcher");
+        let unicode =
+            QueryMatcher::new("grüße", SearchMode::Contains, false).expect("unicode matcher");
+        assert_eq!(find_plain_matches(block, 1, &prefix, 20)[0].line_number, 1);
+        assert_eq!(find_plain_matches(block, 1, &exact, 20)[0].line_number, 2);
+        assert_eq!(find_plain_matches(block, 1, &unicode, 20)[0].line_number, 3);
+    }
+
+    #[test]
+    fn adjacent_chunks_do_not_duplicate_boundary_lines() {
+        let matcher = QueryMatcher::new("needle", SearchMode::Contains, false).expect("matcher");
+        let first = find_plain_matches(b"first needle\nsecond\n", 1, &matcher, 20);
+        let second = find_plain_matches(b"third needle\nfourth needle", 3, &matcher, 20);
+        let lines = first
+            .into_iter()
+            .chain(second)
+            .map(|matched| matched.line_number)
+            .collect::<Vec<_>>();
+        assert_eq!(lines, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn block_reader_aligns_small_reads_without_missing_the_final_line() {
+        let source = b"first\r\nsecond needle\nthird\nfourth needle";
+        let mut blocks = Vec::new();
+        let mut discarded = 0_u64;
+        read_plain_blocks_from(
+            Cursor::new(source),
+            7,
+            || true,
+            |bytes| discarded = discarded.saturating_add(bytes),
+            |block| {
+                blocks.push(block);
+                Ok(())
+            },
+        )
+        .expect("split plain source");
+        assert_eq!(discarded, 0);
+        assert_eq!(
+            blocks
+                .iter()
+                .flat_map(|block| block.bytes.iter().copied())
+                .collect::<Vec<_>>(),
+            source
+        );
+        let matcher = QueryMatcher::new("needle", SearchMode::Contains, false).expect("matcher");
+        let lines = blocks
+            .iter()
+            .flat_map(|block| find_plain_matches(&block.bytes, block.start_line, &matcher, 20))
+            .map(|matched| matched.line_number)
+            .collect::<Vec<_>>();
+        assert_eq!(lines, vec![2, 4]);
+    }
+
+    #[test]
+    fn block_reader_stops_at_a_cancellation_boundary() {
+        let checks = Cell::new(0_usize);
+        let mut scanned = 0_usize;
+        read_plain_blocks_from(
+            Cursor::new(b"one\ntwo\nthree\nfour\n"),
+            4,
+            || {
+                let current = checks.get();
+                checks.set(current + 1);
+                current < 2
+            },
+            |_| {},
+            |block| {
+                scanned = scanned.saturating_add(block.bytes.len());
+                Ok(())
+            },
+        )
+        .expect("cancelled read");
+        assert!(scanned < b"one\ntwo\nthree\nfour\n".len());
+    }
+
+    #[test]
+    fn one_two_four_and_eight_workers_find_the_same_plain_matches() {
+        let line = b"needle|synthetic\nabsent|synthetic\n";
+        let mut source = Vec::with_capacity(super::PLAIN_CHUNK_BYTES + line.len());
+        while source.len() <= super::PLAIN_CHUNK_BYTES {
+            source.extend_from_slice(line);
+        }
+        let expected = memchr::memmem::find_iter(&source, b"needle").count();
+        for workers in [1, 2, 4, 8] {
+            assert_eq!(
+                super::benchmark_plain_scan_bytes(
+                    &source,
+                    "needle",
+                    SearchMode::Contains,
+                    false,
+                    workers,
+                )
+                .expect("parallel benchmark scan"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_scanner_bounds_long_lines_and_common_matches() {
+        let matcher = QueryMatcher::new("needle", SearchMode::Contains, false).expect("matcher");
+        let mut long_line = vec![b'x'; MAX_LINE_BYTES + 1];
+        long_line.extend_from_slice(b"needle\nneedle\nneedle\n");
+        let matches = find_plain_matches(&long_line, 1, &matcher, 2);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].line_number, 2);
+        assert_eq!(matches[1].line_number, 3);
     }
 
     #[test]
@@ -1539,40 +2012,6 @@ mod tests {
     fn paused_time_does_not_reduce_reported_scan_throughput() {
         assert_eq!(active_elapsed_ms(10_000, 2_000, 3_000), 5_000);
         assert_eq!(active_elapsed_ms(1_000, 2_000, 0), 0);
-    }
-
-    struct RepeatingScanReader {
-        pattern: Vec<u8>,
-        offset: usize,
-        remaining: u64,
-    }
-
-    impl RepeatingScanReader {
-        fn new(total_bytes: u64) -> Self {
-            Self {
-                pattern: b"user-0000000000|person-0000000000@example.test|synthetic-value\n"
-                    .to_vec(),
-                offset: 0,
-                remaining: total_bytes,
-            }
-        }
-    }
-
-    impl Read for RepeatingScanReader {
-        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            let requested = buffer.len().min(self.remaining as usize);
-            let mut written = 0;
-            while written < requested {
-                let available = self.pattern.len() - self.offset;
-                let copy = available.min(requested - written);
-                buffer[written..written + copy]
-                    .copy_from_slice(&self.pattern[self.offset..self.offset + copy]);
-                written += copy;
-                self.offset = (self.offset + copy) % self.pattern.len();
-            }
-            self.remaining = self.remaining.saturating_sub(written as u64);
-            Ok(written)
-        }
     }
 
     #[test]
@@ -1589,45 +2028,65 @@ mod tests {
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(MAX_QUERY_COUNT)
             .clamp(1, MAX_QUERY_COUNT);
-        let source = RepeatingScanReader::new(target_bytes);
-        let mut reader = BufReader::with_capacity(1024 * 1024, source);
         let queries = (0..query_count)
             .map(|index| format!("absent-{index:04}@example.test"))
             .collect::<Vec<_>>()
             .join("\n");
         let matcher =
             QueryMatcher::new(&queries, SearchMode::Contains, false).expect("soak matcher");
-        let mut line = Vec::with_capacity(4096);
+        let pattern = b"user-0000000000|person-0000000000@example.test|synthetic-value\n";
+        let mut block = Vec::with_capacity(super::PLAIN_CHUNK_BYTES);
+        while block.len() + pattern.len() <= super::PLAIN_CHUNK_BYTES {
+            block.extend_from_slice(pattern);
+        }
         let mut consumed = 0_u64;
         let mut lines = 0_u64;
         let started = Instant::now();
         while consumed < target_bytes {
-            let skippable = {
-                let available = reader.fill_buf().expect("generated scan buffer");
-                skippable_complete_prefix(available, &matcher)
-            };
-            if let Some((bytes, skipped_lines)) = skippable {
-                reader.consume(bytes);
-                consumed = consumed.saturating_add(bytes as u64);
-                lines = lines.saturating_add(skipped_lines as u64);
-                continue;
-            }
-            let (bytes, exceeded) = read_bounded_line(&mut reader, &mut line).expect("scan line");
-            if bytes == 0 {
-                break;
-            }
-            assert!(!exceeded);
-            consumed = consumed.saturating_add(bytes);
-            lines += 1;
-            assert!(matcher.find_match(&line).is_none());
+            let remaining = target_bytes.saturating_sub(consumed) as usize;
+            let current = &block[..remaining.min(block.len())];
+            assert!(find_plain_matches(current, 1, &matcher, 1).is_empty());
+            consumed = consumed.saturating_add(current.len() as u64);
+            lines = lines.saturating_add(memchr::memchr_iter(b'\n', current).count() as u64);
         }
         let elapsed = started.elapsed();
         assert_eq!(consumed, target_bytes);
-        assert!(line.capacity() <= MAX_LINE_BYTES + 2);
         eprintln!(
             "scanned {gibibytes} GiB / {lines} generated lines against {query_count} queries in {:.2?} ({:.1} MiB/s)",
             elapsed,
             consumed as f64 / 1024.0 / 1024.0 / elapsed.as_secs_f64()
+        );
+    }
+
+    #[test]
+    #[ignore = "manual authorized plain-file read-only throughput probe"]
+    fn authorized_plain_stream_probe() {
+        let path = std::env::var("ALETHEIA_PLAIN_PROBE_PATH")
+            .expect("set ALETHEIA_PLAIN_PROBE_PATH to an authorized plain source");
+        let mut file = std::fs::File::open(path).expect("open authorized source read-only");
+        let matcher = QueryMatcher::new(
+            "aletheia-guaranteed-absent-synthetic-probe.invalid",
+            SearchMode::Contains,
+            false,
+        )
+        .expect("probe matcher");
+        let mut buffer = vec![0_u8; super::PLAIN_CHUNK_BYTES];
+        let mut bytes = 0_u64;
+        let started = Instant::now();
+        loop {
+            let read = file.read(&mut buffer).expect("read authorized source");
+            if read == 0 {
+                break;
+            }
+            assert!(find_plain_matches(&buffer[..read], 1, &matcher, 1).is_empty());
+            bytes = bytes.saturating_add(read as u64);
+        }
+        let elapsed = started.elapsed();
+        assert!(bytes > 0);
+        eprintln!(
+            "plain source probe: {bytes} bytes in {:.3}s ({:.1} MiB/s)",
+            elapsed.as_secs_f64(),
+            bytes as f64 / 1024.0 / 1024.0 / elapsed.as_secs_f64()
         );
     }
 
@@ -1732,7 +2191,9 @@ mod tests {
     #[test]
     fn excerpts_show_identifiers_and_drop_secret_values() {
         let excerpt = display_excerpt(
-            "synthetic@example.com:invented-value password=invented-secret +1 202 555 0142",
+            b"synthetic@example.com:invented-value password=invented-secret +1 202 555 0142",
+            "synthetic@example.com",
+            false,
         );
         assert!(excerpt.contains("synthetic@example.com"));
         assert!(excerpt.contains("+1 202 555 0142"));
