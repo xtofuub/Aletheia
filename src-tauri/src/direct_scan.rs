@@ -60,6 +60,8 @@ pub struct DirectSearchRequest {
     pub paths: Vec<String>,
     pub query: String,
     pub mode: SearchMode,
+    #[serde(default)]
+    pub domain_match: bool,
     pub case_sensitive: bool,
     pub include_archives: bool,
     pub max_results: usize,
@@ -257,17 +259,32 @@ struct QueryMatcher {
     flexible_name: Option<(AhoCorasick, usize)>,
     queries: Vec<String>,
     mode: SearchMode,
+    domain_match: bool,
     case_sensitive: bool,
 }
 
 impl QueryMatcher {
     fn new(query: &str, mode: SearchMode, case_sensitive: bool) -> Result<Self, String> {
+        Self::compile(query, mode, case_sensitive, false)
+    }
+
+    fn for_domain(query: &str, mode: SearchMode, case_sensitive: bool) -> Result<Self, String> {
+        Self::compile(query, mode, case_sensitive, true)
+    }
+
+    fn compile(
+        query: &str,
+        mode: SearchMode,
+        case_sensitive: bool,
+        domain_match: bool,
+    ) -> Result<Self, String> {
         let queries = parse_queries(query, case_sensitive)?;
-        let name_tokens = if queries.len() == 1 && matches!(mode, SearchMode::Contains) {
-            flexible_ascii_name_tokens(&queries[0])
-        } else {
-            None
-        };
+        let name_tokens =
+            if !domain_match && queries.len() == 1 && matches!(mode, SearchMode::Contains) {
+                flexible_ascii_name_tokens(&queries[0])
+            } else {
+                None
+            };
         let flexible_name = name_tokens
             .as_ref()
             .map(|tokens| {
@@ -321,6 +338,7 @@ impl QueryMatcher {
             flexible_name,
             queries,
             mode,
+            domain_match,
             case_sensitive,
         })
     }
@@ -338,15 +356,19 @@ impl QueryMatcher {
         }
         if let Some(literal) = &self.literal {
             for matched in literal.find_iter(line) {
-                let valid = match self.mode {
-                    SearchMode::Contains => true,
-                    SearchMode::Prefix => {
-                        matched.start() == 0 || is_field_boundary(line[matched.start() - 1])
-                    }
-                    SearchMode::Exact => {
-                        (matched.start() == 0 || is_field_boundary(line[matched.start() - 1]))
-                            && (matched.end() == line.len()
-                                || is_field_boundary(line[matched.end()]))
+                let valid = if self.domain_match {
+                    is_domain_occurrence(line, matched.start(), matched.end())
+                } else {
+                    match self.mode {
+                        SearchMode::Contains => true,
+                        SearchMode::Prefix => {
+                            matched.start() == 0 || is_field_boundary(line[matched.start() - 1])
+                        }
+                        SearchMode::Exact => {
+                            (matched.start() == 0 || is_field_boundary(line[matched.start() - 1]))
+                                && (matched.end() == line.len()
+                                    || is_field_boundary(line[matched.end()]))
+                        }
                     }
                 };
                 if valid {
@@ -380,6 +402,10 @@ impl QueryMatcher {
 
     fn is_flexible_name(&self) -> bool {
         self.flexible_name.is_some()
+    }
+
+    fn is_domain_match(&self) -> bool {
+        self.domain_match
     }
 
     fn query(&self, index: usize) -> &str {
@@ -447,6 +473,15 @@ fn is_field_boundary(byte: u8) -> bool {
             byte,
             b'|' | b',' | b';' | b'=' | b':' | b'"' | b'\'' | b'[' | b']' | b'(' | b')'
         )
+}
+
+fn is_domain_occurrence(line: &[u8], start: usize, end: usize) -> bool {
+    let starts_at_domain_boundary =
+        start == 0 || is_field_boundary(line[start - 1]) || matches!(line[start - 1], b'.' | b'@');
+    let ends_at_domain_boundary = end == line.len()
+        || is_field_boundary(line[end])
+        || matches!(line[end], b'/' | b'?' | b'#');
+    starts_at_domain_boundary && ends_at_domain_boundary
 }
 
 impl SharedScan {
@@ -611,7 +646,11 @@ pub async fn start_direct_search(
     }
     request.max_results = request.max_results.clamp(1, MAX_RESULTS);
     request.worker_limit = request.worker_limit.clamp(1, 8);
-    let matcher = QueryMatcher::new(&request.query, request.mode, request.case_sensitive)?;
+    let matcher = if request.domain_match {
+        QueryMatcher::for_domain(&request.query, request.mode, request.case_sensitive)?
+    } else {
+        QueryMatcher::new(&request.query, request.mode, request.case_sensitive)?
+    };
     let query_count = matcher.query_count();
 
     let candidate_paths = request.paths.clone();
@@ -1518,7 +1557,9 @@ fn make_hit(
             shared.matcher.query(query_index),
             shared.matcher.case_sensitive,
         ),
-        match_reason: if shared.matcher.is_flexible_name() {
+        match_reason: if shared.matcher.is_domain_match() {
+            "Parent or subdomain found"
+        } else if shared.matcher.is_flexible_name() {
             "Name tokens found"
         } else if shared.matcher.query_count() > 1 {
             "Batch value found"
@@ -1836,6 +1877,18 @@ mod tests {
             SearchMode::Prefix,
             false,
         ));
+
+        let domain = QueryMatcher::for_domain("example.com", SearchMode::Contains, false)
+            .expect("domain matcher");
+        assert!(domain.find_match(b"domain=example.com").is_some());
+        assert!(
+            domain
+                .find_match(b"url=https://portal.example.com/path")
+                .is_some()
+        );
+        assert!(domain.find_match(b"email=person@example.com").is_some());
+        assert!(domain.find_match(b"domain=notexample.com").is_none());
+        assert!(domain.find_match(b"domain=example.com.evil.test").is_none());
     }
 
     #[test]
