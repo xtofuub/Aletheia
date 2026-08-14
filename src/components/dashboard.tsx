@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { BillingHealth } from "@/components/billing-health";
-import { ChannelSalesChart } from "@/components/channel-sales-chart";
 import { DashboardActivity } from "@/components/dashboard-activity";
 import { DashboardInvoices } from "@/components/dashboard-invoices";
 import { DashboardSkeleton } from "@/components/dashboard-skeleton";
-import { NetRevenueChart } from "@/components/net-revenue-chart";
+import { DatasetLandscape } from "@/components/dataset-landscape";
+import { InvestigationLanes } from "@/components/investigation-lanes";
 import { DashboardStats } from "@/components/stats";
 import {
   getOverviewStats,
@@ -53,8 +53,13 @@ export function Dashboard() {
         liveSources={liveSources}
         stats={stats}
       />
-      <NetRevenueChart datasets={datasets} />
-      <ChannelSalesChart datasets={datasets} liveSearches={liveSearches} />
+      <DatasetLandscape datasets={datasets} />
+      <InvestigationLanes
+        datasets={datasets}
+        liveSearches={liveSearches}
+        liveSources={liveSources}
+        stats={stats}
+      />
       <DashboardInvoices datasets={datasets} liveSources={liveSources} />
       <BillingHealth system={system} />
       <DashboardActivity

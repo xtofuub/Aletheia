@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildIndexGrowthRows,
-  buildSearchActivityRows,
-  growthPercent,
-} from "@/lib/dashboard-chart-data";
-import type { DatasetSummary, LiveSearchActivity } from "@/lib/desktop";
+import { buildDatasetScaleRows } from "@/lib/dashboard-chart-data";
+import type { DatasetSummary } from "@/lib/desktop";
 
 function dataset(
   id: string,
@@ -25,61 +21,42 @@ function dataset(
   };
 }
 
-function liveSearch(completedAt: string, matches: number): LiveSearchActivity {
-  return {
-    jobId: "job-1",
-    sourceId: "source-1",
-    sourceName: "Synthetic source",
-    matches,
-    filesScanned: 1,
-    bytesScanned: 100,
-    completedAt,
-  };
-}
+describe("dataset landscape data", () => {
+  it("ranks sources and calculates total and relative shares", () => {
+    const rows = buildDatasetScaleRows([
+      dataset("small", 10, "2026-08-01T12:00:00.000Z"),
+      dataset("large", 30, "2026-08-07T12:00:00.000Z"),
+    ]);
 
-describe("dashboard chart data", () => {
-  it("builds a cumulative seven-day index-growth window", () => {
-    const rows = buildIndexGrowthRows(
+    expect(rows.map((row) => row.id)).toEqual(["large", "small"]);
+    expect(rows[0]).toMatchObject({
+      share: 75,
+      relativeScale: 100,
+      records: 30,
+    });
+    expect(rows[1]).toMatchObject({ share: 25, records: 10 });
+    expect(rows[1]?.relativeScale).toBeCloseTo(100 / 3);
+  });
+
+  it("limits rows without changing shares of the whole workspace", () => {
+    const rows = buildDatasetScaleRows(
       [
-        dataset("older", 10, "2026-08-01T12:00:00.000Z"),
-        dataset("recent", 30, "2026-08-07T12:00:00.000Z"),
+        dataset("first", 50, "2026-08-01T12:00:00.000Z"),
+        dataset("second", 30, "2026-08-02T12:00:00.000Z"),
+        dataset("third", 20, "2026-08-03T12:00:00.000Z"),
       ],
-      7,
-      "2026-08-07",
+      2,
     );
 
-    expect(rows).toHaveLength(7);
-    expect(rows[0]).toEqual({ date: "2026-08-01", records: 10 });
-    expect(rows.at(-1)).toEqual({ date: "2026-08-07", records: 40 });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.share).toBe(50);
+    expect(rows[1]?.share).toBe(30);
   });
 
-  it("keeps indexed and Live activity as separate daily series", () => {
-    const rows = buildSearchActivityRows(
-      [dataset("index", 4_000_000, "2026-08-07T12:00:00.000Z")],
-      [liveSearch("2026-08-06T12:00:00.000Z", 42)],
-      7,
-      "2026-08-07",
-    );
-
-    expect(rows).toHaveLength(7);
-    expect(rows.at(-2)).toMatchObject({ live: 42, indexed: 0 });
-    expect(rows.at(-1)).toMatchObject({ live: 0, indexed: 4_000_000 });
-  });
-
-  it("rolls the window forward across weekends", () => {
-    const rows = buildIndexGrowthRows(
-      [dataset("friday", 25, "2026-08-07T12:00:00.000Z")],
-      7,
-      "2026-08-10",
-    );
-
-    expect(rows[0]?.date).toBe("2026-08-04");
-    expect(rows.at(-1)).toEqual({ date: "2026-08-10", records: 25 });
-  });
-
-  it("handles growth from an empty baseline", () => {
-    expect(growthPercent(0, 20)).toBe(100);
-    expect(growthPercent(0, 0)).toBe(0);
-    expect(growthPercent(10, 15)).toBe(50);
+  it("drops empty sources and handles an empty workspace", () => {
+    expect(
+      buildDatasetScaleRows([dataset("empty", 0, "2026-08-01T12:00:00.000Z")]),
+    ).toEqual([]);
+    expect(buildDatasetScaleRows([])).toEqual([]);
   });
 });

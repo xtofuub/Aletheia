@@ -18,7 +18,7 @@ test("core investigation routes stay reachable", async ({ page }) => {
   }
 });
 
-test("overview keeps rolling activity charts and hover details", async ({
+test("overview maps dataset scale and investigation lanes", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -53,28 +53,42 @@ test("overview keeps rolling activity charts and hover details", async ({
         },
       ]),
     );
+    window.localStorage.setItem(
+      "aletheia.browser.live-sources",
+      JSON.stringify([
+        {
+          id: "chart-live-source",
+          name: "Synthetic chart source",
+          paths: ["C:\\Synthetic\\Authorized corpus"],
+          includeArchives: true,
+          createdAt: now,
+        },
+      ]),
+    );
   });
   await page.goto("/#/overview");
 
-  const indexCard = page.locator('[data-slot="card"]').filter({
-    has: page.getByText("Indexed footprint", { exact: true }),
+  const landscapeCard = page.locator('[data-slot="card"]').filter({
+    has: page.getByText("Dataset landscape", { exact: true }),
   });
-  const searchCard = page.locator('[data-slot="card"]').filter({
-    has: page.getByText("Investigation activity", { exact: true }),
+  const lanesCard = page.locator('[data-slot="card"]').filter({
+    has: page.getByText("Investigation lanes", { exact: true }),
   });
 
-  await expect(indexCard).toBeVisible();
-  await expect(searchCard).toBeVisible();
-  await expect(indexCard.getByLabel("History range")).toContainText("30D");
-  await expect(indexCard.locator("linearGradient")).toHaveCount(30);
-  await expect(searchCard.locator(".recharts-line-curve")).toHaveCount(2);
-
-  const latestBar = indexCard.locator('rect[fill^="url("]').last();
-  await expect(latestBar).toBeVisible();
-  await latestBar.hover();
-  await expect(indexCard.locator(".recharts-tooltip-wrapper")).toContainText(
-    "Indexed records",
-  );
+  await expect(landscapeCard).toBeVisible();
+  await expect(lanesCard).toBeVisible();
+  await expect(landscapeCard).toContainText("Synthetic chart index");
+  await expect(
+    landscapeCard.getByRole("img", {
+      name: "Synthetic chart index: 100.0% of indexed records",
+    }),
+  ).toBeVisible();
+  await expect(
+    lanesCard.getByRole("link", { name: /Indexed search/ }),
+  ).toHaveAttribute("href", "#/search");
+  await expect(
+    lanesCard.getByRole("link", { name: /Live scan/ }),
+  ).toContainText("1 saved source · 42 latest matches");
 });
 
 test("saved Live source searches many values in one pass", async ({ page }) => {
