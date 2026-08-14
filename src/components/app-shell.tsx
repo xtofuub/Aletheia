@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { RouteKey } from "@/router";
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ActiveDomainScan } from "@/components/active-domain-scan";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ export function AppShell({
       <AppSidebar activeRoute={activeRoute} />
       <SidebarInset>
         <AppHeader activeRoute={activeRoute} />
+        <ActiveDomainScan />
         <AnimatePresence initial={false} mode="wait">
           <motion.main
             animate={{ opacity: 1, y: 0 }}

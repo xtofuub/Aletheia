@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  createElement,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import {
   cancelDirectSearch,
@@ -13,6 +22,18 @@ type DirectSearchControl = "pause" | "resume" | "cancel";
 
 interface PendingControl {
   action: DirectSearchControl;
+  jobId: string;
+}
+
+export interface DirectSearchSessionMeta {
+  scope: "domains" | "identities" | "search";
+  query?: string;
+  sourceId?: string;
+  sourceName?: string;
+}
+
+export interface DirectSearchSession extends DirectSearchSessionMeta {
+  handled: boolean;
   jobId: string;
 }
 
@@ -70,9 +91,11 @@ export function applyPendingControl(
   };
 }
 
-export function useDirectSearchProgress() {
+function useDirectSearchProgressState() {
   const [progress, setProgress] = useState<DirectSearchProgress | null>(null);
+  const [session, setSession] = useState<DirectSearchSession | null>(null);
   const latestProgress = useRef<DirectSearchProgress | null>(null);
+  const activeJobId = useRef<string | null>(null);
   const pendingProgress = useRef<DirectSearchProgress | null>(null);
   const animationFrame = useRef<number | null>(null);
   const [pendingControl, setPendingControl] = useState<PendingControl | null>(
@@ -83,6 +106,7 @@ export function useDirectSearchProgress() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listenDirectSearchProgress((next) => {
+      if (activeJobId.current && next.jobId !== activeJobId.current) return;
       const merged = mergeDirectSearchProgress(latestProgress.current, next);
       latestProgress.current = merged;
       pendingProgress.current = merged;
@@ -103,39 +127,54 @@ export function useDirectSearchProgress() {
     };
   }, []);
 
-  const begin = useCallback((start: DirectSearchStart) => {
-    const merged = mergeDirectSearchProgress(latestProgress.current, {
-      jobId: start.jobId,
-      sequence: 0,
-      status: "running",
-      currentSource: null,
-      sourceCount: start.sourceCount,
-      filesScanned: 0,
-      totalBytes: start.totalBytes,
-      sourceBytesScanned: 0,
-      contentBytesScanned: 0,
-      matches: 0,
-      elapsedMs: 0,
-      bytesPerSecond: 0,
-      estimatedRemainingMs: null,
-      queryCount: start.queryCount,
-      truncated: false,
-      message: "Scanning local sources",
-      hits: [],
-    });
-    latestProgress.current = merged;
-    pendingProgress.current = merged;
-    setProgress(merged);
+  const begin = useCallback(
+    (start: DirectSearchStart, metadata?: DirectSearchSessionMeta) => {
+      activeJobId.current = start.jobId;
+      const merged = mergeDirectSearchProgress(latestProgress.current, {
+        jobId: start.jobId,
+        sequence: 0,
+        status: "running",
+        currentSource: null,
+        sourceCount: start.sourceCount,
+        filesScanned: 0,
+        totalBytes: start.totalBytes,
+        sourceBytesScanned: 0,
+        contentBytesScanned: 0,
+        matches: 0,
+        elapsedMs: 0,
+        bytesPerSecond: 0,
+        estimatedRemainingMs: null,
+        queryCount: start.queryCount,
+        truncated: false,
+        message: "Scanning local sources",
+        hits: [],
+      });
+      latestProgress.current = merged;
+      pendingProgress.current = merged;
+      setProgress(merged);
+      setSession(
+        metadata ? { ...metadata, handled: false, jobId: start.jobId } : null,
+      );
+      setPendingControl(null);
+      setControlError("");
+    },
+    [],
+  );
+
+  const clear = useCallback(() => {
+    activeJobId.current = null;
+    latestProgress.current = null;
+    pendingProgress.current = null;
+    setProgress(null);
+    setSession(null);
     setPendingControl(null);
     setControlError("");
   }, []);
 
-  const clear = useCallback(() => {
-    latestProgress.current = null;
-    pendingProgress.current = null;
-    setProgress(null);
-    setPendingControl(null);
-    setControlError("");
+  const markHandled = useCallback((jobId: string) => {
+    setSession((current) =>
+      current?.jobId === jobId ? { ...current, handled: true } : current,
+    );
   }, []);
 
   const control = useCallback(
@@ -180,8 +219,40 @@ export function useDirectSearchProgress() {
     clear,
     controlError,
     controlPending: activePendingControl?.action ?? null,
+    markHandled,
     pause,
     progress: applyPendingControl(progress, activePendingControl),
     resume,
+    session,
   };
+}
+
+type DirectSearchProgressContextValue = ReturnType<
+  typeof useDirectSearchProgressState
+>;
+
+const DirectSearchProgressContext =
+  createContext<DirectSearchProgressContextValue | null>(null);
+
+export function DirectSearchProgressProvider({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const value = useDirectSearchProgressState();
+  return createElement(
+    DirectSearchProgressContext.Provider,
+    { value },
+    children,
+  );
+}
+
+export function useDirectSearchProgress() {
+  const context = useContext(DirectSearchProgressContext);
+  if (!context) {
+    throw new Error(
+      "useDirectSearchProgress must be used within DirectSearchProgressProvider",
+    );
+  }
+  return context;
 }

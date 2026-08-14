@@ -131,8 +131,9 @@ export function IdentitiesPage() {
     controlError,
     controlPending,
     pause: pauseLiveSearch,
-    progress: liveProgress,
+    progress: globalLiveProgress,
     resume: resumeLiveSearch,
+    session: directSession,
   } = useDirectSearchProgress();
 
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
@@ -225,10 +226,20 @@ export function IdentitiesPage() {
       }),
     onSuccess: (start, source) => {
       liveSearchSource.current = source;
-      beginLiveSearch(start);
+      beginLiveSearch(start, {
+        scope: "identities",
+        query: liveQuery.trim(),
+        sourceId: source.id,
+        sourceName: source.name,
+      });
     },
     onError: (error) => setNotice(`Live scan failed: ${String(error)}`),
   });
+  const liveProgress =
+    directSession?.scope === "identities" ? globalLiveProgress : null;
+  const clearOwnLiveSearch = () => {
+    if (directSession?.scope === "identities") clearLiveSearch();
+  };
   const liveHitsById = useMemo(
     () => new Map((liveProgress?.hits ?? []).map((hit) => [hit.id, hit])),
     [liveProgress?.hits],
@@ -828,7 +839,7 @@ export function IdentitiesPage() {
                                   setSelectedLiveSourceId(value as string);
                                   setLiveOffset(0);
                                   setLiveSelection(new Set());
-                                  clearLiveSearch();
+                                  clearOwnLiveSearch();
                                 }}
                                 value={activeLiveSourceId}
                               >
@@ -1008,7 +1019,7 @@ export function IdentitiesPage() {
                           onClick={() => {
                             setLiveOffset(0);
                             setLiveSelection(new Set());
-                            clearLiveSearch();
+                            clearOwnLiveSearch();
                             if (selectedLiveSource) {
                               liveSearch.mutate(selectedLiveSource);
                             }

@@ -1038,6 +1038,25 @@ const browserDirectSearchListeners = new Set<
   (progress: DirectSearchProgress) => void
 >();
 
+interface BrowserDirectSearchJob {
+  completionTimer: number | null;
+  finish: () => void;
+  progress: DirectSearchProgress;
+}
+
+const browserDirectSearchJobs = new Map<string, BrowserDirectSearchJob>();
+
+function emitBrowserDirectSearch(progress: DirectSearchProgress) {
+  browserDirectSearchListeners.forEach((listener) => listener(progress));
+}
+
+function scheduleBrowserDirectSearchCompletion(jobId: string, delay = 1_800) {
+  const job = browserDirectSearchJobs.get(jobId);
+  if (!job) return;
+  if (job.completionTimer !== null) window.clearTimeout(job.completionTimer);
+  job.completionTimer = window.setTimeout(job.finish, delay);
+}
+
 export async function listenDirectSearchProgress(
   callback: (progress: DirectSearchProgress) => void,
 ): Promise<UnlistenFn> {
@@ -1093,28 +1112,72 @@ export async function startDirectSearch(
     sourceLocation: "line 84",
     excerpt: "synthetic.second@example.com:account-1002:service.example.com",
   };
+  const initialProgress: DirectSearchProgress = {
+    jobId,
+    sequence: 0,
+    status: "running",
+    currentSource: request.paths[0] ?? null,
+    sourceCount,
+    filesScanned: 0,
+    totalBytes: 128 * 1024 * 1024,
+    sourceBytesScanned: 0,
+    contentBytesScanned: 0,
+    matches: 0,
+    elapsedMs: 0,
+    bytesPerSecond: 0,
+    estimatedRemainingMs: 1_800,
+    queryCount,
+    truncated: false,
+    message: "Scanning saved Live sources",
+    hits: [],
+  };
+  const job: BrowserDirectSearchJob = {
+    completionTimer: null,
+    progress: initialProgress,
+    finish: () => {
+      const active = browserDirectSearchJobs.get(jobId);
+      if (!active || active.progress.status !== "running") return;
+      const progress: DirectSearchProgress = {
+        ...active.progress,
+        sequence: active.progress.sequence + 1,
+        status: "completed",
+        currentSource: null,
+        filesScanned: sourceCount,
+        sourceBytesScanned: 128 * 1024 * 1024,
+        contentBytesScanned: 384 * 1024 * 1024,
+        matches: 2,
+        elapsedMs: Math.max(1, Math.round(performance.now() - started)),
+        bytesPerSecond: 196 * 1024 * 1024,
+        estimatedRemainingMs: null,
+        message: "Live search complete",
+        hits: [syntheticHit, syntheticSecondHit],
+      };
+      active.progress = progress;
+      active.completionTimer = null;
+      emitBrowserDirectSearch(progress);
+      browserDirectSearchJobs.delete(jobId);
+    },
+  };
+  browserDirectSearchJobs.set(jobId, job);
   window.setTimeout(() => {
+    const active = browserDirectSearchJobs.get(jobId);
+    if (!active || active.progress.status !== "running") return;
     const progress: DirectSearchProgress = {
-      jobId,
-      sequence: 1,
-      status: "completed",
-      currentSource: null,
-      sourceCount,
-      filesScanned: sourceCount,
-      totalBytes: 128 * 1024 * 1024,
-      sourceBytesScanned: 128 * 1024 * 1024,
-      contentBytesScanned: 384 * 1024 * 1024,
-      matches: 2,
+      ...active.progress,
+      sequence: active.progress.sequence + 1,
+      sourceBytesScanned: 32 * 1024 * 1024,
+      contentBytesScanned: 96 * 1024 * 1024,
+      matches: 1,
       elapsedMs: Math.max(1, Math.round(performance.now() - started)),
-      bytesPerSecond: 196 * 1024 * 1024,
-      estimatedRemainingMs: null,
-      queryCount,
-      truncated: false,
-      message: "Live search complete",
-      hits: [syntheticHit, syntheticSecondHit],
+      bytesPerSecond: 96 * 1024 * 1024,
+      estimatedRemainingMs: 450,
+      message: "Streaming matching Live lines",
+      hits: [syntheticHit],
     };
-    browserDirectSearchListeners.forEach((listener) => listener(progress));
-  }, 220);
+    active.progress = progress;
+    emitBrowserDirectSearch(progress);
+  }, 100);
+  scheduleBrowserDirectSearchCompletion(jobId);
   return {
     jobId,
     sourceCount,
@@ -1126,19 +1189,58 @@ export async function startDirectSearch(
 export async function cancelDirectSearch(jobId: string): Promise<void> {
   if (isTauriRuntime()) {
     await invoke("cancel_direct_search", { jobId });
+    return;
   }
+  const job = browserDirectSearchJobs.get(jobId);
+  if (!job) return;
+  if (job.completionTimer !== null) window.clearTimeout(job.completionTimer);
+  job.progress = {
+    ...job.progress,
+    sequence: job.progress.sequence + 1,
+    status: "cancelled",
+    estimatedRemainingMs: null,
+    message: "Live scan cancelled",
+  };
+  emitBrowserDirectSearch(job.progress);
+  browserDirectSearchJobs.delete(jobId);
 }
 
 export async function pauseDirectSearch(jobId: string): Promise<void> {
   if (isTauriRuntime()) {
     await invoke("pause_direct_search", { jobId });
+    return;
   }
+  const job = browserDirectSearchJobs.get(jobId);
+  if (!job || job.progress.status !== "running") return;
+  if (job.completionTimer !== null) window.clearTimeout(job.completionTimer);
+  job.completionTimer = null;
+  job.progress = {
+    ...job.progress,
+    sequence: job.progress.sequence + 1,
+    status: "paused",
+    bytesPerSecond: 0,
+    estimatedRemainingMs: null,
+    message: "Live scan paused",
+  };
+  emitBrowserDirectSearch(job.progress);
 }
 
 export async function resumeDirectSearch(jobId: string): Promise<void> {
   if (isTauriRuntime()) {
     await invoke("resume_direct_search", { jobId });
+    return;
   }
+  const job = browserDirectSearchJobs.get(jobId);
+  if (!job || job.progress.status !== "paused") return;
+  job.progress = {
+    ...job.progress,
+    sequence: job.progress.sequence + 1,
+    status: "running",
+    estimatedRemainingMs: 400,
+    message: "Live scan resumed",
+  };
+  emitBrowserDirectSearch(job.progress);
+  scheduleBrowserDirectSearchCompletion(jobId, 400);
 }
 
 const browserLiveDomainEvidenceKey = "aletheia.browser.live-domain-evidence";

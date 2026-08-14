@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppBootstrap } from "@/app-bootstrap";
 import { ThemeProvider } from "@/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DirectSearchProgressProvider } from "@/hooks/use-direct-search-progress";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -26,11 +27,13 @@ if (!root) {
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <TooltipProvider>
-          <AppBootstrap />
-        </TooltipProvider>
-      </ThemeProvider>
+      <DirectSearchProgressProvider>
+        <ThemeProvider>
+          <TooltipProvider>
+            <AppBootstrap />
+          </TooltipProvider>
+        </ThemeProvider>
+      </DirectSearchProgressProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

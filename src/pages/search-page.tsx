@@ -216,8 +216,9 @@ export function SearchPage({
     controlError,
     controlPending,
     pause: pauseLiveSearch,
-    progress: directProgress,
+    progress: globalDirectProgress,
     resume: resumeLiveSearch,
+    session: directSession,
   } = useDirectSearchProgress();
   const queryClient = useQueryClient();
 
@@ -296,7 +297,12 @@ export function SearchPage({
     onSuccess: (start, variables) => {
       setDirectError("");
       setDirectSourceId(variables.source.id);
-      beginDirectSearch(start);
+      beginDirectSearch(start, {
+        scope: "search",
+        query: variables.value,
+        sourceId: variables.source.id,
+        sourceName: variables.source.name,
+      });
     },
     onError: (error) => setDirectError(String(error)),
   });
@@ -338,6 +344,8 @@ export function SearchPage({
   const queries = parseQueries(query);
   const queryKind =
     queries.length > 1 ? "Batch" : detectQueryKind(queries[0] ?? "");
+  const directProgress =
+    directSession?.scope === "search" ? globalDirectProgress : null;
   const currentLiveProgress =
     selectedLiveSource?.id === directSourceId ? directProgress : null;
   const directPercent = currentLiveProgress?.totalBytes
