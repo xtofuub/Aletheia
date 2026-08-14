@@ -1,7 +1,7 @@
 use std::{
     collections::{HashSet, VecDeque},
     fs::File,
-    io::{self, BufRead, BufReader, Write},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -110,6 +110,114 @@ pub struct DirectSearchProgress {
 struct Candidate {
     path: PathBuf,
     size: u64,
+}
+
+struct CandidateSourceProgress {
+    total_bytes: u64,
+    reported_bytes: AtomicU64,
+    decoded_bytes: AtomicU64,
+    decoded_total_bytes: AtomicU64,
+}
+
+impl CandidateSourceProgress {
+    fn new(total_bytes: u64) -> Self {
+        Self {
+            total_bytes,
+            reported_bytes: AtomicU64::new(0),
+            decoded_bytes: AtomicU64::new(0),
+            decoded_total_bytes: AtomicU64::new(0),
+        }
+    }
+
+    fn active_limit(&self) -> u64 {
+        self.total_bytes.saturating_sub(1)
+    }
+
+    fn advance_to(&self, target: u64, completed: bool) -> u64 {
+        let limit = if completed {
+            self.total_bytes
+        } else {
+            self.active_limit()
+        };
+        let target = target.min(limit);
+        loop {
+            let current = self.reported_bytes.load(Ordering::Relaxed);
+            if target <= current {
+                return 0;
+            }
+            if self
+                .reported_bytes
+                .compare_exchange_weak(current, target, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return target.saturating_sub(current);
+            }
+        }
+    }
+
+    fn add_physical_bytes(&self, bytes: u64, shared: &SharedScan) {
+        if bytes == 0 {
+            return;
+        }
+        let current = self.reported_bytes.load(Ordering::Relaxed);
+        let added = self.advance_to(current.saturating_add(bytes), false);
+        shared.add_source_bytes(added);
+    }
+
+    fn set_decoded_total(&self, total: u64) {
+        self.decoded_total_bytes.store(total, Ordering::Relaxed);
+    }
+
+    fn add_decoded_bytes(&self, bytes: u64, shared: &SharedScan) {
+        let total = self.decoded_total_bytes.load(Ordering::Relaxed);
+        if bytes == 0 || total == 0 {
+            return;
+        }
+        let decoded = self
+            .decoded_bytes
+            .fetch_add(bytes, Ordering::Relaxed)
+            .saturating_add(bytes)
+            .min(total);
+        let target = ((self.total_bytes as u128).saturating_mul(decoded as u128) / total as u128)
+            .min(u64::MAX as u128) as u64;
+        let added = self.advance_to(target, false);
+        shared.add_source_bytes(added);
+    }
+
+    fn complete(&self, shared: &SharedScan) {
+        let added = self.advance_to(self.total_bytes, true);
+        shared.add_source_bytes(added);
+    }
+}
+
+struct SourceProgressReader<R> {
+    inner: R,
+    progress: Arc<CandidateSourceProgress>,
+    shared: Arc<SharedScan>,
+}
+
+impl<R> SourceProgressReader<R> {
+    fn new(inner: R, progress: Arc<CandidateSourceProgress>, shared: Arc<SharedScan>) -> Self {
+        Self {
+            inner,
+            progress,
+            shared,
+        }
+    }
+}
+
+impl<R: Read> Read for SourceProgressReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let bytes = self.inner.read(buffer)?;
+        self.progress.add_physical_bytes(bytes as u64, &self.shared);
+        Ok(bytes)
+    }
+}
+
+impl<R: Seek> Seek for SourceProgressReader<R> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.inner.seek(position)
+    }
 }
 
 struct SharedScan {
@@ -714,6 +822,7 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
                         Err(_) => None,
                     };
                     let Some(candidate) = candidate else { break };
+                    let source_progress = Arc::new(CandidateSourceProgress::new(candidate.size));
                     let source_name = file_name(&candidate.path);
                     shared.emit(
                         "running",
@@ -721,12 +830,9 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
                         "Scanning local sources",
                         Vec::new(),
                     );
-                    let result = scan_candidate(&candidate, &shared);
-                    if result.is_ok()
-                        && !shared.should_stop()
-                        && is_compressed_candidate(&candidate.path)
-                    {
-                        shared.add_source_bytes(candidate.size);
+                    let result = scan_candidate(&candidate, &shared, &source_progress);
+                    if result.is_ok() && !shared.should_stop() {
+                        source_progress.complete(&shared);
                     }
                     shared.files_scanned.fetch_add(1, Ordering::Relaxed);
                     shared.emit(
@@ -753,20 +859,24 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
         .map_or(Ok(()), Err)
 }
 
-fn scan_candidate(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), String> {
+fn scan_candidate(
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) -> Result<(), String> {
     match extension(&candidate.path).as_str() {
-        "gz" => scan_gzip(candidate, shared),
-        "zip" => scan_zip(candidate, shared),
-        "rar" => scan_rar(candidate, shared),
-        _ => scan_plain(candidate, shared),
+        "gz" => scan_gzip(candidate, shared, source_progress),
+        "zip" => scan_zip(candidate, shared, source_progress),
+        "rar" => scan_rar(candidate, shared, source_progress),
+        _ => scan_plain(candidate, shared, source_progress),
     }
 }
 
-fn is_compressed_candidate(path: &Path) -> bool {
-    matches!(extension(path).as_str(), "gz" | "zip" | "rar")
-}
-
-fn scan_plain(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), String> {
+fn scan_plain(
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) -> Result<(), String> {
     let file = File::open(&candidate.path)
         .map_err(|_| "a source could not be opened read-only".to_string())?;
     scan_reader(
@@ -776,13 +886,22 @@ fn scan_plain(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Str
         None,
         true,
         shared,
+        source_progress,
     )
 }
 
-fn scan_gzip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), String> {
+fn scan_gzip(
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) -> Result<(), String> {
     let file = File::open(&candidate.path)
         .map_err(|_| "a compressed source could not be opened read-only".to_string())?;
-    let decoder = GzDecoder::new(file);
+    let decoder = GzDecoder::new(SourceProgressReader::new(
+        file,
+        Arc::clone(source_progress),
+        Arc::clone(shared),
+    ));
     scan_reader(
         BufReader::with_capacity(1024 * 1024, decoder),
         &candidate.path.to_string_lossy(),
@@ -790,14 +909,20 @@ fn scan_gzip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Stri
         None,
         false,
         shared,
+        source_progress,
     )
 }
 
-fn scan_zip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), String> {
+fn scan_zip(
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) -> Result<(), String> {
     let file = File::open(&candidate.path)
         .map_err(|_| "a ZIP source could not be opened read-only".to_string())?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|_| "a ZIP source is invalid or unsupported".to_string())?;
+    let reader = SourceProgressReader::new(file, Arc::clone(source_progress), Arc::clone(shared));
+    let mut archive = ZipArchive::new(reader)
+        .map_err(|_| "a ZIP source is invalid or unsupported".to_string())?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err("a ZIP source exceeds the 100,000 entry safety limit".to_string());
     }
@@ -840,12 +965,17 @@ fn scan_zip(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
             Some(entry_name),
             false,
             shared,
+            source_progress,
         )?;
     }
     Ok(())
 }
 
-fn scan_rar(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), String> {
+fn scan_rar(
+    candidate: &Candidate,
+    shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
+) -> Result<(), String> {
     let archive = ArchiveReader::read_path(&candidate.path)
         .map_err(|_| "a RAR source is invalid, encrypted, split, or unsupported".to_string())?;
     let decompression_limit = candidate
@@ -874,6 +1004,7 @@ fn scan_rar(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
     if encrypted_text_entry {
         return Err("encrypted RAR text entries require an unlocked copy".to_string());
     }
+    source_progress.set_decoded_total(declared_bytes);
     let archive_path = candidate.path.to_string_lossy().into_owned();
     let archive_name = file_name(&candidate.path);
     let shared_for_writers = Arc::clone(shared);
@@ -887,6 +1018,7 @@ fn scan_rar(candidate: &Candidate, shared: &Arc<SharedScan>) -> Result<(), Strin
             archive_name.clone(),
             entry_name,
             Arc::clone(&shared_for_writers),
+            Arc::clone(source_progress),
         )))
     });
     if extraction.is_err() && !shared.should_stop() {
@@ -902,6 +1034,7 @@ fn scan_reader<R: BufRead>(
     archive_entry: Option<String>,
     track_source_bytes: bool,
     shared: &Arc<SharedScan>,
+    source_progress: &Arc<CandidateSourceProgress>,
 ) -> Result<(), String> {
     let mut line = Vec::with_capacity(4096);
     let mut line_number = 0_u64;
@@ -924,7 +1057,7 @@ fn scan_reader<R: BufRead>(
             shared.add_content_bytes(bytes);
             bytes_since_progress = bytes_since_progress.saturating_add(bytes);
             if track_source_bytes {
-                shared.add_source_bytes(bytes);
+                source_progress.add_physical_bytes(bytes, shared);
             }
             if bytes_since_progress >= PROGRESS_BYTE_INTERVAL {
                 shared.emit(
@@ -944,7 +1077,7 @@ fn scan_reader<R: BufRead>(
         shared.add_content_bytes(bytes);
         bytes_since_progress = bytes_since_progress.saturating_add(bytes);
         if track_source_bytes {
-            shared.add_source_bytes(bytes);
+            source_progress.add_physical_bytes(bytes, shared);
         }
         if bytes_since_progress >= PROGRESS_BYTE_INTERVAL {
             shared.emit(
@@ -1114,6 +1247,7 @@ struct RarLineWriter {
     source_file: String,
     archive_entry: String,
     shared: Arc<SharedScan>,
+    source_progress: Arc<CandidateSourceProgress>,
     pending: Vec<u8>,
     discarding: bool,
     line_number: u64,
@@ -1127,12 +1261,14 @@ impl RarLineWriter {
         source_file: String,
         archive_entry: String,
         shared: Arc<SharedScan>,
+        source_progress: Arc<CandidateSourceProgress>,
     ) -> Self {
         Self {
             source_path,
             source_file,
             archive_entry,
             shared,
+            source_progress,
             pending: Vec::with_capacity(4096),
             discarding: false,
             line_number: 0,
@@ -1188,6 +1324,8 @@ impl Write for RarLineWriter {
             ));
         }
         self.shared.add_content_bytes(buffer.len() as u64);
+        self.source_progress
+            .add_decoded_bytes(buffer.len() as u64, &self.shared);
         self.bytes_since_progress = self
             .bytes_since_progress
             .saturating_add(buffer.len() as u64);
@@ -1278,11 +1416,23 @@ mod tests {
     use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        ArchiveReader, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher, active_elapsed_ms,
-        display_excerpt, estimate_remaining_ms, extension, field_tokens, is_text_extension,
-        line_matches, parse_queries, read_bounded_line, skippable_complete_prefix,
+        ArchiveReader, CandidateSourceProgress, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher,
+        active_elapsed_ms, display_excerpt, estimate_remaining_ms, extension, field_tokens,
+        is_text_extension, line_matches, parse_queries, read_bounded_line,
+        skippable_complete_prefix,
     };
     use crate::models::SearchMode;
+
+    #[test]
+    fn compressed_progress_advances_before_candidate_completion() {
+        let progress = CandidateSourceProgress::new(100);
+
+        assert_eq!(progress.advance_to(20, false), 20);
+        assert_eq!(progress.advance_to(60, false), 40);
+        assert_eq!(progress.advance_to(40, false), 0);
+        assert_eq!(progress.advance_to(100, false), 39);
+        assert_eq!(progress.advance_to(100, true), 1);
+    }
 
     #[test]
     fn automatic_identifier_matching_uses_field_boundaries() {

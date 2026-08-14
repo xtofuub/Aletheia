@@ -28,6 +28,12 @@ export function formatRate(value: number) {
   return `${formatCount(Math.max(0, value))}/s`;
 }
 
+export function formatProgressPercent(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0%";
+  if (value < 1) return "<1%";
+  return `${Math.min(100, value).toFixed(0)}%`;
+}
+
 export function formatDuration(milliseconds: number | null) {
   if (milliseconds === null || !Number.isFinite(milliseconds))
     return "Calculating";

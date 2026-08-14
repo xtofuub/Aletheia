@@ -91,7 +91,7 @@ import {
   type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
-import { formatBytes, formatCount } from "@/lib/format";
+import { formatBytes, formatCount, formatProgressPercent } from "@/lib/format";
 
 const memberLimit = 25;
 const identitySearchModes: Array<{ label: string; value: SearchMode }> = [
@@ -959,7 +959,7 @@ export function IdentitiesPage() {
                             {formatBytes(liveProgress.bytesPerSecond)}/s
                           </ProgressLabel>
                           <ProgressValue>
-                            {() => `${livePercent.toFixed(0)}%`}
+                            {() => formatProgressPercent(livePercent)}
                           </ProgressValue>
                         </Progress>
                       ) : null}

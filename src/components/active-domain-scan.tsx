@@ -8,7 +8,7 @@ import {
   ProgressValue,
 } from "@/components/ui/progress";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
-import { formatBytes, formatCount } from "@/lib/format";
+import { formatBytes, formatCount, formatProgressPercent } from "@/lib/format";
 
 const activeStatuses = ["running", "paused", "cancelling"];
 
@@ -46,7 +46,7 @@ export function ActiveDomainScan() {
           <ProgressLabel>
             Live domain scan · {session.query ?? "Domain"}
           </ProgressLabel>
-          <ProgressValue>{() => `${percent.toFixed(0)}%`}</ProgressValue>
+          <ProgressValue>{() => formatProgressPercent(percent)}</ProgressValue>
         </Progress>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline">

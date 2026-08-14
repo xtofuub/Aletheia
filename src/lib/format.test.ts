@@ -5,6 +5,7 @@ import {
   formatCount,
   formatDateTime,
   formatDuration,
+  formatProgressPercent,
   formatRate,
 } from "./format";
 
@@ -29,5 +30,12 @@ describe("format helpers", () => {
     expect(formatDuration(65_000)).toBe("1m 5s");
     expect(formatDuration(7_260_000)).toBe("2h 1m");
     expect(formatDuration(183_600_000)).toBe("2d 3h");
+  });
+
+  it("keeps active progress visible below one percent", () => {
+    expect(formatProgressPercent(0)).toBe("0%");
+    expect(formatProgressPercent(0.01)).toBe("<1%");
+    expect(formatProgressPercent(42.4)).toBe("42%");
+    expect(formatProgressPercent(120)).toBe("100%");
   });
 });

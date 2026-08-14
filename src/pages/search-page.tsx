@@ -101,7 +101,11 @@ import {
   type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
-import { formatBytes, formatDuration } from "@/lib/format";
+import {
+  formatBytes,
+  formatDuration,
+  formatProgressPercent,
+} from "@/lib/format";
 
 const modeItems = [
   { label: "Contains", value: "contains" },
@@ -794,7 +798,7 @@ export function SearchPage({
                     {currentLiveProgress.message}
                   </ProgressLabel>
                   <ProgressValue>
-                    {() => `${directPercent.toFixed(0)}%`}
+                    {() => formatProgressPercent(directPercent)}
                   </ProgressValue>
                 </Progress>
                 <div className="flex flex-wrap items-center gap-2">

@@ -73,7 +73,7 @@ import {
   startDirectSearch,
   type LiveSourceSummary,
 } from "@/lib/desktop";
-import { formatBytes, formatCount } from "@/lib/format";
+import { formatBytes, formatCount, formatProgressPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const pageSize = 25;
@@ -551,7 +551,7 @@ export function DomainsPage() {
                         {currentLiveProgress.message}
                       </ProgressLabel>
                       <ProgressValue>
-                        {() => `${livePercent.toFixed(0)}%`}
+                        {() => formatProgressPercent(livePercent)}
                       </ProgressValue>
                     </Progress>
                     <div className="flex flex-wrap items-center gap-2">
