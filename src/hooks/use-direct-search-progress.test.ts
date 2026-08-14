@@ -47,7 +47,9 @@ describe("mergeDirectSearchProgress", () => {
     const running = progress("running", [hit]);
     const completed = progress("completed", []);
 
-    expect(mergeDirectSearchProgress(running, completed).hits).toEqual([hit]);
+    expect(mergeDirectSearchProgress(running, completed).hits).toBe(
+      running.hits,
+    );
   });
 
   it("does not let a late worker event move counters backwards", () => {

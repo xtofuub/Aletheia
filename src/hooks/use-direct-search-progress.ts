@@ -42,10 +42,17 @@ export function mergeDirectSearchProgress(
   next: DirectSearchProgress,
 ) {
   if (!previous || previous.jobId !== next.jobId) return next;
-  const hits = new Map(previous.hits.map((hit) => [hit.id, hit]));
-  for (const hit of next.hits) hits.set(hit.id, hit);
   if (next.sequence < previous.sequence) {
+    if (next.hits.length === 0) return previous;
+    const hits = new Map(previous.hits.map((hit) => [hit.id, hit]));
+    for (const hit of next.hits) hits.set(hit.id, hit);
     return { ...previous, hits: [...hits.values()] };
+  }
+  let hits = previous.hits;
+  if (next.hits.length > 0) {
+    const merged = new Map(previous.hits.map((hit) => [hit.id, hit]));
+    for (const hit of next.hits) merged.set(hit.id, hit);
+    hits = [...merged.values()];
   }
   return {
     ...next,
@@ -60,7 +67,7 @@ export function mergeDirectSearchProgress(
       previous.sourceBytesScanned,
       next.sourceBytesScanned,
     ),
-    hits: [...hits.values()],
+    hits,
   };
 }
 
