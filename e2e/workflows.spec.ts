@@ -317,6 +317,19 @@ test("Domains filters indexed groups by dataset", async ({ page }) => {
     page.getByText("example.co.uk", { exact: true }).first(),
   ).toBeVisible();
   await expect(page.getByText(/67 indexed lines/)).toBeVisible();
+  await expect(
+    page.getByRole("columnheader", { name: "Location" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("columnheader", { name: "Dataset" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("columnheader", { name: "Evidence" }),
+  ).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Parser" })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText("line 2", { exact: true })).toBeVisible();
 });
 
 test("Domains builds the complete indexed catalog without a query", async ({

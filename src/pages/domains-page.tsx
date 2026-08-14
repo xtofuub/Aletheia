@@ -1080,56 +1080,54 @@ export function DomainsPage() {
                     ) : details.data?.records.length ? (
                       <ScrollArea className="h-[min(50vh,34rem)]">
                         <Table className="table-fixed">
-                          <TableHeader>
+                          <TableHeader className="sticky top-0 bg-background">
                             <TableRow>
                               <TableHead className="w-48 ps-6">
-                                Source line
+                                Location
                               </TableHead>
-                              <TableHead className="hidden w-44 2xl:table-cell">
+                              <TableHead className="hidden w-52 lg:table-cell">
                                 Dataset
                               </TableHead>
-                              <TableHead>Line contents</TableHead>
-                              <TableHead className="hidden w-44 pe-6 2xl:table-cell">
-                                Parser
-                              </TableHead>
+                              <TableHead className="pe-6">Evidence</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {details.data.records.map((record) => (
                               <TableRow key={record.recordId}>
-                                <TableCell className="min-w-0 ps-6">
-                                  <p className="truncate text-xs">
+                                <TableCell className="min-w-0 py-3 ps-6 align-top">
+                                  <Badge
+                                    className="max-w-full font-mono tabular-nums"
+                                    title={record.sourceLocation}
+                                    variant="outline"
+                                  >
+                                    {record.sourceLocation}
+                                  </Badge>
+                                  <p
+                                    className="mt-2 truncate text-xs text-muted-foreground"
+                                    title={record.sourceFile}
+                                  >
                                     {record.sourceFile}
                                   </p>
-                                  <p className="truncate font-mono text-xs text-muted-foreground">
-                                    {record.sourceLocation}
-                                  </p>
-                                  <div className="mt-1 min-w-0 2xl:hidden">
+                                  <div className="mt-1 min-w-0 lg:hidden">
                                     <p
-                                      className="truncate text-xs text-muted-foreground"
+                                      className="truncate text-xs font-medium"
                                       title={record.datasetName}
                                     >
                                       {record.datasetName}
                                     </p>
-                                    <p
-                                      className="truncate font-mono text-[11px] text-muted-foreground"
-                                      title={record.parser}
-                                    >
-                                      {record.parser}
-                                    </p>
                                   </div>
                                 </TableCell>
-                                <TableCell className="hidden min-w-0 2xl:table-cell">
+                                <TableCell className="hidden min-w-0 py-3 align-top lg:table-cell">
                                   <p
-                                    className="truncate"
+                                    className="line-clamp-2 font-medium leading-5"
                                     title={record.datasetName}
                                   >
                                     {record.datasetName}
                                   </p>
                                 </TableCell>
-                                <TableCell className="min-w-0 whitespace-normal">
+                                <TableCell className="min-w-0 whitespace-normal py-3 pe-6 align-top">
                                   <p
-                                    className="font-mono text-xs break-all"
+                                    className="font-mono text-xs leading-5 break-words [overflow-wrap:anywhere]"
                                     title={record.fields
                                       .map((field) => field.displayValue)
                                       .join(" | ")}
@@ -1137,11 +1135,6 @@ export function DomainsPage() {
                                     {record.fields
                                       .map((field) => field.displayValue)
                                       .join(" | ") || "No displayable values"}
-                                  </p>
-                                </TableCell>
-                                <TableCell className="hidden min-w-0 pe-6 font-mono text-xs text-muted-foreground 2xl:table-cell">
-                                  <p className="truncate" title={record.parser}>
-                                    {record.parser}
                                   </p>
                                 </TableCell>
                               </TableRow>
