@@ -77,7 +77,7 @@ await page.screenshot({
 
 await page.goto(`${baseUrl}/#/datasets`);
 await page.getByRole("heading", { name: "Datasets" }).waitFor();
-await page.addStyleTag({
+const hiddenDatasetAlerts = await page.addStyleTag({
   content: '[role="alert"] { display: none !important; }',
 });
 await page.getByText("Synthetic archive corpus").waitFor();
@@ -86,6 +86,7 @@ await page.screenshot({
   quality: 88,
   type: "jpeg",
 });
+await hiddenDatasetAlerts.evaluate((element) => element.remove());
 
 await page.goto(`${baseUrl}/#/search?source=live%3Areadme-live`);
 await page.getByRole("heading", { name: "Search" }).waitFor();
@@ -103,10 +104,12 @@ await page.screenshot({
 
 await page.goto(`${baseUrl}/#/domains`);
 await page.getByRole("heading", { name: "Domains" }).waitFor();
-await page.getByLabel("Search domains").fill("example.co.uk");
+await page.getByRole("button", { name: "Live source scans" }).click();
+await page.getByLabel("Parent domain").fill("example.co.uk");
 await page.getByRole("button", { name: "Scan & store" }).click();
 await page.getByText("2 Live rows stored locally").waitFor();
 await page.waitForTimeout(300);
+await page.evaluate(() => window.scrollTo(0, 0));
 await page.screenshot({
   path: "docs/screenshots/domains-live.jpg",
   quality: 88,

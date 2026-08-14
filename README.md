@@ -43,7 +43,7 @@ All screenshots use synthetic fixtures with reserved example domains and documen
 
 ![Stored Live domain evidence](docs/screenshots/domains-live.jpg)
 
-Domains can be scanned directly across saved Live files, folders, ZIP, RAR, and GZIP sources. Matching lines are deduplicated and stored locally as a reusable domain collection without building a persistent index.
+Domains can be scanned directly across saved Live files, folders, ZIP, RAR, and GZIP sources. A parent-domain scan includes the parent and its subdomains while rejecting lookalike suffixes. Matching lines are deduplicated and stored locally as a reusable domain collection without building a persistent index. For indexed sources, **Build all domains** refreshes the complete catalog without requiring a search term.
 
 ## Investigation features
 
