@@ -298,6 +298,10 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   await page.getByRole("button", { name: "Scan & store" }).click();
 
   await expect(page.getByText("Streaming matching Live lines")).toBeVisible();
+  const liveResults = page.getByTestId("active-live-domain-results");
+  await expect(liveResults).toBeVisible();
+  const liveResultsBox = await liveResults.boundingBox();
+  expect(liveResultsBox?.height ?? 0).toBeGreaterThanOrEqual(540);
   await expect(
     page.getByText("synthetic@example.com portal.example.com", {
       exact: false,

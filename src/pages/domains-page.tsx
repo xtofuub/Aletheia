@@ -506,7 +506,7 @@ export function DomainsPage() {
         </ToggleGroup>
       </Field>
       <div className="grid grid-cols-1 gap-px bg-border p-px xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
-        <DashboardCard className="min-w-0 gap-0">
+        <DashboardCard className="min-h-0 min-w-0 gap-0">
           <CardHeader className="border-b">
             <CardTitle>
               {sourceView === "live"
@@ -966,7 +966,7 @@ export function DomainsPage() {
           ) : null}
         </DashboardCard>
 
-        <DashboardCard className="min-w-0 gap-0">
+        <DashboardCard className="min-h-0 min-w-0 gap-0">
           <CardHeader className="border-b">
             <CardTitle>
               {sourceView === "live" && liveScanContext
@@ -1182,11 +1182,23 @@ export function DomainsPage() {
                 </>
               ) : null}
               {sourceView === "live" && currentLiveProgress ? (
-                <CardContent className="border-b px-0">
+                <CardContent
+                  className={cn(
+                    "border-b px-0",
+                    !activeDomain &&
+                      "min-h-[34rem] basis-0 flex-1 overflow-hidden",
+                  )}
+                >
                   {currentLiveProgress.hits.length ? (
-                    <ScrollArea className="h-[min(52vh,34rem)]">
+                    <ScrollArea
+                      className={cn(
+                        "h-[min(52vh,34rem)]",
+                        !activeDomain && "h-full min-h-[34rem]",
+                      )}
+                      data-testid="active-live-domain-results"
+                    >
                       <Table className="table-fixed">
-                        <TableHeader>
+                        <TableHeader className="sticky top-0 z-10 bg-background">
                           <TableRow>
                             <TableHead className="w-48 ps-6">
                               Source line
@@ -1267,7 +1279,13 @@ export function DomainsPage() {
                       without building an index.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="px-0">
+                  <CardContent
+                    className={cn(
+                      "px-0",
+                      !currentLiveProgress &&
+                        "min-h-[34rem] basis-0 flex-1 overflow-hidden",
+                    )}
+                  >
                     {liveEvidence.isPending ? (
                       <Empty className="min-h-48 rounded-none border-0">
                         <EmptyHeader>
@@ -1292,9 +1310,14 @@ export function DomainsPage() {
                         </EmptyHeader>
                       </Empty>
                     ) : liveEvidence.data?.evidence.length ? (
-                      <ScrollArea className="h-[min(42vh,28rem)]">
+                      <ScrollArea
+                        className={cn(
+                          "h-[min(42vh,28rem)]",
+                          !currentLiveProgress && "h-full min-h-[34rem]",
+                        )}
+                      >
                         <Table className="table-fixed">
-                          <TableHeader>
+                          <TableHeader className="sticky top-0 z-10 bg-background">
                             <TableRow>
                               <TableHead className="w-48 ps-6">
                                 Source line
