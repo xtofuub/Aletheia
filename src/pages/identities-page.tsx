@@ -8,6 +8,7 @@ import {
   FingerprintIcon,
   FileSearchIcon,
   FolderOpenIcon,
+  InfoIcon,
   LinkIcon,
   ListChecksIcon,
   PauseIcon,
@@ -80,6 +81,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
   applyIdentityAction,
@@ -252,10 +258,13 @@ export function IdentitiesPage() {
   const rebuild = useMutation({
     mutationFn: rebuildIdentities,
     onSuccess: async (count) => {
-      setNotice(`Rebuilt ${formatCount(count)} automatic groups`);
+      setNotice(
+        `Automatic groups refreshed · ${formatCount(count)} groups found`,
+      );
       await queryClient.invalidateQueries({ queryKey: ["identities"] });
     },
-    onError: (error) => setNotice(`Identity analysis failed: ${String(error)}`),
+    onError: (error) =>
+      setNotice(`Automatic grouping failed: ${String(error)}`),
   });
   const liveSearch = useMutation({
     mutationFn: (source: LiveSourceSummary) =>
@@ -427,12 +436,12 @@ export function IdentitiesPage() {
     value: string;
   }> = [
     {
-      label: "Groups",
+      label: "Identity groups",
       value: formatCount(identityList.length),
       icon: FingerprintIcon,
     },
     {
-      label: "Linked evidence",
+      label: "Evidence rows",
       value: formatCount(totalMembers),
       icon: LinkIcon,
     },
@@ -461,21 +470,34 @@ export function IdentitiesPage() {
     <div>
       <PageHeader
         actions={
-          <Button
-            disabled={rebuild.isPending}
-            onClick={() => rebuild.mutate()}
-            size="sm"
-            variant="outline"
-          >
-            {rebuild.isPending ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <RefreshCwIcon data-icon="inline-start" />
-            )}
-            {rebuild.isPending ? "Analyzing…" : "Rebuild groups"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger
+              delay={400}
+              render={
+                <Button
+                  disabled={rebuild.isPending}
+                  onClick={() => rebuild.mutate()}
+                  size="sm"
+                  variant="outline"
+                >
+                  {rebuild.isPending ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <RefreshCwIcon data-icon="inline-start" />
+                  )}
+                  {rebuild.isPending
+                    ? "Finding matches…"
+                    : "Refresh automatic groups"}
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom">
+              Rechecks indexed records for repeated emails, phone numbers, and
+              account IDs. Manual identities and Live evidence stay unchanged.
+            </TooltipContent>
+          </Tooltip>
         }
-        description="Review automatic groups or create an identity from selected evidence."
+        description="Review records linked by repeated identifiers, or build a verified identity yourself."
         title="Identities"
       />
 
@@ -499,11 +521,21 @@ export function IdentitiesPage() {
 
       <Tabs defaultValue="groups">
         <TabsList variant="line">
-          <TabsTrigger value="groups">Collection</TabsTrigger>
+          <TabsTrigger value="groups">Identity groups</TabsTrigger>
           <TabsTrigger value="builder">Build identity</TabsTrigger>
         </TabsList>
 
         <TabsContent value="groups">
+          <Alert className="mb-4">
+            <InfoIcon />
+            <AlertTitle>How automatic groups work</AlertTitle>
+            <AlertDescription>
+              Aletheia creates a group when the same email, phone number, or
+              account ID appears in at least two indexed records. Refresh after
+              adding or changing an index.
+            </AlertDescription>
+          </Alert>
+
           <div className="grid grid-cols-2 gap-px bg-border p-px lg:grid-cols-4">
             {identityStats.map(({ icon: Icon, label, value }) => (
               <DashboardCard key={label}>
@@ -523,7 +555,7 @@ export function IdentitiesPage() {
           <div className="grid grid-cols-1 gap-px bg-border p-px lg:grid-cols-[19rem_1fr]">
             <DashboardCard className="gap-0">
               <CardHeader className="border-b">
-                <CardTitle>Identity collection</CardTitle>
+                <CardTitle>Identity groups</CardTitle>
                 <CardDescription>
                   {formatCount(filteredIdentities.length)} visible groups
                 </CardDescription>
@@ -582,7 +614,7 @@ export function IdentitiesPage() {
                       </EmptyMedia>
                       <EmptyTitle>No matching groups</EmptyTitle>
                       <EmptyDescription>
-                        Rebuild automatic groups or change the filter.
+                        Refresh automatic groups or change the filter.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
