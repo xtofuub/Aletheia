@@ -12,9 +12,10 @@ export function OverviewPage() {
       <PageHeader
         actions={
           <Button
-            onClick={() =>
-              queryClient.invalidateQueries({ queryKey: ["overview"] })
-            }
+            onClick={() => {
+              void queryClient.invalidateQueries({ queryKey: ["overview"] });
+              void queryClient.invalidateQueries({ queryKey: ["system"] });
+            }}
             size="sm"
             variant="outline"
           >

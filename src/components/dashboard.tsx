@@ -20,13 +20,12 @@ export function Dashboard() {
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: async () => {
-      const [datasets, liveSources, liveSearches, stats, system, exports] =
+      const [datasets, liveSources, liveSearches, stats, exports] =
         await Promise.all([
           listDatasets(),
           listLiveSources(),
           listLiveSearchActivity(),
           getOverviewStats(),
-          getSystemStatus(),
           listExports(),
         ]);
       return {
@@ -34,17 +33,30 @@ export function Dashboard() {
         liveSources,
         liveSearches,
         stats,
-        system,
         exports,
       };
     },
-    refetchInterval: 5_000,
+    refetchInterval: (query) => {
+      if (query.state.data?.stats.refreshing) return 1_500;
+      return query.state.data?.datasets.some((dataset) =>
+        ["queued", "indexing", "cancelling"].includes(dataset.status),
+      )
+        ? 5_000
+        : false;
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+  });
+  const system = useQuery({
+    queryKey: ["system"],
+    queryFn: getSystemStatus,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
   });
 
   if (!overview.data) return <DashboardSkeleton />;
 
-  const { datasets, liveSources, liveSearches, stats, system, exports } =
-    overview.data;
+  const { datasets, liveSources, liveSearches, stats, exports } = overview.data;
   return (
     <div className="grid grid-cols-1 gap-px bg-border p-px md:grid-cols-2 lg:grid-cols-4">
       <DashboardStats
@@ -61,7 +73,7 @@ export function Dashboard() {
         stats={stats}
       />
       <DashboardInvoices datasets={datasets} liveSources={liveSources} />
-      <BillingHealth system={system} />
+      <BillingHealth system={system.data} />
       <DashboardActivity
         datasets={datasets}
         exports={exports}

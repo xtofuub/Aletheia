@@ -18,7 +18,11 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 
-export function BillingHealth({ system }: { system: SystemStatus }) {
+export function BillingHealth({
+  system,
+}: {
+  system: SystemStatus | undefined;
+}) {
   return (
     <DashboardCard className="gap-0">
       <CardHeader className="border-b">
@@ -29,17 +33,22 @@ export function BillingHealth({ system }: { system: SystemStatus }) {
         <Empty className="rounded-none border-0">
           <EmptyHeader>
             <EmptyMedia variant="icon">
-              {system.databaseReady ? <CircleCheckIcon /> : <HardDriveIcon />}
+              {system?.databaseReady ? <CircleCheckIcon /> : <HardDriveIcon />}
             </EmptyMedia>
             <EmptyTitle>
-              {system.databaseReady ? "Engine ready" : "Storage unavailable"}
+              {!system
+                ? "Checking workspace"
+                : system.databaseReady
+                  ? "Engine ready"
+                  : "Storage unavailable"}
             </EmptyTitle>
             <EmptyDescription>
-              {formatBytes(system.metadataBytes + system.indexBytes)} generated
-              locally.
+              {system
+                ? `${formatBytes(system.metadataBytes + system.indexBytes)} generated locally.`
+                : "Loading local storage totals without blocking the dashboard."}
             </EmptyDescription>
             <Badge variant="outline">
-              {system.offline ? "Offline" : "Network available"}
+              {!system || system.offline ? "Offline" : "Network available"}
             </Badge>
           </EmptyHeader>
         </Empty>

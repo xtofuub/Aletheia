@@ -28,6 +28,7 @@ const MIGRATION_V7: &str = include_str!("../migrations/0007_identity_live_eviden
 const MIGRATION_V8: &str = include_str!("../migrations/0008_live_sources.sql");
 const MIGRATION_V9: &str = include_str!("../migrations/0009_live_domain_evidence.sql");
 const MIGRATION_V10: &str = include_str!("../migrations/0010_domain_query_indexes.sql");
+const MIGRATION_V11: &str = include_str!("../migrations/0011_overview_metrics.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -85,6 +86,7 @@ pub struct AppState {
     pub storage_root: Arc<RwLock<PathBuf>>,
     pub import_jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
     pub scan_jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    pub overview_refreshing: Arc<AtomicBool>,
     search_index: SearchIndexCache,
     app_data_dir: PathBuf,
 }
@@ -107,6 +109,7 @@ impl AppState {
             storage_root: Arc::new(RwLock::new(storage_root)),
             import_jobs: Arc::new(Mutex::new(HashMap::new())),
             scan_jobs: Arc::new(Mutex::new(HashMap::new())),
+            overview_refreshing: Arc::new(AtomicBool::new(false)),
             search_index: Arc::new(RwLock::new(None)),
             app_data_dir,
         })
@@ -166,6 +169,7 @@ impl AppState {
         if let Ok(mut search_index) = self.search_index.write() {
             *search_index = None;
         }
+        self.overview_refreshing.store(false, Ordering::Release);
         Ok(())
     }
 }
@@ -183,12 +187,19 @@ pub fn open_database(storage_root: &Path) -> Result<Connection, StorageError> {
 pub fn open_worker_database(storage_root: &Path) -> Result<Connection, StorageError> {
     let database_path = storage_root.join(DATABASE_FILE);
     let connection = Connection::open(database_path)?;
-    configure_connection(&connection)?;
+    configure_worker_connection(&connection)?;
     Ok(connection)
 }
 
 fn configure_connection(connection: &Connection) -> Result<(), StorageError> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
+    configure_worker_connection(connection)
+}
+
+fn configure_worker_connection(connection: &Connection) -> Result<(), StorageError> {
+    // The primary connection establishes WAL mode once. Repeating the journal-mode
+    // transition on every dashboard/search worker can require an exclusive SQLite
+    // lock and makes concurrent cold-start reads serialize on slow disks.
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "synchronous", "NORMAL")?;
     connection.pragma_update(None, "temp_store", "MEMORY")?;
@@ -307,6 +318,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 11 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V11)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (11)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -320,9 +340,10 @@ fn recover_interrupted_imports(connection: &Connection) -> Result<(), StorageErr
            ) THEN 'cancelled'
            ELSE 'interrupted'
          END,
-         record_count = (
-           SELECT COUNT(*) FROM records r WHERE r.dataset_id = datasets.id
-         ),
+         record_count = MAX(record_count, COALESCE((
+           SELECT MAX(records_indexed) FROM import_jobs j
+           WHERE j.dataset_id = datasets.id
+         ), record_count)),
          warning_count = COALESCE((
            SELECT MAX(invalid_records) FROM import_jobs j
            WHERE j.dataset_id = datasets.id
@@ -429,13 +450,14 @@ mod tests {
                      'identity_live_evidence',
                      'live_sources',
                      'live_source_paths',
-                     'live_domain_evidence'
+                     'live_domain_evidence',
+                     'overview_metrics'
                    )",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 13);
+        assert_eq!(table_count, 14);
 
         assert!(!MIGRATION_V8.is_empty());
         assert!(!MIGRATION_V9.is_empty());
@@ -451,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_recovery_marks_orphaned_imports_and_restores_record_totals() {
+    fn startup_recovery_marks_orphaned_imports_from_saved_checkpoints() {
         let directory = tempdir().expect("temporary directory");
         let connection = open_database(directory.path()).expect("database opens");
         connection
@@ -578,7 +600,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("domain query indexes");
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         assert_eq!(live_table_count, 3);
         assert_eq!(domain_query_index_count, 2);
     }

@@ -212,6 +212,7 @@ export interface LiveSearchActivity {
 export interface OverviewStats {
   identityGroupCount: number;
   parentDomainCount: number;
+  refreshing: boolean;
 }
 
 export type SearchMode = "exact" | "contains" | "prefix";
@@ -1017,11 +1018,12 @@ export async function getOverviewStats(): Promise<OverviewStats> {
     listIdentities(),
   ]);
   if (!datasets.length) {
-    return { identityGroupCount: 0, parentDomainCount: 0 };
+    return { identityGroupCount: 0, parentDomainCount: 0, refreshing: false };
   }
   return {
     identityGroupCount: identities.length,
     parentDomainCount: domains.total,
+    refreshing: false,
   };
 }
 

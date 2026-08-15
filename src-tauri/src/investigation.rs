@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::Ordering},
 };
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
@@ -25,37 +25,92 @@ pub async fn get_overview_stats(state: State<'_, AppState>) -> Result<OverviewSt
     let root = state
         .current_storage_root()
         .map_err(|_| "storage location is unavailable".to_string())?;
-    tauri::async_runtime::spawn_blocking(move || {
+    let stats = tauri::async_runtime::spawn_blocking(move || {
         let connection = open_worker_database(&root)
             .map_err(|_| "overview database worker could not start".to_string())?;
-        let identity_group_count = connection
-            .query_row(
-                "SELECT COUNT(*) FROM identity_groups ig
-                 WHERE (
-                   SELECT COUNT(*) FROM identity_memberships im
-                   WHERE im.identity_group_id = ig.id
-                 ) + (
-                   SELECT COUNT(*) FROM identity_live_evidence le
-                   WHERE le.identity_group_id = ig.id
-                 ) >= 2",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(sanitized)?;
-        let parent_domain_count = connection
-            .query_row(
-                "SELECT COUNT(DISTINCT registrable_domain) FROM domains",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(sanitized)?;
-        Ok(OverviewStats {
-            identity_group_count: identity_group_count as u64,
-            parent_domain_count: parent_domain_count as u64,
-        })
+        load_overview_stats(&connection)
     })
     .await
-    .map_err(|_| "overview statistics task failed".to_string())?
+    .map_err(|_| "overview statistics task failed".to_string())??;
+
+    if stats.refreshing && !state.overview_refreshing.swap(true, Ordering::AcqRel) {
+        let root = state
+            .current_storage_root()
+            .map_err(|_| "storage location is unavailable".to_string())?;
+        let refreshing = state.overview_refreshing.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Ok(mut connection) = open_worker_database(&root) {
+                let _ = refresh_overview_stats(&mut connection);
+            }
+            refreshing.store(false, Ordering::Release);
+        });
+    }
+    Ok(stats)
+}
+
+fn load_overview_stats(connection: &Connection) -> Result<OverviewStats, String> {
+    let (identity_group_count, parent_domain_count) = connection
+        .query_row(
+            "SELECT
+               COALESCE(MAX(CASE WHEN key = 'identity_group_count' THEN value END), -1),
+               COALESCE(MAX(CASE WHEN key = 'parent_domain_count' THEN value END), -1)
+             FROM overview_metrics",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(sanitized)?;
+    Ok(OverviewStats {
+        identity_group_count: identity_group_count.max(0) as u64,
+        parent_domain_count: parent_domain_count.max(0) as u64,
+        refreshing: identity_group_count < 0 || parent_domain_count < 0,
+    })
+}
+
+fn refresh_overview_stats(connection: &mut Connection) -> Result<(), String> {
+    // This one-time backfill can be expensive on a cold multi-gigabyte HDD
+    // workspace, so it always runs outside the invoke/UI path. Triggers keep the
+    // compact counters current after the backfill finishes.
+    let identity_group_count = connection
+        .query_row(
+            "SELECT COUNT(*) FROM (
+               SELECT identity_group_id
+               FROM (
+                 SELECT identity_group_id FROM identity_memberships
+                 UNION ALL
+                 SELECT identity_group_id FROM identity_live_evidence
+               ) evidence
+               GROUP BY identity_group_id
+               HAVING COUNT(*) >= 2
+             ) grouped_identities",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sanitized)?;
+    let parent_domain_count = connection
+        .query_row(
+            "SELECT COUNT(DISTINCT registrable_domain) FROM domain_dataset_counts",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sanitized)?;
+    let transaction = connection.transaction().map_err(sanitized)?;
+    transaction
+        .execute(
+            "UPDATE overview_metrics
+             SET value = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE key = 'identity_group_count'",
+            [identity_group_count],
+        )
+        .map_err(sanitized)?;
+    transaction
+        .execute(
+            "UPDATE overview_metrics
+             SET value = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE key = 'parent_domain_count'",
+            [parent_domain_count],
+        )
+        .map_err(sanitized)?;
+    transaction.commit().map_err(sanitized)
 }
 
 #[tauri::command]
@@ -1814,13 +1869,76 @@ mod tests {
     use super::{
         apply_identity_action_inner, create_manual_identity_inner, ensure_url_domain_links,
         exact_domain_query, list_identities_inner, load_domain_details, load_identity_members,
-        load_search_hits, search_domain_groups, search_domain_record_ids,
+        load_overview_stats, load_search_hits, refresh_overview_stats, search_domain_groups,
+        search_domain_record_ids,
     };
     use crate::models::{
         FieldType, IdentityActionInput, LiveIdentityEvidenceInput, ManualIdentityInput, SearchMode,
         SearchRequest,
     };
     use crate::storage::open_database;
+
+    #[test]
+    fn overview_counts_grouped_evidence_without_per_identity_queries() {
+        let workspace = tempdir().expect("temporary workspace");
+        let mut connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(
+                "INSERT INTO datasets(
+                   id, name, status, parser_version, record_count, file_count
+                 ) VALUES ('dataset-overview', 'Synthetic', 'ready', 'test', 0, 0);
+                 INSERT INTO identity_groups(id, display_label, confidence_level)
+                 VALUES ('group-1', 'Synthetic', 'high'),
+                        ('group-2', 'Single member', 'low');
+                 INSERT INTO identity_live_evidence(
+                   id, identity_group_id, source_path, source_file,
+                   source_location, excerpt, match_reason, evidence_fingerprint
+                 ) VALUES
+                   ('evidence-1', 'group-1', 'C:\\Synthetic\\one.txt', 'one.txt',
+                    'line 1', 'synthetic one', 'test', 'fingerprint-1'),
+                   ('evidence-2', 'group-1', 'C:\\Synthetic\\two.txt', 'two.txt',
+                    'line 2', 'synthetic two', 'test', 'fingerprint-2'),
+                   ('evidence-3', 'group-2', 'C:\\Synthetic\\three.txt', 'three.txt',
+                    'line 3', 'synthetic three', 'test', 'fingerprint-3');
+                 INSERT INTO domains(
+                   id, hostname, registrable_domain, public_suffix,
+                   is_subdomain, record_count
+                 ) VALUES
+                   ('domain-1', 'one.example.test', 'example.test', 'test', 1, 1),
+                   ('domain-2', 'two.example.test', 'example.test', 'test', 1, 1),
+                   ('domain-3', 'other.test', 'other.test', 'test', 0, 1);
+                 INSERT INTO domain_dataset_counts(
+                   registrable_domain, dataset_id, record_count
+                 ) VALUES
+                   ('example.test', 'dataset-overview', 2),
+                   ('other.test', 'dataset-overview', 1);",
+            )
+            .expect("synthetic overview data");
+
+        refresh_overview_stats(&mut connection).expect("overview backfill");
+        let overview = load_overview_stats(&connection).expect("overview stats");
+        assert_eq!(overview.identity_group_count, 1);
+        assert_eq!(overview.parent_domain_count, 2);
+        assert!(!overview.refreshing);
+
+        connection
+            .execute_batch(
+                "INSERT INTO identity_live_evidence(
+                   id, identity_group_id, source_path, source_file,
+                   source_location, excerpt, match_reason, evidence_fingerprint
+                 ) VALUES (
+                   'evidence-4', 'group-2', 'C:\\Synthetic\\four.txt', 'four.txt',
+                   'line 4', 'synthetic four', 'test', 'fingerprint-4'
+                 );
+                 INSERT INTO domain_dataset_counts(
+                   registrable_domain, dataset_id, record_count
+                 ) VALUES ('third.test', 'dataset-overview', 1);",
+            )
+            .expect("incremental overview data");
+        let updated = load_overview_stats(&connection).expect("updated overview stats");
+        assert_eq!(updated.identity_group_count, 2);
+        assert_eq!(updated.parent_domain_count, 3);
+    }
 
     #[test]
     fn domain_search_and_details_keep_dataset_traceability() {

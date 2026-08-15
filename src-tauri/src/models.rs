@@ -193,6 +193,7 @@ pub struct DatasetSummary {
 pub struct OverviewStats {
     pub identity_group_count: u64,
     pub parent_domain_count: u64,
+    pub refreshing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

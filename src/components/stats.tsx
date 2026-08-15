@@ -45,15 +45,23 @@ export function DashboardStats({
     },
     {
       label: "Parent domains",
-      value: formatCount(stats.parentDomainCount),
-      detailValue: formatCount(stats.parentDomainCount),
-      detailLabel: "normalized domain groups",
+      value: stats.refreshing ? "—" : formatCount(stats.parentDomainCount),
+      detailValue: stats.refreshing
+        ? "Calculating"
+        : formatCount(stats.parentDomainCount),
+      detailLabel: stats.refreshing
+        ? "building a fast local summary"
+        : "normalized domain groups",
     },
     {
       label: "Identities",
-      value: formatCount(stats.identityGroupCount),
-      detailValue: formatCount(stats.identityGroupCount),
-      detailLabel: "linked identity groups",
+      value: stats.refreshing ? "—" : formatCount(stats.identityGroupCount),
+      detailValue: stats.refreshing
+        ? "Calculating"
+        : formatCount(stats.identityGroupCount),
+      detailLabel: stats.refreshing
+        ? "building a fast local summary"
+        : "linked identity groups",
     },
   ];
 
