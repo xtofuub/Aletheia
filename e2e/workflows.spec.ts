@@ -135,6 +135,30 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   ).toHaveCount(0);
 });
 
+test("datasets show normal Windows source paths", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      "aletheia.browser.live-sources",
+      JSON.stringify([
+        {
+          id: "long-path-source",
+          name: "Synthetic long path source",
+          paths: ["\\\\?\\C:\\Synthetic\\Authorized corpus"],
+          includeArchives: true,
+          createdAt: new Date().toISOString(),
+        },
+      ]),
+    );
+  });
+  await page.goto("/#/datasets");
+
+  const sourceRow = page.getByRole("row", {
+    name: /Synthetic long path source/,
+  });
+  await expect(sourceRow).toContainText("C:\\Synthetic\\Authorized corpus");
+  await expect(sourceRow).not.toContainText("\\\\?\\");
+});
+
 test("Identity Builder reuses a saved Live source", async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem(

@@ -46,3 +46,15 @@ export function formatDuration(milliseconds: number | null) {
   const days = Math.floor(hours / 24);
   return `${days}d ${hours % 24}h`;
 }
+
+export function formatPathForDisplay(path: string) {
+  if (path.startsWith("\\\\?\\UNC\\")) {
+    return `\\\\${path.slice(8)}`;
+  }
+
+  if (path.startsWith("\\\\?\\")) {
+    return path.slice(4);
+  }
+
+  return path;
+}

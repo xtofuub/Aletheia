@@ -5,6 +5,7 @@ import {
   formatCount,
   formatDateTime,
   formatDuration,
+  formatPathForDisplay,
   formatProgressPercent,
   formatRate,
 } from "./format";
@@ -37,5 +38,17 @@ describe("format helpers", () => {
     expect(formatProgressPercent(0.01)).toBe("<1%");
     expect(formatProgressPercent(42.4)).toBe("42%");
     expect(formatProgressPercent(120)).toBe("100%");
+  });
+
+  it("hides Windows long-path prefixes without changing the stored path", () => {
+    expect(formatPathForDisplay("\\\\?\\C:\\Synthetic\\Corpus")).toBe(
+      "C:\\Synthetic\\Corpus",
+    );
+    expect(
+      formatPathForDisplay("\\\\?\\UNC\\synthetic-host\\share\\Corpus"),
+    ).toBe("\\\\synthetic-host\\share\\Corpus");
+    expect(formatPathForDisplay("C:\\Synthetic\\Corpus")).toBe(
+      "C:\\Synthetic\\Corpus",
+    );
   });
 });

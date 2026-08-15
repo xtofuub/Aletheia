@@ -112,6 +112,7 @@ import {
   formatCount,
   formatDateTime,
   formatDuration,
+  formatPathForDisplay,
   formatRate,
 } from "@/lib/format";
 import {
@@ -790,8 +791,11 @@ export function DatasetsPage() {
                       </TableCell>
                       <TableCell className="min-w-0 whitespace-normal">
                         <p className="truncate font-medium">{source.name}</p>
-                        <p className="truncate font-mono text-xs text-muted-foreground">
-                          {source.paths[0]}
+                        <p
+                          className="truncate font-mono text-xs text-muted-foreground"
+                          title={formatPathForDisplay(source.paths[0] ?? "")}
+                        >
+                          {formatPathForDisplay(source.paths[0] ?? "")}
                           {source.paths.length > 1
                             ? ` + ${source.paths.length - 1} more`
                             : ""}
