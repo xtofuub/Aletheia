@@ -59,7 +59,7 @@ test("overview maps dataset scale and investigation lanes", async ({
         {
           id: "chart-live-source",
           name: "Synthetic chart source",
-          paths: ["C:\\Synthetic\\Authorized corpus"],
+          paths: ["\\\\?\\C:\\Synthetic\\Authorized corpus"],
           includeArchives: true,
           createdAt: now,
         },
@@ -185,6 +185,7 @@ test("Identity Builder reuses a saved Live source", async ({ page }) => {
   await expect(
     page.getByText("C:\\Synthetic\\Authorized corpus"),
   ).toBeVisible();
+  await expect(page.getByText(/\\\\\?\\C:\\Synthetic/)).toHaveCount(0);
   await expect(page.getByText(/Expected full scan:/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose folder" })).toHaveCount(
     0,

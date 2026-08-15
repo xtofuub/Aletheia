@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatPathForDisplay } from "@/lib/format";
 import { listExports } from "@/lib/desktop";
 import { formatCount, formatDateTime } from "@/lib/format";
 
@@ -99,7 +100,7 @@ export function ExportsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="max-w-2xl truncate font-mono text-xs">
-                        {item.destinationPath}
+                        {formatPathForDisplay(item.destinationPath)}
                       </TableCell>
                       <TableCell className="font-mono text-xs tabular-nums">
                         {item.recordCount}

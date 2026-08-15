@@ -5,6 +5,7 @@ import {
   formatCount,
   formatDateTime,
   formatDuration,
+  formatFileNameForDisplay,
   formatPathForDisplay,
   formatProgressPercent,
   formatRate,
@@ -50,5 +51,23 @@ describe("format helpers", () => {
     expect(formatPathForDisplay("C:\\Synthetic\\Corpus")).toBe(
       "C:\\Synthetic\\Corpus",
     );
+  });
+
+  it("shows compact file names for Windows long paths", () => {
+    expect(
+      formatFileNameForDisplay(
+        "\\\\?\\E:\\Synthetic\\Corpus\\authorized-source.txt",
+      ),
+    ).toBe("authorized-source.txt");
+    expect(
+      formatFileNameForDisplay(
+        "\\\\?\\UNC\\synthetic-host\\share\\authorized-source.txt",
+      ),
+    ).toBe("authorized-source.txt");
+    expect(
+      formatFileNameForDisplay(
+        "\\\\?\\E:\\Synthetic\\authorized.zip > records/authorized-source.txt",
+      ),
+    ).toBe("authorized.zip > records/authorized-source.txt");
   });
 });

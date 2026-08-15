@@ -58,3 +58,16 @@ export function formatPathForDisplay(path: string) {
 
   return path;
 }
+
+export function formatFileNameForDisplay(path: string): string {
+  const [container, ...entries] = path.split(" > ");
+  if (entries.length > 0) {
+    return `${formatFileNameForDisplay(container ?? "")} > ${entries.join(" > ")}`;
+  }
+  const displayPath = formatPathForDisplay(path).replace(/[\\/]+$/, "");
+  const separator = Math.max(
+    displayPath.lastIndexOf("\\"),
+    displayPath.lastIndexOf("/"),
+  );
+  return separator >= 0 ? displayPath.slice(separator + 1) : displayPath;
+}

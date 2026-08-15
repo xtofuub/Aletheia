@@ -112,6 +112,7 @@ import {
   formatCount,
   formatDateTime,
   formatDuration,
+  formatFileNameForDisplay,
   formatPathForDisplay,
   formatRate,
 } from "@/lib/format";
@@ -687,7 +688,9 @@ export function DatasetsPage() {
             <CardContent className="flex flex-col gap-4">
               <Progress value={percent}>
                 <ProgressLabel>
-                  {visibleProgress.currentFile ?? visibleProgress.status}
+                  {visibleProgress.currentFile
+                    ? formatFileNameForDisplay(visibleProgress.currentFile)
+                    : visibleProgress.status}
                 </ProgressLabel>
                 <ProgressValue>{() => `${percent.toFixed(0)}%`}</ProgressValue>
               </Progress>
@@ -986,7 +989,7 @@ export function DatasetsPage() {
                   <div className="flex min-w-0 items-center gap-2" key={path}>
                     <FileSearchIcon className="shrink-0" />
                     <span className="min-w-0 truncate font-mono text-xs">
-                      {path}
+                      {formatPathForDisplay(path)}
                     </span>
                   </div>
                 ))}

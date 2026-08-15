@@ -105,6 +105,8 @@ import {
 import {
   formatBytes,
   formatDuration,
+  formatFileNameForDisplay,
+  formatPathForDisplay,
   formatProgressPercent,
 } from "@/lib/format";
 
@@ -926,11 +928,12 @@ export function SearchPage({
                         <TableRow key={hit.id}>
                           <TableCell className="min-w-0 ps-6 whitespace-normal">
                             <p className="break-all">
-                              {hit.archiveEntry ?? hit.sourceFile}
+                              {hit.archiveEntry ??
+                                formatFileNameForDisplay(hit.sourceFile)}
                             </p>
                             {hit.archiveEntry ? (
                               <p className="break-all text-xs text-muted-foreground">
-                                {hit.sourceFile}
+                                {formatFileNameForDisplay(hit.sourceFile)}
                               </p>
                             ) : null}
                           </TableCell>
@@ -1028,7 +1031,12 @@ export function SearchPage({
                           <p className="break-all">{hit.datasetName}</p>
                         </TableCell>
                         <TableCell className="min-w-0 whitespace-normal">
-                          <p className="break-all text-xs">{hit.sourceFile}</p>
+                          <p
+                            className="break-all text-xs"
+                            title={formatPathForDisplay(hit.sourceFile)}
+                          >
+                            {formatFileNameForDisplay(hit.sourceFile)}
+                          </p>
                           <p className="break-all font-mono text-xs text-muted-foreground">
                             {hit.sourceLocation}
                           </p>

@@ -103,7 +103,13 @@ import {
   type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
-import { formatBytes, formatCount, formatProgressPercent } from "@/lib/format";
+import {
+  formatBytes,
+  formatCount,
+  formatFileNameForDisplay,
+  formatPathForDisplay,
+  formatProgressPercent,
+} from "@/lib/format";
 
 const memberLimit = 25;
 const identitySearchModes: Array<{ label: string; value: SearchMode }> = [
@@ -717,9 +723,11 @@ export function IdentitiesPage() {
                               </p>
                               <p
                                 className="truncate text-xs text-muted-foreground"
-                                title={member.sourcePath ?? member.sourceFile}
+                                title={formatPathForDisplay(
+                                  member.sourcePath ?? member.sourceFile,
+                                )}
                               >
-                                {member.sourceFile}
+                                {formatFileNameForDisplay(member.sourceFile)}
                               </p>
                               <div className="mt-1 flex flex-wrap items-center gap-2">
                                 <span className="font-mono text-xs text-muted-foreground">
@@ -1138,9 +1146,13 @@ export function IdentitiesPage() {
                           {selectedLiveSource ? (
                             <p
                               className="truncate font-mono text-xs text-muted-foreground"
-                              title={selectedLiveSource.paths.join("\n")}
+                              title={selectedLiveSource.paths
+                                .map(formatPathForDisplay)
+                                .join("\n")}
                             >
-                              {selectedLiveSource.paths[0]}
+                              {formatPathForDisplay(
+                                selectedLiveSource.paths[0] ?? "",
+                              )}
                               {selectedLiveSource.paths.length > 1
                                 ? ` +${selectedLiveSource.paths.length - 1} more`
                                 : ""}
@@ -1312,7 +1324,7 @@ export function IdentitiesPage() {
                             <TableRow key={hit.id}>
                               <TableCell className="ps-4">
                                 <Checkbox
-                                  aria-label={`Select ${hit.sourceFile} ${hit.sourceLocation}`}
+                                  aria-label={`Select ${formatFileNameForDisplay(hit.sourceFile)} ${hit.sourceLocation}`}
                                   checked={liveSelection.has(hit.id)}
                                   onCheckedChange={(checked) =>
                                     setLiveSelection((current) => {
@@ -1331,13 +1343,15 @@ export function IdentitiesPage() {
                               </TableCell>
                               <TableCell className="whitespace-normal pe-6">
                                 <p className="truncate text-xs font-medium">
-                                  {hit.archiveEntry ?? hit.sourceFile}
+                                  {hit.archiveEntry ??
+                                    formatFileNameForDisplay(hit.sourceFile)}
                                 </p>
                                 <p
                                   className="truncate font-mono text-xs text-muted-foreground"
-                                  title={hit.sourcePath}
+                                  title={formatPathForDisplay(hit.sourcePath)}
                                 >
-                                  {hit.sourceFile} - {hit.sourceLocation}
+                                  {formatFileNameForDisplay(hit.sourceFile)} -{" "}
+                                  {hit.sourceLocation}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
                                   {hit.matchReason}

@@ -91,7 +91,13 @@ import {
   startDirectSearch,
   type LiveSourceSummary,
 } from "@/lib/desktop";
-import { formatBytes, formatCount, formatProgressPercent } from "@/lib/format";
+import {
+  formatBytes,
+  formatCount,
+  formatFileNameForDisplay,
+  formatPathForDisplay,
+  formatProgressPercent,
+} from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const pageSize = 25;
@@ -1117,9 +1123,13 @@ export function DomainsPage() {
                                   </Badge>
                                   <p
                                     className="mt-2 truncate text-xs text-muted-foreground"
-                                    title={record.sourceFile}
+                                    title={formatPathForDisplay(
+                                      record.sourceFile,
+                                    )}
                                   >
-                                    {record.sourceFile}
+                                    {formatFileNameForDisplay(
+                                      record.sourceFile,
+                                    )}
                                   </p>
                                   <div className="mt-1 min-w-0 lg:hidden">
                                     <p
@@ -1212,9 +1222,9 @@ export function DomainsPage() {
                               <TableCell className="min-w-0 ps-6 align-top">
                                 <p
                                   className="truncate text-xs"
-                                  title={hit.sourceFile}
+                                  title={formatPathForDisplay(hit.sourcePath)}
                                 >
-                                  {hit.sourceFile}
+                                  {formatFileNameForDisplay(hit.sourceFile)}
                                 </p>
                                 <p
                                   className="truncate font-mono text-xs text-muted-foreground"
@@ -1336,9 +1346,13 @@ export function DomainsPage() {
                                 <TableCell className="min-w-0 ps-6 align-top">
                                   <p
                                     className="truncate text-xs"
-                                    title={evidence.sourceFile}
+                                    title={formatPathForDisplay(
+                                      evidence.sourcePath,
+                                    )}
                                   >
-                                    {evidence.sourceFile}
+                                    {formatFileNameForDisplay(
+                                      evidence.sourceFile,
+                                    )}
                                   </p>
                                   <p
                                     className="truncate font-mono text-xs text-muted-foreground"
@@ -1364,9 +1378,11 @@ export function DomainsPage() {
                                   </p>
                                   <p
                                     className="truncate font-mono text-[11px] text-muted-foreground"
-                                    title={evidence.sourcePath}
+                                    title={formatPathForDisplay(
+                                      evidence.sourcePath,
+                                    )}
                                   >
-                                    {evidence.sourcePath}
+                                    {formatPathForDisplay(evidence.sourcePath)}
                                   </p>
                                 </TableCell>
                                 <TableCell className="min-w-0 whitespace-normal pe-6 align-top">

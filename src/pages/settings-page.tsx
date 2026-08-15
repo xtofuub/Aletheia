@@ -80,7 +80,11 @@ import {
   type Theme,
   type UpdateInstallProgress,
 } from "@/lib/desktop";
-import { formatBytes, formatDateTime } from "@/lib/format";
+import {
+  formatBytes,
+  formatDateTime,
+  formatPathForDisplay,
+} from "@/lib/format";
 
 const themeItems = [
   { label: "System", value: "system" },
@@ -659,7 +663,9 @@ export function SettingsPage() {
             <div>
               <p className="text-xs text-muted-foreground">Storage root</p>
               <p className="mt-1 break-all font-mono text-xs">
-                {system.data?.storageRoot ?? form.storageRoot}
+                {formatPathForDisplay(
+                  system.data?.storageRoot ?? form.storageRoot,
+                )}
               </p>
             </div>
             <div className="grid grid-cols-2 gap-px bg-border p-px">
