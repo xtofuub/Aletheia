@@ -845,10 +845,17 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
                       ELSE ms.explanation_json
                     END,
                     CASE
-                      WHEN COALESCE(ms.rejected_count, 0) + COALESCE(ls.rejected_count, 0) > 0
-                        THEN 'needs review'
-                      WHEN COALESCE(ms.confirmed_count, 0) + COALESCE(ls.confirmed_count, 0) > 0
+                      WHEN COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0) > 0
+                       AND COALESCE(ms.rejected_count, 0) + COALESCE(ls.rejected_count, 0)
+                           = COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0)
+                        THEN 'rejected'
+                      WHEN COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0) > 0
+                       AND COALESCE(ms.confirmed_count, 0) + COALESCE(ls.confirmed_count, 0)
+                           = COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0)
                         THEN 'confirmed'
+                      WHEN COALESCE(ms.rejected_count, 0) + COALESCE(ls.rejected_count, 0)
+                           + COALESCE(ms.confirmed_count, 0) + COALESCE(ls.confirmed_count, 0) > 0
+                        THEN 'needs review'
                       ELSE 'automatic'
                     END
              FROM identity_groups ig
@@ -2012,6 +2019,32 @@ mod tests {
         );
         assert_eq!(revealed.members[0].fields.len(), 1);
         drop(connection);
+
+        apply_identity_action_inner(
+            IdentityActionInput {
+                action: "reject".to_string(),
+                group_id: group_id.clone(),
+                record_ids: Vec::new(),
+                target_group_id: None,
+            },
+            database.clone(),
+        )
+        .expect("reject identity");
+        let rejected = list_identities_inner(database.clone()).expect("rejected identity list");
+        assert_eq!(rejected[0].user_status, "rejected");
+
+        apply_identity_action_inner(
+            IdentityActionInput {
+                action: "confirm".to_string(),
+                group_id: group_id.clone(),
+                record_ids: Vec::new(),
+                target_group_id: None,
+            },
+            database.clone(),
+        )
+        .expect("confirm identity");
+        let confirmed = list_identities_inner(database.clone()).expect("confirmed identity list");
+        assert_eq!(confirmed[0].user_status, "confirmed");
 
         let event_id = apply_identity_action_inner(
             IdentityActionInput {

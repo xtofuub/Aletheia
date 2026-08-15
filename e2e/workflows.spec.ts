@@ -221,6 +221,28 @@ test("Identity Builder scopes indexed evidence to one dataset", async ({
   ).toBeVisible();
 });
 
+test("identity review actions visibly update the selected group", async ({
+  page,
+}) => {
+  await page.goto("/#/identities");
+
+  await page.getByRole("button", { name: "Reject", exact: true }).click();
+  await expect(
+    page.getByText("Identity rejected", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Rejected", exact: true }),
+  ).toBeDisabled();
+
+  await page.getByRole("button", { name: "Confirm", exact: true }).click();
+  await expect(
+    page.getByText("Identity confirmed", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Confirmed", exact: true }),
+  ).toBeDisabled();
+});
+
 test("Domains scans saved Live sources and stores matching lines", async ({
   page,
 }) => {

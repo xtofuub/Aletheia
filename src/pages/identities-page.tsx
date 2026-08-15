@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircleIcon,
   CheckIcon,
+  CheckCircle2Icon,
   DatabaseIcon,
   FingerprintIcon,
   FileSearchIcon,
@@ -22,6 +24,7 @@ import {
 import { DashboardCard } from "@/components/dashboard-card";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -89,6 +92,7 @@ import {
   rebuildIdentities,
   searchIdentityRecords,
   startDirectSearch,
+  type IdentitySummary,
   type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
@@ -126,6 +130,11 @@ export function IdentitiesPage() {
   const [liveOffset, setLiveOffset] = useState(0);
   const [liveSelection, setLiveSelection] = useState<Set<string>>(new Set());
   const [notice, setNotice] = useState("");
+  const [reviewFeedback, setReviewFeedback] = useState<{
+    error: boolean;
+    title: string;
+    description: string;
+  } | null>(null);
   const {
     begin: beginLiveSearch,
     cancel: cancelLiveSearch,
@@ -305,6 +314,51 @@ export function IdentitiesPage() {
     },
     onError: (error) => setNotice(`Identity creation failed: ${String(error)}`),
   });
+  const review = useMutation({
+    mutationFn: ({
+      action,
+      groupId,
+    }: {
+      action: "confirm" | "reject";
+      groupId: string;
+      memberCount: number;
+    }) =>
+      applyIdentityAction({
+        action,
+        groupId,
+        recordIds: [],
+        targetGroupId: null,
+      }),
+    onMutate: () => setReviewFeedback(null),
+    onSuccess: async (_, { action, groupId, memberCount }) => {
+      const nextStatus = action === "confirm" ? "confirmed" : "rejected";
+      queryClient.setQueryData<IdentitySummary[]>(["identities"], (current) =>
+        current?.map((identity) =>
+          identity.id === groupId
+            ? { ...identity, userStatus: nextStatus }
+            : identity,
+        ),
+      );
+      setReviewFeedback({
+        error: false,
+        title:
+          action === "confirm" ? "Identity confirmed" : "Identity rejected",
+        description: `${formatCount(memberCount)} linked evidence rows were marked ${nextStatus}.`,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["identities"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["identity-members", groupId],
+        }),
+      ]);
+    },
+    onError: (error) =>
+      setReviewFeedback({
+        error: true,
+        title: "Review was not saved",
+        description: String(error),
+      }),
+  });
 
   const rebuildGroups = rebuild.mutate;
   useEffect(() => {
@@ -393,23 +447,13 @@ export function IdentitiesPage() {
     },
   ];
 
-  async function applyAction(action: "confirm" | "reject") {
+  function applyAction(action: "confirm" | "reject") {
     if (!selectedSummary) return;
-    await applyIdentityAction({
+    review.mutate({
       action,
       groupId: selectedSummary.id,
-      recordIds: [],
-      targetGroupId: null,
+      memberCount: selectedSummary.memberCount,
     });
-    setNotice(
-      action === "confirm" ? "Identity confirmed" : "Identity rejected",
-    );
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["identities"] }),
-      queryClient.invalidateQueries({
-        queryKey: ["identity-members", selectedSummary.id],
-      }),
-    ]);
   }
 
   return (
@@ -433,6 +477,24 @@ export function IdentitiesPage() {
         description="Review automatic groups or create an identity from selected evidence."
         title="Identities"
       />
+
+      {notice ? (
+        <Alert
+          className="mb-4"
+          role="status"
+          variant={
+            notice.toLowerCase().includes("failed") ? "destructive" : "default"
+          }
+        >
+          {notice.toLowerCase().includes("failed") ? (
+            <AlertCircleIcon />
+          ) : (
+            <CheckCircle2Icon />
+          )}
+          <AlertTitle>Identity update</AlertTitle>
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <Tabs defaultValue="groups">
         <TabsList variant="line">
@@ -489,6 +551,7 @@ export function IdentitiesPage() {
                           onClick={() => {
                             setSelectedIdentity(identity.id);
                             setMemberOffset(0);
+                            setReviewFeedback(null);
                           }}
                           variant={
                             identity.id === activeIdentity
@@ -550,6 +613,24 @@ export function IdentitiesPage() {
                     </div>
                   </CardAction>
                 </CardHeader>
+                {reviewFeedback ? (
+                  <CardContent className="border-b p-4">
+                    <Alert
+                      role="status"
+                      variant={reviewFeedback.error ? "destructive" : "default"}
+                    >
+                      {reviewFeedback.error ? (
+                        <AlertCircleIcon />
+                      ) : (
+                        <CheckCircle2Icon />
+                      )}
+                      <AlertTitle>{reviewFeedback.title}</AlertTitle>
+                      <AlertDescription>
+                        {reviewFeedback.description}
+                      </AlertDescription>
+                    </Alert>
+                  </CardContent>
+                ) : null}
                 <CardContent className="grid grid-cols-3 gap-px bg-border p-px">
                   {[
                     [
@@ -562,7 +643,7 @@ export function IdentitiesPage() {
                       "Link type",
                       selectedSummary.linkType.replaceAll("_", " "),
                     ],
-                    ["Review state", notice || selectedSummary.userStatus],
+                    ["Review state", selectedSummary.userStatus],
                   ].map(([label, value]) => (
                     <div className="bg-background p-4" key={label}>
                       <p className="text-xs text-muted-foreground">{label}</p>
@@ -642,19 +723,46 @@ export function IdentitiesPage() {
                   </p>
                   <div className="flex gap-2">
                     <Button
-                      onClick={() => void applyAction("reject")}
+                      disabled={
+                        review.isPending ||
+                        selectedSummary.userStatus === "rejected"
+                      }
+                      onClick={() => applyAction("reject")}
                       size="sm"
                       variant="outline"
                     >
-                      <XIcon data-icon="inline-start" />
-                      Reject
+                      {review.isPending &&
+                      review.variables?.action === "reject" ? (
+                        <Spinner data-icon="inline-start" />
+                      ) : (
+                        <XIcon data-icon="inline-start" />
+                      )}
+                      {review.isPending && review.variables?.action === "reject"
+                        ? "Rejecting…"
+                        : selectedSummary.userStatus === "rejected"
+                          ? "Rejected"
+                          : "Reject"}
                     </Button>
                     <Button
-                      onClick={() => void applyAction("confirm")}
+                      disabled={
+                        review.isPending ||
+                        selectedSummary.userStatus === "confirmed"
+                      }
+                      onClick={() => applyAction("confirm")}
                       size="sm"
                     >
-                      <CheckIcon data-icon="inline-start" />
-                      Confirm
+                      {review.isPending &&
+                      review.variables?.action === "confirm" ? (
+                        <Spinner data-icon="inline-start" />
+                      ) : (
+                        <CheckIcon data-icon="inline-start" />
+                      )}
+                      {review.isPending &&
+                      review.variables?.action === "confirm"
+                        ? "Confirming…"
+                        : selectedSummary.userStatus === "confirmed"
+                          ? "Confirmed"
+                          : "Confirm"}
                     </Button>
                   </div>
                 </CardFooter>

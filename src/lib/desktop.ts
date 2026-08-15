@@ -1552,10 +1552,26 @@ export async function getDomainDetails(
   };
 }
 
+const browserIdentityStatusesKey = "aletheia.browser.identity-statuses";
+
+function readBrowserIdentityStatuses(): Record<string, string> {
+  const stored = window.localStorage.getItem(browserIdentityStatusesKey);
+  if (!stored) return {};
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function listIdentities(): Promise<IdentitySummary[]> {
   if (isTauriRuntime()) return invoke<IdentitySummary[]>("list_identities");
   const stored = window.localStorage.getItem("aletheia.browser.identities");
   const manual = stored ? (JSON.parse(stored) as IdentitySummary[]) : [];
+  const statuses = readBrowserIdentityStatuses();
   return [
     ...manual,
     {
@@ -1585,7 +1601,10 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
       explanation: "exact_normalized_user_id",
       userStatus: "confirmed",
     },
-  ];
+  ].map((identity) => ({
+    ...identity,
+    userStatus: statuses[identity.id] ?? identity.userStatus,
+  }));
 }
 
 export async function rebuildIdentities(): Promise<number> {
@@ -1617,10 +1636,14 @@ export async function listIdentityMembers(
   );
   if (storedMembers) {
     const values = JSON.parse(storedMembers) as IdentityMember[];
+    const reviewStatus = readBrowserIdentityStatuses()[groupId];
+    const visibleValues = reviewStatus
+      ? values.map((member) => ({ ...member, userStatus: reviewStatus }))
+      : values;
     return {
-      total: values.length,
+      total: visibleValues.length,
       offset,
-      members: values.slice(offset, offset + limit),
+      members: visibleValues.slice(offset, offset + limit),
     };
   }
   const members = [
@@ -1671,10 +1694,14 @@ export async function listIdentityMembers(
       ],
     },
   ];
+  const reviewStatus = readBrowserIdentityStatuses()[groupId];
+  const visibleMembers = reviewStatus
+    ? members.map((member) => ({ ...member, userStatus: reviewStatus }))
+    : members;
   return {
-    total: members.length,
+    total: visibleMembers.length,
     offset,
-    members: members.slice(offset, offset + limit),
+    members: visibleMembers.slice(offset, offset + limit),
   };
 }
 
@@ -1683,6 +1710,15 @@ export async function applyIdentityAction(
 ): Promise<string> {
   if (isTauriRuntime()) {
     return invoke<string>("apply_identity_action", { input });
+  }
+  if (input.action === "confirm" || input.action === "reject") {
+    const statuses = readBrowserIdentityStatuses();
+    statuses[input.groupId] =
+      input.action === "confirm" ? "confirmed" : "rejected";
+    window.localStorage.setItem(
+      browserIdentityStatusesKey,
+      JSON.stringify(statuses),
+    );
   }
   return crypto.randomUUID();
 }
