@@ -2,11 +2,13 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CircleAlertIcon,
+  CpuIcon,
   DatabaseIcon,
   DownloadIcon,
   GaugeIcon,
   HardDriveIcon,
   LockKeyholeIcon,
+  MemoryStickIcon,
   PaletteIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -66,8 +68,10 @@ import {
   cleanupGenerated,
   downloadAndInstallUpdate,
   getSettings,
+  getPerformanceProfile,
   getSystemStatus,
   openReleasePage,
+  runPerformanceBenchmark,
   saveOnboarding,
   selectStorageFolder,
   updateSecuritySettings,
@@ -76,7 +80,7 @@ import {
   type Theme,
   type UpdateInstallProgress,
 } from "@/lib/desktop";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 
 const themeItems = [
   { label: "System", value: "system" },
@@ -119,6 +123,10 @@ export function SettingsPage() {
     queryKey: ["system-status"],
     queryFn: getSystemStatus,
   });
+  const performanceProfile = useQuery({
+    queryKey: ["performance-profile"],
+    queryFn: getPerformanceProfile,
+  });
   const update = useQuery({
     queryKey: ["update-status"],
     queryFn: checkForUpdates,
@@ -150,6 +158,15 @@ export function SettingsPage() {
       queryClient.setQueryData(["settings"], next);
       setNotice("Settings saved");
     },
+  });
+
+  const benchmark = useMutation({
+    mutationFn: runPerformanceBenchmark,
+    onSuccess: (profile) => {
+      queryClient.setQueryData(["performance-profile"], profile);
+      setNotice("Device benchmark complete");
+    },
+    onError: (error) => setNotice(`Benchmark failed: ${String(error)}`),
   });
 
   const installUpdate = useMutation({
@@ -374,6 +391,126 @@ export function SettingsPage() {
               </Field>
             </FieldGroup>
           </CardContent>
+        </DashboardCard>
+
+        <DashboardCard className="xl:col-span-12">
+          <CardHeader>
+            <CardTitle>Device benchmark</CardTitle>
+            <CardDescription>
+              Measures workspace I/O, CPU matching, memory copying, and archive
+              decompression using generated temporary data.
+            </CardDescription>
+            <CardAction>
+              <Badge variant="outline">
+                {performanceProfile.data?.storageClass ?? "Not measured"}
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {performanceProfile.data ? (
+              <>
+                <div className="grid grid-cols-2 gap-px bg-border p-px md:grid-cols-5">
+                  {[
+                    [
+                      "Workspace read",
+                      `${formatBytes(performanceProfile.data.diskReadBytesPerSecond)}/s`,
+                    ],
+                    [
+                      "Workspace write",
+                      `${formatBytes(performanceProfile.data.diskWriteBytesPerSecond)}/s`,
+                    ],
+                    [
+                      "CPU matching",
+                      `${formatBytes(performanceProfile.data.cpuScanBytesPerSecond)}/s`,
+                    ],
+                    [
+                      "Memory copy",
+                      `${formatBytes(performanceProfile.data.memoryCopyBytesPerSecond)}/s`,
+                    ],
+                    [
+                      "Archive decode",
+                      `${formatBytes(performanceProfile.data.archiveBytesPerSecond)}/s`,
+                    ],
+                  ].map(([label, value]) => (
+                    <div className="bg-background p-3" key={label}>
+                      <p className="text-xs text-muted-foreground">{label}</p>
+                      <p className="mt-1 font-mono text-sm tabular-nums">
+                        {value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <Alert>
+                  <CpuIcon />
+                  <AlertTitle>
+                    Recommended:{" "}
+                    {performanceProfile.data.recommendedWorkerLimit} workers ·{" "}
+                    {performanceProfile.data.recommendedMemoryLimitMb} MB
+                  </AlertTitle>
+                  <AlertDescription>
+                    {performanceProfile.data.recommendationReason} Available
+                    memory:{" "}
+                    {formatBytes(performanceProfile.data.availableMemoryBytes)}{" "}
+                    of {formatBytes(performanceProfile.data.totalMemoryBytes)}.
+                  </AlertDescription>
+                </Alert>
+                <p className="text-xs text-muted-foreground">
+                  Measured {formatDateTime(performanceProfile.data.measuredAt)}.
+                  Source drives are sampled separately before each Live scan.
+                </p>
+              </>
+            ) : (
+              <Alert>
+                <MemoryStickIcon />
+                <AlertTitle>No device profile yet</AlertTitle>
+                <AlertDescription>
+                  Run the local benchmark to replace generic resource defaults
+                  with recommendations for this computer.
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+          <CardFooter className="flex-wrap justify-end gap-2 rounded-none bg-background">
+            {performanceProfile.data ? (
+              <Button
+                onClick={() => {
+                  const profile = performanceProfile.data;
+                  if (!profile) return;
+                  setForm((current) =>
+                    current
+                      ? {
+                          ...current,
+                          workerLimit: profile.recommendedWorkerLimit,
+                          memoryLimitMb: profile.recommendedMemoryLimitMb,
+                        }
+                      : current,
+                  );
+                  setNotice("Recommended resources selected; save to apply");
+                }}
+                size="sm"
+                variant="outline"
+              >
+                <GaugeIcon data-icon="inline-start" />
+                Use recommendation
+              </Button>
+            ) : null}
+            <Button
+              disabled={benchmark.isPending}
+              onClick={() => benchmark.mutate()}
+              size="sm"
+            >
+              {benchmark.isPending ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <CpuIcon data-icon="inline-start" />
+              )}
+              {benchmark.isPending
+                ? "Benchmarking device…"
+                : performanceProfile.data
+                  ? "Run again"
+                  : "Run benchmark"}
+            </Button>
+          </CardFooter>
         </DashboardCard>
 
         <DashboardCard className="xl:col-span-7">

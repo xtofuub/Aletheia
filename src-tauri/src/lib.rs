@@ -7,6 +7,7 @@ mod investigation;
 mod live_domains;
 mod live_sources;
 pub mod models;
+mod performance;
 pub mod search_index;
 mod settings;
 mod storage;
@@ -37,8 +38,11 @@ pub fn run() {
             settings::update_theme,
             settings::update_security_settings,
             settings::get_system_status,
+            performance::get_performance_profile,
+            performance::run_performance_benchmark,
             detection::inspect_sources,
             direct_scan::start_direct_search,
+            direct_scan::preflight_direct_search,
             direct_scan::cancel_direct_search,
             direct_scan::pause_direct_search,
             direct_scan::resume_direct_search,

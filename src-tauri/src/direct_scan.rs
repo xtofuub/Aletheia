@@ -25,6 +25,7 @@ use zip::ZipArchive;
 
 use crate::{
     models::SearchMode,
+    performance::{PerformanceProfile, load_profile},
     storage::{AppState, JobControl},
 };
 
@@ -44,6 +45,7 @@ const PROGRESS_BYTE_INTERVAL: u64 = 1024 * 1024;
 const PLAIN_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const PARALLEL_PLAIN_THRESHOLD: u64 = 128 * 1024 * 1024;
 const RAW_EXCERPT_BYTES: usize = 1024;
+const PREFLIGHT_SAMPLE_BYTES: u64 = 64 * 1024 * 1024;
 
 static SECRET_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(password|passwd|pwd|token|cookie|secret|api[_-]?key)\s*[:=]\s*[^\s,;|]+")
@@ -75,6 +77,30 @@ pub struct DirectSearchStart {
     pub source_count: usize,
     pub total_bytes: u64,
     pub query_count: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSearchPreflightRequest {
+    pub paths: Vec<String>,
+    pub include_archives: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSearchPreflight {
+    pub source_count: usize,
+    pub total_bytes: u64,
+    pub archive_count: usize,
+    pub archive_bytes: u64,
+    pub sample_read_bytes_per_second: u64,
+    pub archive_bytes_per_second: u64,
+    pub estimated_minimum_ms: u64,
+    pub estimated_maximum_ms: u64,
+    pub recommended_worker_limit: u32,
+    pub recommended_memory_limit_mb: u32,
+    pub bottleneck: String,
+    pub confidence: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -632,6 +658,177 @@ fn active_elapsed_ms(wall_ms: u64, paused_total_ms: u64, current_pause_ms: u64) 
     wall_ms
         .saturating_sub(paused_total_ms)
         .saturating_sub(current_pause_ms)
+}
+
+#[tauri::command]
+pub async fn preflight_direct_search(
+    state: State<'_, AppState>,
+    request: DirectSearchPreflightRequest,
+) -> Result<DirectSearchPreflight, String> {
+    if request.paths.is_empty() || request.paths.len() > MAX_INPUT_PATHS {
+        return Err("choose between 1 and 64 local sources".to_string());
+    }
+    let profile = {
+        let connection = state
+            .database
+            .lock()
+            .map_err(|_| "performance profile is unavailable".to_string())?;
+        load_profile(&connection)?
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let candidates = collect_candidates(&request.paths, request.include_archives)?;
+        if candidates.is_empty() {
+            return Err("no supported local text or archive sources were found".to_string());
+        }
+        build_preflight(&candidates, profile.as_ref())
+    })
+    .await
+    .map_err(|_| "Live source preflight task failed".to_string())?
+}
+
+fn build_preflight(
+    candidates: &[Candidate],
+    profile: Option<&PerformanceProfile>,
+) -> Result<DirectSearchPreflight, String> {
+    let total_bytes = candidates.iter().fold(0_u64, |total, candidate| {
+        total.saturating_add(candidate.size)
+    });
+    let (archive_count, archive_bytes) =
+        candidates
+            .iter()
+            .fold((0_usize, 0_u64), |(count, bytes), candidate| {
+                if matches!(extension(&candidate.path).as_str(), "zip" | "rar" | "gz") {
+                    (
+                        count.saturating_add(1),
+                        bytes.saturating_add(candidate.size),
+                    )
+                } else {
+                    (count, bytes)
+                }
+            });
+    let sample_read_bytes_per_second = measure_source_read_rate(candidates)?;
+    let fallback_read_rate = profile
+        .map(|value| value.disk_read_bytes_per_second)
+        .unwrap_or(80 * 1024 * 1024);
+    let read_rate = if sample_read_bytes_per_second > 0 {
+        sample_read_bytes_per_second
+    } else {
+        fallback_read_rate
+    }
+    .max(1);
+    let logical_cores = profile.map_or(2, |value| value.logical_cores);
+    let recommended_worker_limit = recommended_source_workers(read_rate, logical_cores);
+    let cpu_rate = profile
+        .map(|value| value.cpu_scan_bytes_per_second)
+        .unwrap_or(read_rate.saturating_mul(2))
+        .saturating_mul(recommended_worker_limit as u64)
+        .max(1);
+    let archive_rate = profile
+        .map(|value| value.archive_bytes_per_second)
+        .unwrap_or(60 * 1024 * 1024)
+        .max(1);
+    let plain_bytes = total_bytes.saturating_sub(archive_bytes);
+    let plain_rate = read_rate.min(cpu_rate).max(1);
+    let archive_effective_rate = read_rate.min(cpu_rate).min(archive_rate).max(1);
+    let minimum_ms = estimate_bytes_ms(plain_bytes, plain_rate)
+        .saturating_add(estimate_bytes_ms(archive_bytes, archive_effective_rate));
+    let uncertainty = if archive_count > 0 { 350_u64 } else { 180_u64 };
+    let estimated_maximum_ms = minimum_ms
+        .saturating_mul(uncertainty)
+        .checked_div(100)
+        .unwrap_or(u64::MAX)
+        .max(minimum_ms);
+    let bottleneck = if archive_count > 0 && archive_rate <= read_rate.min(cpu_rate) {
+        "Archive decompression"
+    } else if read_rate <= cpu_rate {
+        "Source storage"
+    } else {
+        "CPU matching"
+    }
+    .to_string();
+
+    Ok(DirectSearchPreflight {
+        source_count: candidates.len(),
+        total_bytes,
+        archive_count,
+        archive_bytes,
+        sample_read_bytes_per_second,
+        archive_bytes_per_second: archive_rate,
+        estimated_minimum_ms: minimum_ms,
+        estimated_maximum_ms,
+        recommended_worker_limit,
+        recommended_memory_limit_mb: profile
+            .map(|value| value.recommended_memory_limit_mb)
+            .unwrap_or(512),
+        bottleneck,
+        confidence: if sample_read_bytes_per_second > 0 {
+            "Measured 64 MB source sample"
+        } else {
+            "Estimated from the latest device benchmark"
+        }
+        .to_string(),
+    })
+}
+
+fn measure_source_read_rate(candidates: &[Candidate]) -> Result<u64, String> {
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut sampled = 0_u64;
+    let started = Instant::now();
+    for candidate in candidates {
+        if sampled >= PREFLIGHT_SAMPLE_BYTES {
+            break;
+        }
+        let mut file = File::open(&candidate.path)
+            .map_err(|_| "a source could not be sampled read-only".to_string())?;
+        loop {
+            let remaining = PREFLIGHT_SAMPLE_BYTES.saturating_sub(sampled);
+            if remaining == 0 {
+                break;
+            }
+            let read_limit = remaining.min(buffer.len() as u64) as usize;
+            let count = file
+                .read(&mut buffer[..read_limit])
+                .map_err(|_| "a source sample could not be read".to_string())?;
+            if count == 0 {
+                break;
+            }
+            sampled = sampled.saturating_add(count as u64);
+        }
+    }
+    if sampled == 0 {
+        return Ok(0);
+    }
+    let elapsed_ns = started.elapsed().as_nanos().max(1);
+    Ok(((sampled as u128).saturating_mul(1_000_000_000) / elapsed_ns).min(u64::MAX as u128) as u64)
+}
+
+fn estimate_bytes_ms(bytes: u64, bytes_per_second: u64) -> u64 {
+    if bytes == 0 {
+        return 0;
+    }
+    bytes
+        .saturating_mul(1_000)
+        .checked_div(bytes_per_second.max(1))
+        .unwrap_or(u64::MAX)
+        .max(1)
+}
+
+fn recommended_source_workers(read_rate: u64, logical_cores: usize) -> u32 {
+    let storage_limit = match read_rate / (1024 * 1024) {
+        0..=109 => 1,
+        110..=299 => 2,
+        300..=699 => 4,
+        700..=1_199 => 6,
+        _ => 8,
+    };
+    let core_limit = match logical_cores {
+        0 | 1 => 1,
+        2..=3 => 2,
+        4..=5 => 4,
+        6..=7 => 6,
+        _ => 8,
+    };
+    storage_limit.min(core_limit)
 }
 
 #[tauri::command]
@@ -1828,9 +2025,10 @@ mod tests {
     use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        ArchiveReader, CandidateSourceProgress, MAX_LINE_BYTES, MAX_QUERY_COUNT, QueryMatcher,
-        active_elapsed_ms, display_excerpt, estimate_remaining_ms, extension, field_tokens,
-        find_plain_matches, is_text_extension, line_matches, parse_queries, read_plain_blocks_from,
+        ArchiveReader, Candidate, CandidateSourceProgress, MAX_LINE_BYTES, MAX_QUERY_COUNT,
+        QueryMatcher, active_elapsed_ms, build_preflight, display_excerpt, estimate_remaining_ms,
+        extension, field_tokens, find_plain_matches, is_text_extension, line_matches,
+        parse_queries, read_plain_blocks_from,
     };
     use crate::models::SearchMode;
 
@@ -2059,6 +2257,22 @@ mod tests {
         assert_eq!(estimate_remaining_ms(1_000, 250, 2_000), Some(6_000));
         assert_eq!(estimate_remaining_ms(1_000, 0, 2_000), None);
         assert_eq!(estimate_remaining_ms(1_000, 1_000, 2_000), None);
+    }
+
+    #[test]
+    fn preflight_samples_sources_and_returns_a_bounded_estimate() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("synthetic.txt");
+        std::fs::write(&path, b"synthetic@example.test\n".repeat(4_096)).expect("synthetic source");
+        let size = path.metadata().expect("metadata").len();
+        let result = build_preflight(&[Candidate { path, size }], None).expect("preflight");
+
+        assert_eq!(result.source_count, 1);
+        assert_eq!(result.total_bytes, size);
+        assert_eq!(result.archive_count, 0);
+        assert!(result.sample_read_bytes_per_second > 0);
+        assert!(result.estimated_maximum_ms >= result.estimated_minimum_ms);
+        assert!((1..=8).contains(&result.recommended_worker_limit));
     }
 
     #[test]

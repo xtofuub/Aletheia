@@ -4,7 +4,7 @@
 
 Automatic mode is the default. Enter a value normally; no field prefix is required. Aletheia recognizes email addresses, domains, URLs, IP addresses, phone numbers, service IDs, and person names, then chooses a safe field and match strategy. Other input is treated as text or a username.
 
-Indexed searches try normalized exact matching first for identifiers and fall back to literal containment when needed. Live domain searches use containment because a domain may be embedded in an email address, URL, or subdomain. Search starts only when the user presses the Search button, so selecting a terabyte-scale source never triggers an accidental scan on each keystroke.
+Indexed searches try normalized exact matching first for identifiers and fall back to literal containment when needed. Live domain searches use containment because a domain may be embedded in an email address, URL, or subdomain. A full search starts only when the user presses the Search button. Selecting a Live source runs one bounded, read-only preflight sample of at most 64 MiB so the interface can show a realistic full-scan range before starting; it never scans the whole source on each keystroke.
 
 Contains searches split a likely person name into meaningful tokens. A query such as `Jane Doe` can therefore match separate first/last-name fields or common email-local-part separators such as `jane.doe`, `jane_doe`, and `jane-doe`. All name tokens must be present; token order does not matter.
 
@@ -15,7 +15,7 @@ Contains searches split a likely person name into meaningful tokens. A query suc
 
 The Search page uses one query control and one source selector. Choosing an indexed dataset or saved Live source automatically selects the matching engine. The selector reports indexed and Live counts separately and includes an **All saved Live sources** option that deduplicates their selected paths before scanning.
 
-Live scans expose a result limit, 1-8 workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, pause/resume/cancel controls, and paginated results. Plain files use a sequential large-block reader and can distribute matching across CPU workers when one file is at least 128 MiB; one worker remains the recommended HDD setting. One huge archive is processed by one decoder worker. The native scanner searches each plain byte block once, resolves line boundaries only after a match, and coalesces larger result batches to the display refresh rate.
+Live scans expose a result limit, 1-8 workers, archive inclusion, case sensitivity, throughput, decompressed bytes scanned, source progress, pause/resume/cancel controls, and paginated results. Preflight reports total supported bytes, sampled source read speed, archive count, expected minimum/maximum duration, the likely bottleneck, and a source-specific worker recommendation. Plain files use a sequential large-block reader and can distribute matching across CPU workers when one file is at least 128 MiB; one worker remains the recommended HDD setting. One huge archive is processed by one decoder worker. The native scanner searches each plain byte block once, resolves line boundaries only after a match, and coalesces larger result batches to the display refresh rate.
 
 ## Advanced mode
 

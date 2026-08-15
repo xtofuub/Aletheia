@@ -25,6 +25,7 @@ Aletheia has one search screen backed by two engines, so a multi-million-row fil
 - **Saved Live source** remembers a file or folder selection and streams TXT, CSV, TSV, JSONL, NDJSON, GZIP, ZIP, and RAR content with bounded memory. Plain files are searched in one pass through large byte chunks; line boundaries and excerpts are resolved only for matching chunks. Archives are read directly without extraction. Search shows indexed and Live counts separately, and can scan every saved Live source in one selection. Paste up to 512 values to find them in one physical pass, or choose **First match** when one confirmed hit is enough.
 - **Persistent index** stores a reusable Tantivy index for fast repeated searches, pagination, domain grouping, and identity workflows. Imports are cancellable, resumable, and report throughput.
 - **Flexible name lookup** finds first and last names across separate fields and common email separators, so `Jane Doe` can match values such as `jane.doe@example.com`.
+- **Measured preflight** samples up to 64 MiB from a selected Live source read-only, then shows a realistic full-scan time range, likely bottleneck, archive cost, and source-specific worker recommendation before work starts.
 
 <table>
   <tr>
@@ -54,6 +55,7 @@ Domains can be scanned directly across saved Live files, folders, ZIP, RAR, and 
 - Dataset, file, archive-entry, parser, line, and record provenance.
 - Redacted CSV, JSON, JSONL, and Markdown exports with sidecar manifests.
 - Configurable workers, memory ceilings, inactivity locking, update checks, and generated-data cleanup.
+- A local device benchmark measures workspace read/write speed, CPU matching, memory copying, archive decompression, and available RAM, then recommends supported worker and writer-memory settings.
 - Automatic signed update checks after startup, with an in-app approval prompt, download progress, verified installation, and restart.
 
 Aletheia does not test credentials, automate logins, contact people, scrape websites, send telemetry, or enrich records through remote services.
@@ -79,7 +81,7 @@ The release also includes `aletheia_<version>_x64.exe`, a standalone binary for 
 | Frequent searches across a curated collection | Persistent **Fast index**                                        |
 | Domain and automatic identity grouping        | Persistent **Relationship index**                                |
 
-The import pipeline uses streaming readers, fixed memory ceilings, resumable checkpoints, bounded queues, and 64-bit counters. Indexed Contains lookup uses verified bigram/trigram candidates for newly created indexes. Older generated indexes stay usable through a compatible fallback and never trigger a hidden blocking rebuild at startup. Live scanning normally wins for a one-off lookup because it avoids writing a much larger reusable structure. Index only the sources you will search repeatedly or need for Domains and automatic Identities. Real throughput depends on disk speed, compression, line length, parser complexity, and workspace capacity. Terabyte-scale operation still requires enough local storage and should be validated against the target hardware before production use.
+The import pipeline uses streaming readers, fixed memory ceilings, persistent resumable checkpoints, bounded queues, and 64-bit counters. Stable checkpoints are committed after at least 250,000 new records and 15 seconds, no later than 1,000,000 records, and at every file boundary. Indexed Contains lookup uses verified bigram/trigram candidates for newly created indexes. Older generated indexes stay usable through a compatible fallback and never trigger a hidden blocking rebuild at startup. Live scanning normally wins for a one-off lookup because it avoids writing a much larger reusable structure. Index only the sources you will search repeatedly or need for Domains and automatic Identities. Real throughput depends on disk speed, compression, line length, parser complexity, and workspace capacity. Terabyte-scale operation still requires enough local storage and should be validated against the target hardware before production use.
 
 ## Privacy and safety
 

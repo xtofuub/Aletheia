@@ -42,7 +42,9 @@ const MIN_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BATCH_BYTES: usize = 64 * 1024 * 1024;
 const MIN_WRITER_BYTES: usize = 64 * 1024 * 1024;
 const MAX_WRITER_BYTES: usize = 2 * 1024 * 1024 * 1024;
-const INDEX_CHECKPOINT_RECORDS: u64 = 1_000_000;
+const MIN_INDEX_CHECKPOINT_RECORDS: u64 = 250_000;
+const MAX_INDEX_CHECKPOINT_RECORDS: u64 = 1_000_000;
+const INDEX_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(15);
 const PARSER_VERSION: &str = "aletheia-parser/1";
 
 static EMBEDDED_EMAIL: Lazy<Regex> = Lazy::new(|| {
@@ -1272,6 +1274,7 @@ fn run_import(
     let mut counters = load_initial_counters(database, dataset_id, job_id, &files)?;
     let mut last_emit = Instant::now();
     let mut last_index_checkpoint = 0_u64;
+    let mut last_checkpoint = Instant::now();
 
     for file in files {
         if control.is_cancelled() {
@@ -1296,14 +1299,17 @@ fn run_import(
                     &mut batch,
                 )?;
                 batch_bytes = 0;
-                if counters
+                let records_since_checkpoint = counters
                     .records_indexed
-                    .saturating_sub(last_index_checkpoint)
-                    >= INDEX_CHECKPOINT_RECORDS
-                {
+                    .saturating_sub(last_index_checkpoint);
+                let checkpoint_due = records_since_checkpoint >= MAX_INDEX_CHECKPOINT_RECORDS
+                    || (records_since_checkpoint >= MIN_INDEX_CHECKPOINT_RECORDS
+                        && last_checkpoint.elapsed() >= INDEX_CHECKPOINT_INTERVAL);
+                if checkpoint_due {
                     writer.commit().map_err(sanitized)?;
                     persist_checkpoint(database, job_id, &file.id, counters)?;
                     last_index_checkpoint = counters.records_indexed;
+                    last_checkpoint = Instant::now();
                 }
                 if last_emit.elapsed() >= Duration::from_millis(250) {
                     emit_progress(
@@ -1323,6 +1329,7 @@ fn run_import(
         });
         if control.is_cancelled() {
             writer.commit().map_err(sanitized)?;
+            persist_checkpoint(database, job_id, &file.id, &counters)?;
             return finish_cancelled(app, database, job_id, dataset_id, total_bytes, &counters);
         }
         stream_result?;
@@ -1339,6 +1346,7 @@ fn run_import(
         writer.commit().map_err(sanitized)?;
         persist_checkpoint(database, job_id, &file.id, &counters)?;
         last_index_checkpoint = counters.records_indexed;
+        last_checkpoint = Instant::now();
         mark_file(database, job_id, &file.id, "indexed")?;
     }
 
@@ -2347,7 +2355,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        BATCH_RECORDS, Counters, INDEX_CHECKPOINT_RECORDS, JobControl, JobRegistryGuard,
+        BATCH_RECORDS, Counters, JobControl, JobRegistryGuard, MAX_INDEX_CHECKPOINT_RECORDS,
         MAX_LINE_BYTES, batch_byte_limit, decompression_limit, delete_dataset_from_workspace,
         extract_embedded_domains, extract_embedded_identifiers, finish_cancelled, flush_batch,
         load_import_progress, load_resume_plan, normalize_value, prepare_database_rows,
@@ -2725,7 +2733,7 @@ mod tests {
         assert_eq!(writer_memory_budget(256), 192 * 1024 * 1024);
         assert_eq!(writer_memory_budget(4_096), 2 * 1024 * 1024 * 1024);
         assert_eq!(BATCH_RECORDS, 10_000);
-        assert_eq!(INDEX_CHECKPOINT_RECORDS, 1_000_000);
+        assert_eq!(MAX_INDEX_CHECKPOINT_RECORDS, 1_000_000);
     }
 
     #[test]

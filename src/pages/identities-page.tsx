@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
+import { LiveSearchPreflight } from "@/components/live-search-preflight";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -1158,6 +1159,14 @@ export function IdentitiesPage() {
                           </InputGroup>
                         </Field>
                       </FieldGroup>
+
+                      <LiveSearchPreflight
+                        currentWorkerLimit={settings.data?.workerLimit ?? 2}
+                        includeArchives={
+                          selectedLiveSource?.includeArchives ?? true
+                        }
+                        source={selectedLiveSource}
+                      />
 
                       {liveProgress ? (
                         <Progress value={livePercent}>

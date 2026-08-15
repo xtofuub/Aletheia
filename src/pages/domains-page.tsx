@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
+import { LiveSearchPreflight } from "@/components/live-search-preflight";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
 import { Badge } from "@/components/ui/badge";
@@ -607,92 +608,104 @@ export function DomainsPage() {
                     a persistent index.
                   </FieldDescription>
                   {liveSourceItems.length ? (
-                    <FieldGroup className="gap-4">
-                      <Field
-                        data-invalid={
-                          Boolean(liveDomainInput.trim()) &&
-                          !isDomainQuery(liveDomainInput)
-                        }
-                      >
-                        <FieldLabel htmlFor="live-domain-input">
-                          Parent domain
-                        </FieldLabel>
-                        <InputGroup>
-                          <InputGroupAddon>
-                            <Globe2Icon />
-                          </InputGroupAddon>
-                          <InputGroupInput
-                            aria-invalid={
-                              Boolean(liveDomainInput.trim()) &&
-                              !isDomainQuery(liveDomainInput)
-                            }
-                            id="live-domain-input"
-                            onChange={(event) =>
-                              setLiveDomainInput(event.target.value)
-                            }
-                            placeholder="example.com"
-                            value={liveDomainInput}
-                          />
-                        </InputGroup>
-                        <FieldDescription>
-                          A parent such as example.com includes the parent and
-                          every subdomain, including portal.example.com.
-                        </FieldDescription>
-                      </Field>
-                      <Field>
-                        <FieldLabel>Saved Live source</FieldLabel>
-                        <Select
-                          items={liveSourceItems}
-                          onValueChange={(value) =>
-                            setLiveSourceId(String(value))
+                    <>
+                      <FieldGroup className="gap-4">
+                        <Field
+                          data-invalid={
+                            Boolean(liveDomainInput.trim()) &&
+                            !isDomainQuery(liveDomainInput)
                           }
-                          value={selectedLiveSource?.id ?? allLiveSourcesId}
                         >
-                          <SelectTrigger aria-label="Saved Live source">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              {liveSourceItems.map((item) => (
-                                <SelectItem key={item.value} value={item.value}>
-                                  {item.label}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Button
-                        disabled={
-                          liveBusy ||
-                          !selectedLiveSource ||
-                          !isDomainQuery(domainToScan)
-                        }
-                        onClick={() => {
-                          if (
-                            selectedLiveSource &&
-                            isDomainQuery(domainToScan)
-                          ) {
-                            liveScan.mutate({
-                              domain: domainToScan,
-                              source: selectedLiveSource,
-                            });
+                          <FieldLabel htmlFor="live-domain-input">
+                            Parent domain
+                          </FieldLabel>
+                          <InputGroup>
+                            <InputGroupAddon>
+                              <Globe2Icon />
+                            </InputGroupAddon>
+                            <InputGroupInput
+                              aria-invalid={
+                                Boolean(liveDomainInput.trim()) &&
+                                !isDomainQuery(liveDomainInput)
+                              }
+                              id="live-domain-input"
+                              onChange={(event) =>
+                                setLiveDomainInput(event.target.value)
+                              }
+                              placeholder="example.com"
+                              value={liveDomainInput}
+                            />
+                          </InputGroup>
+                          <FieldDescription>
+                            A parent such as example.com includes the parent and
+                            every subdomain, including portal.example.com.
+                          </FieldDescription>
+                        </Field>
+                        <Field>
+                          <FieldLabel>Saved Live source</FieldLabel>
+                          <Select
+                            items={liveSourceItems}
+                            onValueChange={(value) =>
+                              setLiveSourceId(String(value))
+                            }
+                            value={selectedLiveSource?.id ?? allLiveSourcesId}
+                          >
+                            <SelectTrigger aria-label="Saved Live source">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {liveSourceItems.map((item) => (
+                                  <SelectItem
+                                    key={item.value}
+                                    value={item.value}
+                                  >
+                                    {item.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Button
+                          disabled={
+                            liveBusy ||
+                            !selectedLiveSource ||
+                            !isDomainQuery(domainToScan)
                           }
-                        }}
-                        size="sm"
-                      >
-                        {liveBusy ? (
-                          <Spinner data-icon="inline-start" />
-                        ) : (
-                          <FileSearchIcon data-icon="inline-start" />
-                        )}
-                        {storeLiveEvidence.isPending
-                          ? "Storing..."
-                          : liveBusy
-                            ? "Scanning..."
-                            : "Scan & store"}
-                      </Button>
-                    </FieldGroup>
+                          onClick={() => {
+                            if (
+                              selectedLiveSource &&
+                              isDomainQuery(domainToScan)
+                            ) {
+                              liveScan.mutate({
+                                domain: domainToScan,
+                                source: selectedLiveSource,
+                              });
+                            }
+                          }}
+                          size="sm"
+                        >
+                          {liveBusy ? (
+                            <Spinner data-icon="inline-start" />
+                          ) : (
+                            <FileSearchIcon data-icon="inline-start" />
+                          )}
+                          {storeLiveEvidence.isPending
+                            ? "Storing..."
+                            : liveBusy
+                              ? "Scanning..."
+                              : "Scan & store"}
+                        </Button>
+                      </FieldGroup>
+                      <LiveSearchPreflight
+                        currentWorkerLimit={settings.data?.workerLimit ?? 2}
+                        includeArchives={
+                          selectedLiveSource?.includeArchives ?? true
+                        }
+                        source={selectedLiveSource}
+                      />
+                    </>
                   ) : (
                     <Alert>
                       <ArchiveIcon />

@@ -634,6 +634,7 @@ export function DatasetsPage() {
               <Badge variant="outline">Domains</Badge>
               <Badge variant="outline">Identities</Badge>
               <Badge variant="outline">Resumable</Badge>
+              <Badge variant="outline">Crash checkpoints</Badge>
             </div>
             <Separator />
             <div className="mt-auto flex flex-wrap items-center justify-end gap-2">

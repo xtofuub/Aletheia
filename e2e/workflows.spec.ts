@@ -101,6 +101,8 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   const liveSourceRow = page.getByRole("row", { name: /Authorized corpus/ });
   await expect(liveSourceRow).toBeVisible();
   await liveSourceRow.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByText(/Expected full scan:/)).toBeVisible();
+  await expect(page.getByText(/sampled read/)).toBeVisible();
   await page
     .getByLabel("Search query")
     .fill("synthetic@example.test\nportal.example.com");
@@ -183,6 +185,7 @@ test("Identity Builder reuses a saved Live source", async ({ page }) => {
   await expect(
     page.getByText("C:\\Synthetic\\Authorized corpus"),
   ).toBeVisible();
+  await expect(page.getByText(/Expected full scan:/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose folder" })).toHaveCount(
     0,
   );
@@ -286,6 +289,7 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   });
   await page.goto("/#/domains");
   await page.getByRole("button", { name: "Live source scans" }).click();
+  await expect(page.getByText(/Expected full scan:/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Live source scans" }),
   ).toHaveAttribute("aria-pressed", "true");
@@ -527,4 +531,21 @@ test("an active index blocks a second writer before file selection", async ({
   await expect(blockedActions).toHaveCount(2);
   await expect(blockedActions.first()).toBeDisabled();
   await expect(blockedActions.last()).toBeDisabled();
+});
+
+test("device benchmark recommends and applies resource settings", async ({
+  page,
+}) => {
+  await page.goto("/#/settings");
+  await page.getByRole("button", { name: "Run benchmark" }).click();
+
+  await expect(page.getByText("Device benchmark complete")).toBeVisible();
+  await expect(
+    page.getByText(/Recommended: 2 workers · 2048 MB/),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Use recommendation" }).click();
+  await expect(
+    page.getByText("Recommended resources selected; save to apply"),
+  ).toBeVisible();
+  await expect(page.getByText("2 workers · 2048 MB").first()).toBeVisible();
 });

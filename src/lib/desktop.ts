@@ -28,6 +28,22 @@ export interface SystemStatus {
   appVersion: string;
 }
 
+export interface PerformanceProfile {
+  diskReadBytesPerSecond: number;
+  diskWriteBytesPerSecond: number;
+  cpuScanBytesPerSecond: number;
+  memoryCopyBytesPerSecond: number;
+  archiveBytesPerSecond: number;
+  totalMemoryBytes: number;
+  availableMemoryBytes: number;
+  logicalCores: number;
+  recommendedWorkerLimit: number;
+  recommendedMemoryLimitMb: number;
+  storageClass: string;
+  recommendationReason: string;
+  measuredAt: string;
+}
+
 export interface UpdateStatus {
   currentVersion: string;
   latestVersion: string;
@@ -243,6 +259,26 @@ export interface DirectSearchRequest {
   includeArchives: boolean;
   maxResults: number;
   workerLimit: number;
+}
+
+export interface DirectSearchPreflightRequest {
+  paths: string[];
+  includeArchives: boolean;
+}
+
+export interface DirectSearchPreflight {
+  sourceCount: number;
+  totalBytes: number;
+  archiveCount: number;
+  archiveBytes: number;
+  sampleReadBytesPerSecond: number;
+  archiveBytesPerSecond: number;
+  estimatedMinimumMs: number;
+  estimatedMaximumMs: number;
+  recommendedWorkerLimit: number;
+  recommendedMemoryLimitMb: number;
+  bottleneck: string;
+  confidence: string;
 }
 
 export interface DirectSearchStart {
@@ -466,6 +502,7 @@ const browserSettingsKey = "aletheia.browser.settings";
 const browserEfferdThemeKey = "aletheia.browser.efferd-theme-v1";
 const browserExportsKey = "aletheia.browser.exports";
 const browserSearchHistoryKey = "aletheia.browser.search-history";
+const browserPerformanceProfileKey = "aletheia.browser.performance-profile";
 const defaultBrowserSettings: Settings = {
   authorizationConfirmed: false,
   theme: "dark",
@@ -552,8 +589,51 @@ export async function getSystemStatus(): Promise<SystemStatus> {
     indexedDocuments: 0,
     orphanedIndex: false,
     storageRoot: settings.storageRoot,
-    appVersion: "0.1.7",
+    appVersion: "0.1.9",
   };
+}
+
+function browserPerformanceProfile(): PerformanceProfile {
+  return {
+    diskReadBytesPerSecond: 180 * 1024 * 1024,
+    diskWriteBytesPerSecond: 140 * 1024 * 1024,
+    cpuScanBytesPerSecond: 520 * 1024 * 1024,
+    memoryCopyBytesPerSecond: 6 * 1024 * 1024 * 1024,
+    archiveBytesPerSecond: 125 * 1024 * 1024,
+    totalMemoryBytes: 16 * 1024 * 1024 * 1024,
+    availableMemoryBytes: 8 * 1024 * 1024 * 1024,
+    logicalCores: 8,
+    recommendedWorkerLimit: 2,
+    recommendedMemoryLimitMb: 2048,
+    storageClass: "SSD-like",
+    recommendationReason:
+      "SSD-like workspace I/O and 8 logical CPU cores support 2 indexing workers with a 2048 MB writer budget.",
+    measuredAt: new Date().toISOString(),
+  };
+}
+
+export async function getPerformanceProfile(): Promise<PerformanceProfile | null> {
+  if (isTauriRuntime()) {
+    return invoke<PerformanceProfile | null>("get_performance_profile");
+  }
+  const stored = window.localStorage.getItem(browserPerformanceProfileKey);
+  try {
+    return stored ? (JSON.parse(stored) as PerformanceProfile) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function runPerformanceBenchmark(): Promise<PerformanceProfile> {
+  if (isTauriRuntime()) {
+    return invoke<PerformanceProfile>("run_performance_benchmark");
+  }
+  const profile = browserPerformanceProfile();
+  window.localStorage.setItem(
+    browserPerformanceProfileKey,
+    JSON.stringify(profile),
+  );
+  return profile;
 }
 
 export async function checkForUpdates(): Promise<UpdateStatus> {
@@ -1193,6 +1273,46 @@ export async function startDirectSearch(
     sourceCount,
     totalBytes: 128 * 1024 * 1024,
     queryCount,
+  };
+}
+
+export async function preflightDirectSearch(
+  request: DirectSearchPreflightRequest,
+): Promise<DirectSearchPreflight> {
+  if (isTauriRuntime()) {
+    return invoke<DirectSearchPreflight>("preflight_direct_search", {
+      request,
+    });
+  }
+  const profile =
+    (await getPerformanceProfile()) ?? browserPerformanceProfile();
+  const sourceCount = Math.max(1, request.paths.length * 3);
+  const totalBytes = Math.max(1, request.paths.length) * 128 * 1024 * 1024;
+  const archiveCount = request.includeArchives ? request.paths.length : 0;
+  const effectiveRate = request.includeArchives
+    ? Math.min(profile.diskReadBytesPerSecond, profile.archiveBytesPerSecond)
+    : profile.diskReadBytesPerSecond;
+  const estimatedMinimumMs = Math.max(
+    1,
+    Math.round((totalBytes / effectiveRate) * 1_000),
+  );
+  return {
+    sourceCount,
+    totalBytes,
+    archiveCount,
+    archiveBytes: request.includeArchives ? totalBytes : 0,
+    sampleReadBytesPerSecond: profile.diskReadBytesPerSecond,
+    archiveBytesPerSecond: profile.archiveBytesPerSecond,
+    estimatedMinimumMs,
+    estimatedMaximumMs: Math.round(
+      estimatedMinimumMs * (request.includeArchives ? 3.5 : 1.8),
+    ),
+    recommendedWorkerLimit: profile.recommendedWorkerLimit,
+    recommendedMemoryLimitMb: profile.recommendedMemoryLimitMb,
+    bottleneck: request.includeArchives
+      ? "Archive decompression"
+      : "Source storage",
+    confidence: "Measured 64 MB source sample",
   };
 }
 
