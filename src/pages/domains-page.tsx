@@ -312,6 +312,11 @@ export function DomainsPage() {
         includeArchives: source.includeArchives,
         maxResults: 5_000,
         workerLimit: settings.data?.workerLimit ?? 2,
+        liveDomainAutosave: {
+          domain,
+          sourceId: source.id,
+          sourceName: source.name,
+        },
       }),
     onSuccess: (start, variables) => {
       checkpointedLiveHits.current = {
@@ -351,10 +356,51 @@ export function DomainsPage() {
               100,
           )
         : 0;
+  const displayedSavedLiveHitCount = currentLiveProgress?.autosaveEnabled
+    ? (currentLiveProgress.savedMatches ?? currentLiveProgress.hits.length)
+    : savedLiveHitCount;
 
   useEffect(() => {
     if (!currentLiveProgress || !liveScanContext || liveScanContext.handled)
       return;
+    if (currentLiveProgress.autosaveEnabled) {
+      const stored =
+        currentLiveProgress.savedMatches ?? currentLiveProgress.hits.length;
+      checkpointedLiveHits.current = {
+        count: currentLiveProgress.hits.length,
+        domain: liveScanContext.query ?? "",
+        jobId: currentLiveProgress.jobId,
+      };
+      const final = ["completed", "cancelled", "failed"].includes(
+        currentLiveProgress.status,
+      );
+      if (!final) return;
+      queueMicrotask(() => {
+        if (stored > 0) {
+          setSelectedDomain(liveScanContext.query ?? null);
+          setLiveRecordOffset(0);
+          setLiveNotice(
+            currentLiveProgress.status === "completed"
+              ? `${formatCount(stored)} Live rows saved locally`
+              : `${formatCount(stored)} partial Live ${stored === 1 ? "row" : "rows"} saved locally after the scan stopped`,
+          );
+        } else if (currentLiveProgress.status === "cancelled") {
+          setLiveNotice("Scan cancelled. No matching rows were found to save.");
+        } else if (currentLiveProgress.status === "failed") {
+          setLiveNotice(currentLiveProgress.message);
+        }
+        markHandled(currentLiveProgress.jobId);
+        void Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: ["live-domain-collections"],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["live-domain-evidence"],
+          }),
+        ]);
+      });
+      return;
+    }
     if (checkpointSaving.current) return;
     const final = ["completed", "cancelled", "failed"].includes(
       currentLiveProgress.status,
@@ -845,9 +891,10 @@ export function DomainsPage() {
                             {formatCount(currentLiveProgress.filesScanned)} of{" "}
                             {formatCount(currentLiveProgress.sourceCount)} files
                           </Badge>
-                          {savedLiveHitCount > 0 ? (
+                          {displayedSavedLiveHitCount > 0 ? (
                             <Badge variant="secondary">
-                              {formatCount(savedLiveHitCount)} stored locally
+                              {formatCount(displayedSavedLiveHitCount)} stored
+                              locally
                             </Badge>
                           ) : null}
                           {currentLiveProgress.status === "running" ? (

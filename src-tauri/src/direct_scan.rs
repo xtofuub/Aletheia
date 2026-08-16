@@ -24,6 +24,7 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 use crate::{
+    live_domains::{LiveDomainEvidenceInput, SaveLiveDomainEvidenceInput, save_evidence},
     models::SearchMode,
     performance::{PerformanceProfile, load_profile},
     storage::{AppState, JobControl},
@@ -68,6 +69,16 @@ pub struct DirectSearchRequest {
     pub include_archives: bool,
     pub max_results: usize,
     pub worker_limit: usize,
+    #[serde(default)]
+    pub live_domain_autosave: Option<LiveDomainAutosaveRequest>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveDomainAutosaveRequest {
+    pub domain: String,
+    pub source_id: String,
+    pub source_name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +147,8 @@ pub struct DirectSearchProgress {
     pub truncated: bool,
     pub message: String,
     pub hits: Vec<DirectSearchHit>,
+    pub autosave_enabled: bool,
+    pub saved_matches: usize,
 }
 
 #[derive(Clone)]
@@ -276,6 +289,9 @@ struct SharedScan {
     pause_started_ms: AtomicU64,
     paused_total_ms: AtomicU64,
     sequence: AtomicU64,
+    database: Arc<Mutex<rusqlite::Connection>>,
+    autosave_error: Mutex<Option<String>>,
+    saved_matches: AtomicUsize,
 }
 
 struct QueryMatcher {
@@ -570,13 +586,60 @@ impl SharedScan {
         }
     }
 
+    fn autosave_hits(&self, hits: &[DirectSearchHit]) -> Result<(), String> {
+        let Some(config) = self.request.live_domain_autosave.as_ref() else {
+            return Ok(());
+        };
+        if hits.is_empty() {
+            return Ok(());
+        }
+        let summary = save_evidence(
+            Arc::clone(&self.database),
+            SaveLiveDomainEvidenceInput {
+                domain: config.domain.clone(),
+                source_id: config.source_id.clone(),
+                source_name: config.source_name.clone(),
+                evidence: hits
+                    .iter()
+                    .map(|hit| LiveDomainEvidenceInput {
+                        source_path: hit.source_path.clone(),
+                        source_file: hit.source_file.clone(),
+                        archive_entry: hit.archive_entry.clone(),
+                        source_location: hit.source_location.clone(),
+                        excerpt: hit.excerpt.clone(),
+                        match_reason: hit.match_reason.clone(),
+                        matched_query: hit.matched_query.clone(),
+                    })
+                    .collect(),
+            },
+        )?;
+        self.saved_matches.store(
+            usize::try_from(summary.evidence_count).unwrap_or(usize::MAX),
+            Ordering::Relaxed,
+        );
+        Ok(())
+    }
+
     fn emit(
         &self,
         status: &str,
         current_source: Option<String>,
         message: &str,
-        hits: Vec<DirectSearchHit>,
+        mut hits: Vec<DirectSearchHit>,
     ) {
+        let mut emitted_status = status;
+        let mut emitted_message = message.to_string();
+        if let Err(error) = self.autosave_hits(&hits) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Ok(mut slot) = self.autosave_error.lock()
+                && slot.is_none()
+            {
+                *slot = Some(error);
+            }
+            hits.clear();
+            emitted_status = "failed";
+            emitted_message = "Live result autosave failed".to_string();
+        }
         let wall_ms = self.started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         let pause_started_ms = self.pause_started_ms.load(Ordering::Relaxed);
         let current_pause_ms = if pause_started_ms > 0 {
@@ -589,7 +652,7 @@ impl SharedScan {
             self.paused_total_ms.load(Ordering::Relaxed),
             current_pause_ms,
         );
-        if status == "running" && hits.is_empty() {
+        if emitted_status == "running" && hits.is_empty() {
             let previous = self.last_progress_emit_ms.load(Ordering::Relaxed);
             if previous > 0 && elapsed_ms.saturating_sub(previous) < PROGRESS_EMIT_INTERVAL_MS {
                 return;
@@ -620,7 +683,7 @@ impl SharedScan {
             DirectSearchProgress {
                 job_id: self.job_id.clone(),
                 sequence,
-                status: status.to_string(),
+                status: emitted_status.to_string(),
                 current_source,
                 source_count: self.source_count,
                 files_scanned: self.files_scanned.load(Ordering::Relaxed),
@@ -637,8 +700,10 @@ impl SharedScan {
                 ),
                 query_count: self.matcher.query_count(),
                 truncated: matches >= self.request.max_results,
-                message: message.to_string(),
+                message: emitted_message,
                 hits,
+                autosave_enabled: self.request.live_domain_autosave.is_some(),
+                saved_matches: self.saved_matches.load(Ordering::Relaxed),
             },
         );
     }
@@ -873,6 +938,7 @@ pub async fn start_direct_search(
         .insert(job_id.clone(), Arc::clone(&control));
 
     let jobs = Arc::clone(&state.scan_jobs);
+    let database = Arc::clone(&state.database);
     let worker_job_id = job_id.clone();
     thread::Builder::new()
         .name("aletheia-live-search".to_string())
@@ -896,10 +962,20 @@ pub async fn start_direct_search(
                 pause_started_ms: AtomicU64::new(0),
                 paused_total_ms: AtomicU64::new(0),
                 sequence: AtomicU64::new(0),
+                database,
+                autosave_error: Mutex::new(None),
+                saved_matches: AtomicUsize::new(0),
             });
             shared.emit("running", None, "Scanning local sources", Vec::new());
             let result = run_scan(candidates, Arc::clone(&shared));
-            if shared.control.is_cancelled() {
+            let autosave_error = shared
+                .autosave_error
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take());
+            if let Some(error) = autosave_error {
+                shared.emit("failed", None, &error, Vec::new());
+            } else if shared.control.is_cancelled() {
                 shared.emit("cancelled", None, "Live search cancelled", Vec::new());
             } else if let Err(error) = result {
                 shared.emit("failed", None, &error, Vec::new());

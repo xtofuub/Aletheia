@@ -135,7 +135,7 @@ pub async fn clear_live_domain_evidence(
         .map_err(|_| "live domain cleanup task failed".to_string())?
 }
 
-fn save_evidence(
+pub(crate) fn save_evidence(
     database: Arc<Mutex<Connection>>,
     input: SaveLiveDomainEvidenceInput,
 ) -> Result<LiveDomainCollectionSummary, String> {

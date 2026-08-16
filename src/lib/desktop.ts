@@ -260,6 +260,11 @@ export interface DirectSearchRequest {
   includeArchives: boolean;
   maxResults: number;
   workerLimit: number;
+  liveDomainAutosave?: {
+    domain: string;
+    sourceId: string;
+    sourceName: string;
+  };
 }
 
 export interface DirectSearchPreflightRequest {
@@ -319,6 +324,8 @@ export interface DirectSearchProgress {
   truncated: boolean;
   message: string;
   hits: DirectSearchHit[];
+  autosaveEnabled?: boolean;
+  savedMatches?: number;
 }
 
 export interface DomainSummary {
@@ -1222,6 +1229,8 @@ export async function startDirectSearch(
     truncated: false,
     message: "Scanning saved Live sources",
     hits: [],
+    autosaveEnabled: false,
+    savedMatches: 0,
   };
   const job: BrowserDirectSearchJob = {
     completionTimer: null,
