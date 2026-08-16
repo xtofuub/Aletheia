@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+## 1.0.0 - 2026-08-16
+
 - Moved Live domain autosave into the native Rust scanner so every emitted result batch is committed to SQLite before the UI receives it; cancellation and page freezes no longer depend on a React save callback.
-- Bumped local release candidates to 0.1.10 so corrected binaries cannot be confused with older 0.1.9 standalone copies.
+- Promoted Aletheia to its first stable public release after completing the local investigation, large-source, Windows distribution, and signed updater workflows.
 - Redesigned Domains around explicit Indexed datasets and Live source scan modes, added per-dataset group filtering, and made missing domain links recoverable from the empty state.
 - Replaced ambiguous weekday-only Overview charts with rolling 7-, 30-, and 90-day views, real date labels, clearer names, and date-aware hover details.
 - Replaced repeated Live buffer rescans with one-pass 8 MiB chunk matching, bounded line resolution only after a match, and CPU-parallel chunk workers for a single large plain file.
