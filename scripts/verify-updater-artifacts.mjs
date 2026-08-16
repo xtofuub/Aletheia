@@ -26,12 +26,18 @@ for (const name of required) {
   }
 }
 
-const manifest = JSON.parse(
-  readFileSync(resolve(releaseRoot, "latest.json"), "utf8").replace(
-    /^\uFEFF/,
-    "",
-  ),
-);
+const manifestBytes = readFileSync(resolve(releaseRoot, "latest.json"));
+if (
+  manifestBytes.length >= 3 &&
+  manifestBytes[0] === 0xef &&
+  manifestBytes[1] === 0xbb &&
+  manifestBytes[2] === 0xbf
+) {
+  throw new Error(
+    "Updater manifest must be UTF-8 without a BOM; Tauri rejects BOM-prefixed JSON.",
+  );
+}
+const manifest = JSON.parse(manifestBytes.toString("utf8"));
 const windows = manifest.platforms?.["windows-x86_64"];
 const signature = readFileSync(
   resolve(releaseRoot, signatureName),

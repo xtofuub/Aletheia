@@ -141,9 +141,13 @@ try {
                 }
             }
         }
-        $latestJson |
-            ConvertTo-Json -Depth 5 |
-            Set-Content -LiteralPath (Join-Path $releaseRoot "latest.json") -Encoding utf8
+        $latestJsonPath = Join-Path $releaseRoot "latest.json"
+        $latestJsonText = $latestJson | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText(
+            $latestJsonPath,
+            "$latestJsonText$([Environment]::NewLine)",
+            [System.Text.UTF8Encoding]::new($false)
+        )
         $checksumFiles += @($setupSignatureName, "latest.json")
     }
     $checksums = foreach ($fileName in $checksumFiles) {
