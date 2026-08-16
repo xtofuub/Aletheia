@@ -12,6 +12,7 @@ import {
   PlayIcon,
   SearchIcon,
   SquareIcon,
+  Trash2Icon,
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
@@ -20,6 +21,18 @@ import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import {
   Alert,
   AlertAction,
@@ -79,6 +92,7 @@ import {
 } from "@/components/ui/table";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
 import {
+  clearLiveDomainEvidence,
   getSettings,
   getDomainDetails,
   listDomains,
@@ -135,7 +149,11 @@ export function DomainsPage() {
   const [liveDomainInput, setLiveDomainInput] = useState("");
   const [repairNotice, setRepairNotice] = useState("");
   const [liveNotice, setLiveNotice] = useState("");
-  const attemptedStoreJobId = useRef<string | null>(null);
+  const checkpointedLiveHits = useRef({ count: 0, domain: "", jobId: "" });
+  const checkpointSaving = useRef(false);
+  const attemptedCheckpointKey = useRef<string | null>(null);
+  const [liveCheckpointPending, setLiveCheckpointPending] = useState(false);
+  const [savedLiveHitCount, setSavedLiveHitCount] = useState(0);
   const {
     begin: beginDirectSearch,
     cancel: cancelLiveSearch,
@@ -254,42 +272,27 @@ export function DomainsPage() {
     enabled: sourceView === "live" && Boolean(activeDomain),
   });
 
-  const storeLiveEvidence = useMutation({
-    mutationFn: ({
-      domain,
-      sourceId,
-      sourceName,
-      evidence,
-    }: {
-      jobId: string;
-      domain: string;
-      sourceId: string;
-      sourceName: string;
-      evidence: NonNullable<typeof directProgress>["hits"];
-    }) =>
-      saveLiveDomainEvidence({
-        domain,
-        sourceId,
-        sourceName,
-        evidence,
-      }),
-    onSuccess: async (summary, variables) => {
-      setSelectedDomain(summary.registrableDomain);
-      setLiveRecordOffset(0);
+  const clearLiveCollection = useMutation({
+    mutationFn: (domain: string) => clearLiveDomainEvidence(domain),
+    onSuccess: (removed, domain) => {
+      if (selectedDomain === domain) {
+        setSelectedDomain(null);
+        setLiveRecordOffset(0);
+      }
       setLiveNotice(
-        `${formatCount(summary.evidenceCount)} Live rows stored locally`,
+        `${formatCount(removed)} saved Live ${removed === 1 ? "row" : "rows"} deleted`,
       );
-      markHandled(variables.jobId);
-      await Promise.all([
+      void Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["live-domain-collections"],
         }),
         queryClient.invalidateQueries({
-          queryKey: ["live-domain-evidence", summary.registrableDomain],
+          queryKey: ["live-domain-evidence", domain],
         }),
       ]);
     },
-    onError: (error) => setLiveNotice(`Could not store scan: ${String(error)}`),
+    onError: (error) =>
+      setLiveNotice(`Could not delete saved results: ${String(error)}`),
   });
 
   const liveScan = useMutation({
@@ -311,7 +314,13 @@ export function DomainsPage() {
         workerLimit: settings.data?.workerLimit ?? 2,
       }),
     onSuccess: (start, variables) => {
-      attemptedStoreJobId.current = null;
+      checkpointedLiveHits.current = {
+        count: 0,
+        domain: "",
+        jobId: start.jobId,
+      };
+      attemptedCheckpointKey.current = null;
+      setSavedLiveHitCount(0);
       setLiveNotice("");
       beginDirectSearch(start, {
         scope: "domains",
@@ -331,37 +340,103 @@ export function DomainsPage() {
     liveScanContext.jobId === directProgress?.jobId
       ? directProgress
       : null;
-  const livePercent = currentLiveProgress?.totalBytes
-    ? Math.min(
-        100,
-        (currentLiveProgress.sourceBytesScanned /
-          currentLiveProgress.totalBytes) *
-          100,
-      )
-    : 0;
+  const livePercent =
+    currentLiveProgress?.status === "completed"
+      ? 100
+      : currentLiveProgress?.totalBytes
+        ? Math.min(
+            100,
+            (currentLiveProgress.sourceBytesScanned /
+              currentLiveProgress.totalBytes) *
+              100,
+          )
+        : 0;
 
   useEffect(() => {
     if (!currentLiveProgress || !liveScanContext || liveScanContext.handled)
       return;
-    if (
-      currentLiveProgress.status !== "completed" ||
-      attemptedStoreJobId.current === currentLiveProgress.jobId
-    ) {
-      return;
-    }
-    attemptedStoreJobId.current = currentLiveProgress.jobId;
-    if (!currentLiveProgress.hits.length) {
+    if (checkpointSaving.current) return;
+    const final = ["completed", "cancelled", "failed"].includes(
+      currentLiveProgress.status,
+    );
+    const checkpoint =
+      checkpointedLiveHits.current.jobId === currentLiveProgress.jobId
+        ? checkpointedLiveHits.current.count
+        : 0;
+    if (currentLiveProgress.hits.length <= checkpoint) {
+      if (!final) return;
+      if (currentLiveProgress.hits.length > 0) {
+        setSelectedDomain(checkpointedLiveHits.current.domain || null);
+        setLiveRecordOffset(0);
+        setLiveNotice(
+          currentLiveProgress.status === "completed"
+            ? `${formatCount(savedLiveHitCount)} Live rows saved locally`
+            : `${formatCount(savedLiveHitCount)} partial Live ${savedLiveHitCount === 1 ? "row" : "rows"} saved locally after the scan stopped`,
+        );
+      } else if (currentLiveProgress.status === "cancelled") {
+        setLiveNotice("Scan cancelled. No matching rows were found to save.");
+      } else if (currentLiveProgress.status === "failed") {
+        setLiveNotice(currentLiveProgress.message);
+      }
       markHandled(currentLiveProgress.jobId);
       return;
     }
-    storeLiveEvidence.mutate({
-      jobId: currentLiveProgress.jobId,
+    const checkpointKey = `${currentLiveProgress.jobId}:${currentLiveProgress.hits.length}:${currentLiveProgress.status}`;
+    if (attemptedCheckpointKey.current === checkpointKey) return;
+    attemptedCheckpointKey.current = checkpointKey;
+    checkpointSaving.current = true;
+    setLiveCheckpointPending(true);
+    const jobId = currentLiveProgress.jobId;
+    const status = currentLiveProgress.status;
+    const upToHitCount = currentLiveProgress.hits.length;
+    void saveLiveDomainEvidence({
       domain: liveScanContext.query ?? "",
       sourceId: liveScanContext.sourceId ?? "live-source",
       sourceName: liveScanContext.sourceName ?? "Saved Live source",
-      evidence: currentLiveProgress.hits,
-    });
-  }, [currentLiveProgress, liveScanContext, markHandled, storeLiveEvidence]);
+      evidence: currentLiveProgress.hits.slice(checkpoint),
+    })
+      .then((summary) => {
+        checkpointedLiveHits.current = {
+          count: upToHitCount,
+          domain: summary.registrableDomain,
+          jobId,
+        };
+        attemptedCheckpointKey.current = null;
+        setSavedLiveHitCount(summary.evidenceCount);
+        if (final) {
+          setSelectedDomain(summary.registrableDomain);
+          setLiveRecordOffset(0);
+          setLiveNotice(
+            status === "completed"
+              ? `${formatCount(summary.evidenceCount)} Live rows saved locally`
+              : `${formatCount(summary.evidenceCount)} partial Live ${summary.evidenceCount === 1 ? "row" : "rows"} saved locally after the scan stopped`,
+          );
+          markHandled(jobId);
+        }
+        void Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: ["live-domain-collections"],
+          }),
+          queryClient.invalidateQueries({
+            queryKey: ["live-domain-evidence", summary.registrableDomain],
+          }),
+        ]);
+      })
+      .catch((error: unknown) => {
+        setLiveNotice(`Could not autosave Live results: ${String(error)}`);
+      })
+      .finally(() => {
+        checkpointSaving.current = false;
+        setLiveCheckpointPending(false);
+      });
+  }, [
+    currentLiveProgress,
+    liveCheckpointPending,
+    liveScanContext,
+    markHandled,
+    queryClient,
+    savedLiveHitCount,
+  ]);
 
   const datasetItems = [
     {
@@ -381,7 +456,7 @@ export function DomainsPage() {
   const domainToScan = liveDomainInput.trim();
   const liveBusy =
     liveScan.isPending ||
-    storeLiveEvidence.isPending ||
+    liveCheckpointPending ||
     ["running", "paused", "cancelling"].includes(
       currentLiveProgress?.status ?? "",
     );
@@ -512,7 +587,7 @@ export function DomainsPage() {
         </ToggleGroup>
       </Field>
       <div className="grid grid-cols-1 gap-px bg-border p-px xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
-        <DashboardCard className="min-h-0 min-w-0 gap-0">
+        <DashboardCard className="min-w-0 gap-0">
           <CardHeader className="border-b">
             <CardTitle>
               {sourceView === "live"
@@ -697,12 +772,16 @@ export function DomainsPage() {
                           ) : (
                             <FileSearchIcon data-icon="inline-start" />
                           )}
-                          {storeLiveEvidence.isPending
-                            ? "Storing..."
+                          {liveCheckpointPending
+                            ? "Autosaving..."
                             : liveBusy
-                              ? "Scanning..."
-                              : "Scan & store"}
+                              ? "Scanning & autosaving..."
+                              : "Scan & autosave"}
                         </Button>
+                        <FieldDescription>
+                          Matches are saved locally as they appear. Pausing or
+                          cancelling keeps everything found so far.
+                        </FieldDescription>
                       </FieldGroup>
                       <LiveSearchPreflight
                         currentWorkerLimit={settings.data?.workerLimit ?? 2}
@@ -734,7 +813,8 @@ export function DomainsPage() {
                   )}
                   {currentLiveProgress ? (
                     <Alert role="status">
-                      {["running", "cancelling"].includes(
+                      {liveCheckpointPending ||
+                      ["running", "cancelling"].includes(
                         currentLiveProgress.status,
                       ) ? (
                         <Spinner />
@@ -743,7 +823,11 @@ export function DomainsPage() {
                       ) : (
                         <PauseIcon />
                       )}
-                      <AlertTitle>{currentLiveProgress.message}</AlertTitle>
+                      <AlertTitle>
+                        {liveCheckpointPending
+                          ? "Autosaving Live results"
+                          : currentLiveProgress.message}
+                      </AlertTitle>
                       <AlertDescription className="flex flex-col gap-3">
                         <Progress value={livePercent}>
                           <ProgressLabel>
@@ -761,6 +845,11 @@ export function DomainsPage() {
                             {formatCount(currentLiveProgress.filesScanned)} of{" "}
                             {formatCount(currentLiveProgress.sourceCount)} files
                           </Badge>
+                          {savedLiveHitCount > 0 ? (
+                            <Badge variant="secondary">
+                              {formatCount(savedLiveHitCount)} stored locally
+                            </Badge>
+                          ) : null}
                           {currentLiveProgress.status === "running" ? (
                             <Button
                               className="ms-auto"
@@ -831,27 +920,83 @@ export function DomainsPage() {
                   {(storedCollections.data?.collections ?? []).length ? (
                     (storedCollections.data?.collections ?? []).map(
                       (collection) => (
-                        <Button
-                          className="h-auto w-full justify-between px-3 py-2"
+                        <div
+                          className="flex min-w-0 items-center gap-1"
                           key={collection.registrableDomain}
-                          onClick={() => {
-                            setSelectedDomain(collection.registrableDomain);
-                            setLiveDomainInput(collection.registrableDomain);
-                            setLiveRecordOffset(0);
-                          }}
-                          variant={
-                            activeDomain === collection.registrableDomain
-                              ? "secondary"
-                              : "ghost"
-                          }
                         >
-                          <span className="truncate">
-                            {collection.registrableDomain}
-                          </span>
-                          <Badge variant="outline">
-                            {formatCount(collection.evidenceCount)}
-                          </Badge>
-                        </Button>
+                          <Button
+                            className="h-auto min-w-0 flex-1 justify-between px-3 py-2"
+                            onClick={() => {
+                              setSelectedDomain(collection.registrableDomain);
+                              setLiveDomainInput(collection.registrableDomain);
+                              setLiveRecordOffset(0);
+                            }}
+                            variant={
+                              activeDomain === collection.registrableDomain
+                                ? "secondary"
+                                : "ghost"
+                            }
+                          >
+                            <span className="truncate">
+                              {collection.registrableDomain}
+                            </span>
+                            <Badge variant="outline">
+                              {formatCount(collection.evidenceCount)}
+                            </Badge>
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger
+                              render={
+                                <Button
+                                  aria-label={`Delete saved results for ${collection.registrableDomain}`}
+                                  size="icon-sm"
+                                  variant="ghost"
+                                />
+                              }
+                            >
+                              <Trash2Icon />
+                            </AlertDialogTrigger>
+                            <AlertDialogContent size="sm">
+                              <AlertDialogHeader>
+                                <AlertDialogMedia>
+                                  <Trash2Icon />
+                                </AlertDialogMedia>
+                                <AlertDialogTitle>
+                                  Delete saved domain results?
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This removes{" "}
+                                  {formatCount(collection.evidenceCount)} saved
+                                  rows for {collection.registrableDomain}.
+                                  Original source files are never changed.
+                                  Cancel an active scan first or new matches may
+                                  be saved again.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>
+                                  Keep results
+                                </AlertDialogCancel>
+                                <AlertDialogAction
+                                  disabled={clearLiveCollection.isPending}
+                                  onClick={() =>
+                                    clearLiveCollection.mutate(
+                                      collection.registrableDomain,
+                                    )
+                                  }
+                                  variant="destructive"
+                                >
+                                  {clearLiveCollection.isPending ? (
+                                    <Spinner data-icon="inline-start" />
+                                  ) : (
+                                    <Trash2Icon data-icon="inline-start" />
+                                  )}
+                                  Delete results
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       ),
                     )
                   ) : (
@@ -1192,19 +1337,10 @@ export function DomainsPage() {
                 </>
               ) : null}
               {sourceView === "live" && currentLiveProgress ? (
-                <CardContent
-                  className={cn(
-                    "border-b px-0",
-                    !activeDomain &&
-                      "min-h-[34rem] basis-0 flex-1 overflow-hidden",
-                  )}
-                >
+                <CardContent className="min-h-[34rem] basis-0 flex-1 overflow-hidden border-b px-0">
                   {currentLiveProgress.hits.length ? (
                     <ScrollArea
-                      className={cn(
-                        "h-[min(52vh,34rem)]",
-                        !activeDomain && "h-full min-h-[34rem]",
-                      )}
+                      className="h-full min-h-[34rem]"
                       data-testid="active-live-domain-results"
                     >
                       <Table className="table-fixed">
@@ -1280,7 +1416,7 @@ export function DomainsPage() {
                   )}
                 </CardContent>
               ) : null}
-              {sourceView === "live" && activeDomain ? (
+              {sourceView === "live" && activeDomain && !currentLiveProgress ? (
                 <>
                   <CardHeader className="border-y">
                     <CardTitle>Stored Live evidence</CardTitle>
@@ -1289,13 +1425,7 @@ export function DomainsPage() {
                       without building an index.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent
-                    className={cn(
-                      "px-0",
-                      !currentLiveProgress &&
-                        "min-h-[34rem] basis-0 flex-1 overflow-hidden",
-                    )}
-                  >
+                  <CardContent className="min-h-[34rem] basis-0 flex-1 overflow-hidden px-0">
                     {liveEvidence.isPending ? (
                       <Empty className="min-h-48 rounded-none border-0">
                         <EmptyHeader>
@@ -1320,12 +1450,7 @@ export function DomainsPage() {
                         </EmptyHeader>
                       </Empty>
                     ) : liveEvidence.data?.evidence.length ? (
-                      <ScrollArea
-                        className={cn(
-                          "h-[min(42vh,28rem)]",
-                          !currentLiveProgress && "h-full min-h-[34rem]",
-                        )}
-                      >
+                      <ScrollArea className="h-full min-h-[34rem]">
                         <Table className="table-fixed">
                           <TableHeader className="sticky top-0 z-10 bg-background">
                             <TableRow>

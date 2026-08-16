@@ -296,7 +296,7 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   ).toHaveAttribute("aria-pressed", "true");
   await page.getByLabel("Parent domain").fill("example.co.uk");
   await expect(page.getByText("Loading stored Live lines")).toHaveCount(0);
-  await page.getByRole("button", { name: "Scan & store" }).click();
+  await page.getByRole("button", { name: "Scan & autosave" }).click();
 
   await expect(page.getByText("Streaming matching Live lines")).toBeVisible();
   const liveResults = page.getByTestId("active-live-domain-results");
@@ -323,15 +323,25 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   ).toBeVisible();
   await activeScan.getByRole("button", { name: "Continue" }).click();
   await page.goto("/#/domains");
-  await expect(page.getByText("2 Live rows stored locally")).toBeVisible();
-  await expect(page.getByLabel("Parent domain")).toBeVisible();
-  await expect(page.getByLabel("Saved Live source")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "example.co.uk 2", exact: true }),
+  ).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Stored Live evidence")).toBeVisible();
   await expect(
     page
       .getByText("synthetic@example.com portal.example.com", { exact: false })
       .first(),
   ).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Delete saved results for example.co.uk" })
+    .click();
+  const deleteDialog = page.getByRole("alertdialog", {
+    name: "Delete saved domain results?",
+  });
+  await expect(deleteDialog).toBeVisible();
+  await deleteDialog.getByRole("button", { name: "Delete results" }).click();
+  await expect(page.getByText("No saved Live results yet.")).toBeVisible();
 
   await page.getByRole("button", { name: "Indexed datasets" }).click();
   await expect(
@@ -360,14 +370,20 @@ test("a Live domain scan can be cancelled", async ({ page }) => {
   await page.goto("/#/domains");
   await page.getByRole("button", { name: "Live source scans" }).click();
   await page.getByLabel("Parent domain").fill("cancel.example");
-  await page.getByRole("button", { name: "Scan & store" }).click();
+  await page.getByRole("button", { name: "Scan & autosave" }).click();
+  await expect(page.getByText("Streaming matching Live lines")).toBeVisible();
+  await expect(page.getByText("1 stored locally")).toBeVisible();
   await page
     .getByRole("button", { name: "Cancel", exact: true })
     .first()
     .click();
-  await expect(page.getByText("Live scan cancelled").first()).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Dismiss", exact: true }),
+    page.getByText("1 partial Live row saved locally after the scan stopped"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: "Delete saved results for cancel.example",
+    }),
   ).toBeVisible();
 });
 
