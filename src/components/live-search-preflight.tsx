@@ -89,7 +89,10 @@ export function LiveSearchPreflight({
           </Badge>
           <Badge variant="outline">{result.bottleneck} bottleneck</Badge>
           <Badge variant="outline">
-            {result.recommendedWorkerLimit} recommended workers
+            {result.sourceReaderLimit} sequential reader
+          </Badge>
+          <Badge variant="outline">
+            {result.recommendedWorkerLimit} match workers
           </Badge>
           {result.archiveCount ? (
             <>

@@ -1,6 +1,6 @@
 use std::{
     collections::{HashSet, VecDeque},
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
@@ -47,6 +47,9 @@ const PLAIN_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const PARALLEL_PLAIN_THRESHOLD: u64 = 128 * 1024 * 1024;
 const RAW_EXCERPT_BYTES: usize = 1024;
 const PREFLIGHT_SAMPLE_BYTES: u64 = 64 * 1024 * 1024;
+const SOURCE_READER_LIMIT: usize = 1;
+#[cfg(windows)]
+const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
 
 static SECRET_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b(password|passwd|pwd|token|cookie|secret|api[_-]?key)\s*[:=]\s*[^\s,;|]+")
@@ -108,6 +111,7 @@ pub struct DirectSearchPreflight {
     pub archive_bytes_per_second: u64,
     pub estimated_minimum_ms: u64,
     pub estimated_maximum_ms: u64,
+    pub source_reader_limit: u32,
     pub recommended_worker_limit: u32,
     pub recommended_memory_limit_mb: u32,
     pub bottleneck: String,
@@ -821,6 +825,7 @@ fn build_preflight(
         archive_bytes_per_second: archive_rate,
         estimated_minimum_ms: minimum_ms,
         estimated_maximum_ms,
+        source_reader_limit: SOURCE_READER_LIMIT as u32,
         recommended_worker_limit,
         recommended_memory_limit_mb: profile
             .map(|value| value.recommended_memory_limit_mb)
@@ -843,7 +848,7 @@ fn measure_source_read_rate(candidates: &[Candidate]) -> Result<u64, String> {
         if sampled >= PREFLIGHT_SAMPLE_BYTES {
             break;
         }
-        let mut file = File::open(&candidate.path)
+        let mut file = open_source_file(&candidate.path)
             .map_err(|_| "a source could not be sampled read-only".to_string())?;
         loop {
             let remaining = PREFLIGHT_SAMPLE_BYTES.saturating_sub(sampled);
@@ -876,6 +881,17 @@ fn estimate_bytes_ms(bytes: u64, bytes_per_second: u64) -> u64 {
         .checked_div(bytes_per_second.max(1))
         .unwrap_or(u64::MAX)
         .max(1)
+}
+
+fn open_source_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(FILE_FLAG_SEQUENTIAL_SCAN);
+    }
+    options.open(path)
 }
 
 fn recommended_source_workers(read_rate: u64, logical_cores: usize) -> u32 {
@@ -1095,7 +1111,10 @@ fn maybe_add_candidate(
 fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), String> {
     let queue = Arc::new(Mutex::new(VecDeque::from(candidates)));
     let first_error = Arc::new(Mutex::new(None::<String>));
-    let workers = shared.request.worker_limit.min(shared.source_count).max(1);
+    // Large breach collections are commonly stored on rotational disks. Keep physical
+    // source reading sequential so multiple files do not make the drive seek between
+    // streams. Plain-text matching still fans out across the configured CPU workers.
+    let workers = SOURCE_READER_LIMIT.min(shared.source_count).max(1);
     thread::scope(|scope| {
         for _ in 0..workers {
             let queue = Arc::clone(&queue);
@@ -1166,9 +1185,9 @@ fn scan_plain(
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
 ) -> Result<(), String> {
-    let file = File::open(&candidate.path)
+    let file = open_source_file(&candidate.path)
         .map_err(|_| "a source could not be opened read-only".to_string())?;
-    let workers = if candidate.size >= PARALLEL_PLAIN_THRESHOLD && shared.source_count == 1 {
+    let workers = if candidate.size >= PARALLEL_PLAIN_THRESHOLD {
         shared.request.worker_limit.clamp(1, 8)
     } else {
         1
@@ -1568,7 +1587,7 @@ fn scan_gzip(
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
 ) -> Result<(), String> {
-    let file = File::open(&candidate.path)
+    let file = open_source_file(&candidate.path)
         .map_err(|_| "a compressed source could not be opened read-only".to_string())?;
     let decoder = GzDecoder::new(SourceProgressReader::new(
         file,
@@ -1591,7 +1610,7 @@ fn scan_zip(
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
 ) -> Result<(), String> {
-    let file = File::open(&candidate.path)
+    let file = open_source_file(&candidate.path)
         .map_err(|_| "a ZIP source could not be opened read-only".to_string())?;
     let reader = SourceProgressReader::new(file, Arc::clone(source_progress), Arc::clone(shared));
     let mut archive = ZipArchive::new(reader)
@@ -2348,6 +2367,7 @@ mod tests {
         assert_eq!(result.archive_count, 0);
         assert!(result.sample_read_bytes_per_second > 0);
         assert!(result.estimated_maximum_ms >= result.estimated_minimum_ms);
+        assert_eq!(result.source_reader_limit, 1);
         assert!((1..=8).contains(&result.recommended_worker_limit));
     }
 

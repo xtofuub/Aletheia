@@ -281,6 +281,7 @@ export interface DirectSearchPreflight {
   archiveBytesPerSecond: number;
   estimatedMinimumMs: number;
   estimatedMaximumMs: number;
+  sourceReaderLimit: number;
   recommendedWorkerLimit: number;
   recommendedMemoryLimitMb: number;
   bottleneck: string;
@@ -1318,6 +1319,7 @@ export async function preflightDirectSearch(
     estimatedMaximumMs: Math.round(
       estimatedMinimumMs * (request.includeArchives ? 3.5 : 1.8),
     ),
+    sourceReaderLimit: 1,
     recommendedWorkerLimit: profile.recommendedWorkerLimit,
     recommendedMemoryLimitMb: profile.recommendedMemoryLimitMb,
     bottleneck: request.includeArchives
