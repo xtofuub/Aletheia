@@ -108,6 +108,7 @@ import {
 import {
   formatBytes,
   formatCount,
+  formatDuration,
   formatFileNameForDisplay,
   formatPathForDisplay,
   formatProgressPercent,
@@ -886,6 +887,17 @@ export function DomainsPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline">
                             {formatBytes(currentLiveProgress.bytesPerSecond)}/s
+                          </Badge>
+                          <Badge variant="outline">
+                            {currentLiveProgress.status === "completed"
+                              ? "Done"
+                              : currentLiveProgress.status === "paused"
+                                ? "Paused"
+                                : currentLiveProgress.status === "cancelling"
+                                  ? "Stopping"
+                                  : `${formatDuration(
+                                      currentLiveProgress.estimatedRemainingMs,
+                                    )} remaining`}
                           </Badge>
                           <Badge variant="outline">
                             {formatCount(currentLiveProgress.filesScanned)} of{" "}

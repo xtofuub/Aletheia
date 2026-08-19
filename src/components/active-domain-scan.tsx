@@ -8,7 +8,12 @@ import {
   ProgressValue,
 } from "@/components/ui/progress";
 import { useDirectSearchProgress } from "@/hooks/use-direct-search-progress";
-import { formatBytes, formatCount, formatProgressPercent } from "@/lib/format";
+import {
+  formatBytes,
+  formatCount,
+  formatDuration,
+  formatProgressPercent,
+} from "@/lib/format";
 
 const activeStatuses = ["running", "paused", "cancelling"];
 
@@ -54,6 +59,13 @@ export function ActiveDomainScan() {
           </Badge>
           <Badge variant="outline">
             {formatCount(progress.matches)} matches
+          </Badge>
+          <Badge variant="outline">
+            {progress.status === "paused"
+              ? "Paused"
+              : progress.status === "cancelling"
+                ? "Stopping"
+                : `${formatDuration(progress.estimatedRemainingMs)} remaining`}
           </Badge>
           {progress.status === "running" ? (
             <Button

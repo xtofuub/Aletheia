@@ -102,7 +102,7 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   const liveSourceRow = page.getByRole("row", { name: /Authorized corpus/ });
   await expect(liveSourceRow).toBeVisible();
   await liveSourceRow.getByRole("button", { name: "Search" }).click();
-  await expect(page.getByText(/Expected full scan:/)).toBeVisible();
+  await expect(page.getByText(/Approximate full scan:/)).toBeVisible();
   await expect(page.getByText(/sampled read/)).toBeVisible();
   await page
     .getByLabel("Search query")
@@ -190,7 +190,7 @@ test("Identity Builder reuses a saved Live source", async ({ page }) => {
     page.getByText("C:\\Synthetic\\Authorized corpus"),
   ).toBeVisible();
   await expect(page.getByText(/\\\\\?\\C:\\Synthetic/)).toHaveCount(0);
-  await expect(page.getByText(/Expected full scan:/)).toBeVisible();
+  await expect(page.getByText(/Approximate full scan:/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose folder" })).toHaveCount(
     0,
   );
@@ -294,7 +294,7 @@ test("Domains scans saved Live sources and stores matching lines", async ({
   });
   await page.goto("/#/domains");
   await page.getByRole("button", { name: "Live source scans" }).click();
-  await expect(page.getByText(/Expected full scan:/)).toBeVisible();
+  await expect(page.getByText(/Approximate full scan:/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Live source scans" }),
   ).toHaveAttribute("aria-pressed", "true");

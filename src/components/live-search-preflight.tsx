@@ -72,7 +72,7 @@ export function LiveSearchPreflight({
     <Alert>
       <GaugeIcon />
       <AlertTitle>
-        Expected full scan: {formatDuration(result.estimatedMinimumMs)}–
+        Approximate full scan: {formatDuration(result.estimatedMinimumMs)}–
         {formatDuration(result.estimatedMaximumMs)}
       </AlertTitle>
       <AlertDescription className="flex flex-col gap-2">

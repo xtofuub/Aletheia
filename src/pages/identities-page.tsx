@@ -106,6 +106,7 @@ import {
 import {
   formatBytes,
   formatCount,
+  formatDuration,
   formatFileNameForDisplay,
   formatPathForDisplay,
   formatProgressPercent,
@@ -1213,18 +1214,35 @@ export function IdentitiesPage() {
                       />
 
                       {liveProgress ? (
-                        <Progress value={livePercent}>
-                          <ProgressLabel className="flex items-center gap-2">
-                            {liveProgress.status === "running" ? (
-                              <Spinner />
-                            ) : null}
-                            {liveProgress.message} -{" "}
-                            {formatBytes(liveProgress.bytesPerSecond)}/s
-                          </ProgressLabel>
-                          <ProgressValue>
-                            {() => formatProgressPercent(livePercent)}
-                          </ProgressValue>
-                        </Progress>
+                        <div className="flex flex-col gap-2">
+                          <Progress value={livePercent}>
+                            <ProgressLabel className="flex items-center gap-2">
+                              {liveProgress.status === "running" ? (
+                                <Spinner />
+                              ) : null}
+                              {liveProgress.message}
+                            </ProgressLabel>
+                            <ProgressValue>
+                              {() => formatProgressPercent(livePercent)}
+                            </ProgressValue>
+                          </Progress>
+                          <div className="flex flex-wrap gap-2">
+                            <Badge variant="outline">
+                              {formatBytes(liveProgress.bytesPerSecond)}/s
+                            </Badge>
+                            <Badge variant="outline">
+                              {liveProgress.status === "completed"
+                                ? "Done"
+                                : liveProgress.status === "paused"
+                                  ? "Paused"
+                                  : liveProgress.status === "cancelling"
+                                    ? "Stopping"
+                                    : `${formatDuration(
+                                        liveProgress.estimatedRemainingMs,
+                                      )} remaining`}
+                            </Badge>
+                          </div>
+                        </div>
                       ) : null}
 
                       <div className="flex justify-end gap-2">

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Clarified Overview metrics: Dataset landscape now shows searchable rows and explicit index state instead of an ambiguous percentage, while Live scan matches remain clearly separate from indexed-row totals.
+- Made scan timing consistent across Search, Domains, and Identities with a measured preflight range plus live remaining-time updates while work is running.
 
 ## 1.0.0 - 2026-08-16
 
