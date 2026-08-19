@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -9,7 +9,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, AhoCorasickKind};
@@ -17,6 +17,7 @@ use flate2::read::GzDecoder;
 use once_cell::sync::Lazy;
 use rars::ArchiveReader;
 use regex::Regex;
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -48,6 +49,7 @@ const PARALLEL_PLAIN_THRESHOLD: u64 = 128 * 1024 * 1024;
 const RAW_EXCERPT_BYTES: usize = 1024;
 const PREFLIGHT_SAMPLE_BYTES: u64 = 64 * 1024 * 1024;
 const SOURCE_READER_LIMIT: usize = 1;
+const PLAIN_CHECKPOINT_BYTES: u64 = 256 * 1024 * 1024;
 #[cfg(windows)]
 const FILE_FLAG_SEQUENTIAL_SCAN: u32 = 0x0800_0000;
 
@@ -60,7 +62,7 @@ static EMAIL_SECRET_PAIR_PATTERN: Lazy<Regex> = Lazy::new(|| {
         .expect("email credential-pair filtering pattern")
 });
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectSearchRequest {
     pub paths: Vec<String>,
@@ -73,15 +75,25 @@ pub struct DirectSearchRequest {
     pub max_results: usize,
     pub worker_limit: usize,
     #[serde(default)]
+    pub session_context: Option<DirectSearchSessionContext>,
+    #[serde(default)]
     pub live_domain_autosave: Option<LiveDomainAutosaveRequest>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveDomainAutosaveRequest {
     pub domain: String,
     pub source_id: String,
     pub source_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSearchSessionContext {
+    pub scope: String,
+    pub source_id: Option<String>,
+    pub source_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -155,10 +167,40 @@ pub struct DirectSearchProgress {
     pub saved_matches: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoverableDirectSearch {
+    pub progress: DirectSearchProgress,
+    pub scope: String,
+    pub query: String,
+    pub source_id: Option<String>,
+    pub source_name: Option<String>,
+}
+
 #[derive(Clone)]
 struct Candidate {
     path: PathBuf,
     size: u64,
+    modified_ns: u64,
+}
+
+#[derive(Default)]
+struct ScanBaseline {
+    elapsed_ms: u64,
+    files_scanned: usize,
+    source_bytes_scanned: u64,
+    content_bytes_scanned: u64,
+    matches: usize,
+    seen_hit_ids: HashSet<String>,
+    resume_points: HashMap<String, PlainResumePoint>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlainResumePoint {
+    source_size: u64,
+    source_modified_ns: u64,
+    byte_offset: u64,
+    next_line: u64,
 }
 
 struct CandidateSourceProgress {
@@ -170,11 +212,17 @@ struct CandidateSourceProgress {
 }
 
 impl CandidateSourceProgress {
+    #[cfg(test)]
     fn new(total_bytes: u64) -> Self {
+        Self::new_at(total_bytes, 0)
+    }
+
+    fn new_at(total_bytes: u64, reported_bytes: u64) -> Self {
+        let reported_bytes = reported_bytes.min(total_bytes);
         Self {
             total_bytes,
-            physical_bytes: AtomicU64::new(0),
-            reported_bytes: AtomicU64::new(0),
+            physical_bytes: AtomicU64::new(reported_bytes),
+            reported_bytes: AtomicU64::new(reported_bytes),
             decoded_bytes: AtomicU64::new(0),
             decoded_total_bytes: AtomicU64::new(0),
         }
@@ -283,12 +331,14 @@ struct SharedScan {
     source_count: usize,
     total_bytes: u64,
     started: Instant,
+    elapsed_offset_ms: u64,
     files_scanned: AtomicUsize,
     source_bytes_scanned: AtomicU64,
     content_bytes_scanned: AtomicU64,
     matches: AtomicUsize,
     stop: AtomicBool,
     last_progress_emit_ms: AtomicU64,
+    last_checkpoint_ms: AtomicU64,
     pause_announced: AtomicBool,
     pause_started_ms: AtomicU64,
     paused_total_ms: AtomicU64,
@@ -296,6 +346,8 @@ struct SharedScan {
     database: Arc<Mutex<rusqlite::Connection>>,
     autosave_error: Mutex<Option<String>>,
     saved_matches: AtomicUsize,
+    seen_hit_ids: Mutex<HashSet<String>>,
+    resume_points: HashMap<String, PlainResumePoint>,
 }
 
 struct QueryMatcher {
@@ -531,6 +583,18 @@ fn is_domain_occurrence(line: &[u8], start: usize, end: usize) -> bool {
 }
 
 impl SharedScan {
+    fn resume_point(&self, candidate: &Candidate) -> Option<PlainResumePoint> {
+        self.resume_points
+            .get(candidate.path.to_string_lossy().as_ref())
+            .copied()
+            .filter(|point| {
+                point.source_size == candidate.size
+                    && point.source_modified_ns == candidate.modified_ns
+                    && point.byte_offset < candidate.size
+                    && !matches!(extension(&candidate.path).as_str(), "zip" | "rar" | "gz")
+            })
+    }
+
     fn should_stop(&self) -> bool {
         self.stop.load(Ordering::Relaxed) || self.control.is_cancelled()
     }
@@ -651,11 +715,11 @@ impl SharedScan {
         } else {
             0
         };
-        let elapsed_ms = active_elapsed_ms(
+        let elapsed_ms = self.elapsed_offset_ms.saturating_add(active_elapsed_ms(
             wall_ms,
             self.paused_total_ms.load(Ordering::Relaxed),
             current_pause_ms,
-        );
+        ));
         if emitted_status == "running" && hits.is_empty() {
             let previous = self.last_progress_emit_ms.load(Ordering::Relaxed);
             if previous > 0 && elapsed_ms.saturating_sub(previous) < PROGRESS_EMIT_INTERVAL_MS {
@@ -682,34 +746,50 @@ impl SharedScan {
             .unwrap_or(0);
         let matches = self.matches.load(Ordering::Relaxed);
         let sequence = self.sequence.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.app.emit(
-            DIRECT_SEARCH_EVENT,
-            DirectSearchProgress {
-                job_id: self.job_id.clone(),
-                sequence,
-                status: emitted_status.to_string(),
-                current_source,
-                source_count: self.source_count,
-                files_scanned: self.files_scanned.load(Ordering::Relaxed),
-                total_bytes: self.total_bytes,
+        let progress = DirectSearchProgress {
+            job_id: self.job_id.clone(),
+            sequence,
+            status: emitted_status.to_string(),
+            current_source,
+            source_count: self.source_count,
+            files_scanned: self.files_scanned.load(Ordering::Relaxed),
+            total_bytes: self.total_bytes,
+            source_bytes_scanned,
+            content_bytes_scanned,
+            matches,
+            elapsed_ms,
+            bytes_per_second,
+            estimated_remaining_ms: estimate_remaining_ms(
+                self.total_bytes,
                 source_bytes_scanned,
-                content_bytes_scanned,
-                matches,
                 elapsed_ms,
-                bytes_per_second,
-                estimated_remaining_ms: estimate_remaining_ms(
-                    self.total_bytes,
-                    source_bytes_scanned,
-                    elapsed_ms,
-                ),
-                query_count: self.matcher.query_count(),
-                truncated: matches >= self.request.max_results,
-                message: emitted_message,
-                hits,
-                autosave_enabled: self.request.live_domain_autosave.is_some(),
-                saved_matches: self.saved_matches.load(Ordering::Relaxed),
-            },
-        );
+            ),
+            query_count: self.matcher.query_count(),
+            truncated: matches >= self.request.max_results,
+            message: emitted_message,
+            hits,
+            autosave_enabled: self.request.live_domain_autosave.is_some(),
+            saved_matches: self.saved_matches.load(Ordering::Relaxed),
+        };
+        let previous_checkpoint = self.last_checkpoint_ms.load(Ordering::Relaxed);
+        if !progress.hits.is_empty() || emitted_status != "running" {
+            self.last_checkpoint_ms
+                .store(elapsed_ms.max(1), Ordering::Relaxed);
+            let _ = persist_session_progress(&self.database, &progress);
+        } else if elapsed_ms.saturating_sub(previous_checkpoint) >= 5_000
+            && self
+                .last_checkpoint_ms
+                .compare_exchange(
+                    previous_checkpoint,
+                    elapsed_ms.max(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            let _ = persist_session_progress(&self.database, &progress);
+        }
+        let _ = self.app.emit(DIRECT_SEARCH_EVENT, progress);
     }
 }
 
@@ -727,6 +807,245 @@ fn active_elapsed_ms(wall_ms: u64, paused_total_ms: u64, current_pause_ms: u64) 
     wall_ms
         .saturating_sub(paused_total_ms)
         .saturating_sub(current_pause_ms)
+}
+
+fn sqlite_integer(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
+}
+
+fn scan_session_context(
+    request: &DirectSearchRequest,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    let fallback = request.live_domain_autosave.as_ref().map(|config| {
+        (
+            "domains".to_string(),
+            Some(config.source_id.clone()),
+            Some(config.source_name.clone()),
+        )
+    });
+    let (scope, source_id, source_name) = request
+        .session_context
+        .as_ref()
+        .map(|context| {
+            (
+                context.scope.trim().to_ascii_lowercase(),
+                context.source_id.clone(),
+                context.source_name.clone(),
+            )
+        })
+        .or(fallback)
+        .unwrap_or_else(|| ("search".to_string(), None, None));
+    if !matches!(scope.as_str(), "search" | "domains" | "identities") {
+        return Err("live search session scope is invalid".to_string());
+    }
+    if source_id
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty() || value.chars().count() > 128)
+        || source_name
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty() || value.chars().count() > 160)
+    {
+        return Err("live search source metadata is invalid".to_string());
+    }
+    Ok((scope, source_id, source_name))
+}
+
+fn create_scan_session(
+    database: &Arc<Mutex<Connection>>,
+    job_id: &str,
+    request: &DirectSearchRequest,
+    source_count: usize,
+    total_bytes: u64,
+    query_count: usize,
+) -> Result<(), String> {
+    let request_json = serde_json::to_string(request)
+        .map_err(|_| "live search checkpoint could not be created".to_string())?;
+    let (scope, source_id, source_name) = scan_session_context(request)?;
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    connection
+        .execute(
+            "INSERT INTO live_scan_sessions(
+               id, request_json, scope, source_id, source_name, status,
+               source_count, total_bytes, query_count, message
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7, ?8,
+                       'Scanning local sources')",
+            params![
+                job_id,
+                request_json,
+                scope,
+                source_id,
+                source_name,
+                source_count as i64,
+                sqlite_integer(total_bytes),
+                query_count as i64,
+            ],
+        )
+        .map_err(|_| "live search checkpoint could not be created".to_string())?;
+    connection
+        .execute(
+            "DELETE FROM live_scan_sessions
+             WHERE id IN (
+               SELECT id FROM live_scan_sessions
+               WHERE status IN ('completed', 'cancelled', 'failed')
+               ORDER BY updated_at DESC, id DESC
+               LIMIT -1 OFFSET 50
+             )",
+            [],
+        )
+        .map_err(|_| "old live search checkpoints could not be pruned".to_string())?;
+    Ok(())
+}
+
+fn persist_session_progress(
+    database: &Arc<Mutex<Connection>>,
+    progress: &DirectSearchProgress,
+) -> Result<(), String> {
+    let mut connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|_| "live search checkpoint could not be updated".to_string())?;
+    let finished = matches!(
+        progress.status.as_str(),
+        "completed" | "cancelled" | "failed"
+    );
+    transaction
+        .execute(
+            "UPDATE live_scan_sessions
+             SET status = ?2, current_source = ?3, source_count = ?4,
+                 files_scanned = ?5, total_bytes = ?6,
+                 source_bytes_scanned = ?7, content_bytes_scanned = ?8,
+                 matches = ?9, elapsed_ms = ?10, query_count = ?11,
+                 truncated = ?12, message = ?13,
+                 updated_at = CURRENT_TIMESTAMP,
+                 finished_at = CASE WHEN ?14 THEN CURRENT_TIMESTAMP ELSE NULL END
+             WHERE id = ?1",
+            params![
+                progress.job_id,
+                progress.status,
+                progress.current_source,
+                progress.source_count as i64,
+                progress.files_scanned as i64,
+                sqlite_integer(progress.total_bytes),
+                sqlite_integer(progress.source_bytes_scanned),
+                sqlite_integer(progress.content_bytes_scanned),
+                progress.matches as i64,
+                sqlite_integer(progress.elapsed_ms),
+                progress.query_count as i64,
+                progress.truncated,
+                progress.message,
+                finished,
+            ],
+        )
+        .map_err(|_| "live search checkpoint could not be updated".to_string())?;
+    for hit in &progress.hits {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO live_scan_hits(
+                   id, session_id, source_path, source_file, archive_entry,
+                   source_location, excerpt, match_reason, matched_query
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    hit.id,
+                    progress.job_id,
+                    hit.source_path,
+                    hit.source_file,
+                    hit.archive_entry,
+                    hit.source_location,
+                    hit.excerpt,
+                    hit.match_reason,
+                    hit.matched_query,
+                ],
+            )
+            .map_err(|_| "live search result checkpoint could not be updated".to_string())?;
+    }
+    transaction
+        .commit()
+        .map_err(|_| "live search checkpoint could not be committed".to_string())?;
+    Ok(())
+}
+
+fn persist_completed_candidate(
+    database: &Arc<Mutex<Connection>>,
+    job_id: &str,
+    candidate: &Candidate,
+) -> Result<(), String> {
+    let mut connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|_| "live search source checkpoint could not be updated".to_string())?;
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO live_scan_completed_sources(
+               session_id, source_path, source_size, source_modified_ns
+             ) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                job_id,
+                candidate.path.to_string_lossy(),
+                sqlite_integer(candidate.size),
+                sqlite_integer(candidate.modified_ns),
+            ],
+        )
+        .map_err(|_| "live search source checkpoint could not be updated".to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM live_scan_source_progress
+             WHERE session_id = ?1 AND source_path = ?2 AND source_size = ?3
+               AND source_modified_ns = ?4",
+            params![
+                job_id,
+                candidate.path.to_string_lossy(),
+                sqlite_integer(candidate.size),
+                sqlite_integer(candidate.modified_ns),
+            ],
+        )
+        .map_err(|_| "live search source checkpoint could not be finalized".to_string())?;
+    transaction
+        .commit()
+        .map_err(|_| "live search source checkpoint could not be committed".to_string())?;
+    Ok(())
+}
+
+fn persist_plain_checkpoint(
+    database: &Arc<Mutex<Connection>>,
+    job_id: &str,
+    candidate: &Candidate,
+    byte_offset: u64,
+    next_line: u64,
+) -> Result<(), String> {
+    let connection = database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    connection
+        .execute(
+            "INSERT INTO live_scan_source_progress(
+               session_id, source_path, source_size, source_modified_ns,
+               byte_offset, next_line
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(session_id, source_path, source_size, source_modified_ns)
+             DO UPDATE SET
+               byte_offset = MAX(byte_offset, excluded.byte_offset),
+               next_line = CASE
+                 WHEN excluded.byte_offset >= byte_offset THEN excluded.next_line
+                 ELSE next_line
+               END,
+               updated_at = CURRENT_TIMESTAMP",
+            params![
+                job_id,
+                candidate.path.to_string_lossy(),
+                sqlite_integer(candidate.size),
+                sqlite_integer(candidate.modified_ns),
+                sqlite_integer(byte_offset.min(candidate.size)),
+                sqlite_integer(next_line.max(1)),
+            ],
+        )
+        .map_err(|_| "plain source checkpoint could not be updated".to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -918,6 +1237,7 @@ pub async fn start_direct_search(
     state: State<'_, AppState>,
     mut request: DirectSearchRequest,
 ) -> Result<DirectSearchStart, String> {
+    ensure_live_scan_idle(&state)?;
     request.query = request.query.trim().to_string();
     if request.paths.is_empty() || request.paths.len() > MAX_INPUT_PATHS {
         return Err("choose between 1 and 64 local sources".to_string());
@@ -946,15 +1266,55 @@ pub async fn start_direct_search(
     });
     let source_count = candidates.len();
     let job_id = Uuid::new_v4().to_string();
-    let control = Arc::new(JobControl::default());
-    state
-        .scan_jobs
-        .lock()
-        .map_err(|_| "search controls are unavailable".to_string())?
-        .insert(job_id.clone(), Arc::clone(&control));
+    create_scan_session(
+        &state.database,
+        &job_id,
+        &request,
+        source_count,
+        total_bytes,
+        query_count,
+    )?;
+    launch_direct_scan(
+        app,
+        Arc::clone(&state.scan_jobs),
+        Arc::clone(&state.database),
+        request,
+        matcher,
+        candidates,
+        job_id,
+        source_count,
+        total_bytes,
+        ScanBaseline::default(),
+    )
+}
 
-    let jobs = Arc::clone(&state.scan_jobs);
-    let database = Arc::clone(&state.database);
+#[allow(clippy::too_many_arguments)]
+fn launch_direct_scan(
+    app: AppHandle,
+    jobs: Arc<Mutex<HashMap<String, Arc<JobControl>>>>,
+    database: Arc<Mutex<Connection>>,
+    request: DirectSearchRequest,
+    matcher: QueryMatcher,
+    candidates: Vec<Candidate>,
+    job_id: String,
+    source_count: usize,
+    total_bytes: u64,
+    baseline: ScanBaseline,
+) -> Result<DirectSearchStart, String> {
+    let query_count = matcher.query_count();
+    let control = Arc::new(JobControl::default());
+    let mut active_jobs = jobs
+        .lock()
+        .map_err(|_| "search controls are unavailable".to_string())?;
+    if !active_jobs.is_empty() {
+        return Err(
+            "another Live scan is active; finish or cancel it before starting a new one"
+                .to_string(),
+        );
+    }
+    active_jobs.insert(job_id.clone(), Arc::clone(&control));
+    drop(active_jobs);
+
     let worker_job_id = job_id.clone();
     thread::Builder::new()
         .name("aletheia-live-search".to_string())
@@ -968,12 +1328,14 @@ pub async fn start_direct_search(
                 source_count,
                 total_bytes,
                 started: Instant::now(),
-                files_scanned: AtomicUsize::new(0),
-                source_bytes_scanned: AtomicU64::new(0),
-                content_bytes_scanned: AtomicU64::new(0),
-                matches: AtomicUsize::new(0),
+                elapsed_offset_ms: baseline.elapsed_ms,
+                files_scanned: AtomicUsize::new(baseline.files_scanned),
+                source_bytes_scanned: AtomicU64::new(baseline.source_bytes_scanned),
+                content_bytes_scanned: AtomicU64::new(baseline.content_bytes_scanned),
+                matches: AtomicUsize::new(baseline.matches),
                 stop: AtomicBool::new(false),
                 last_progress_emit_ms: AtomicU64::new(0),
+                last_checkpoint_ms: AtomicU64::new(0),
                 pause_announced: AtomicBool::new(false),
                 pause_started_ms: AtomicU64::new(0),
                 paused_total_ms: AtomicU64::new(0),
@@ -981,6 +1343,8 @@ pub async fn start_direct_search(
                 database,
                 autosave_error: Mutex::new(None),
                 saved_matches: AtomicUsize::new(0),
+                seen_hit_ids: Mutex::new(baseline.seen_hit_ids),
+                resume_points: baseline.resume_points,
             });
             shared.emit("running", None, "Scanning local sources", Vec::new());
             let result = run_scan(candidates, Arc::clone(&shared));
@@ -1041,6 +1405,380 @@ pub fn resume_direct_search(job_id: String, state: State<'_, AppState>) -> Resul
     set_direct_search_paused(&job_id, false, &state)
 }
 
+#[derive(Debug)]
+struct StoredScanSession {
+    id: String,
+    request: DirectSearchRequest,
+    scope: String,
+    source_id: Option<String>,
+    source_name: Option<String>,
+    current_source: Option<String>,
+    source_count: usize,
+    files_scanned: usize,
+    total_bytes: u64,
+    source_bytes_scanned: u64,
+    content_bytes_scanned: u64,
+    elapsed_ms: u64,
+    query_count: usize,
+    truncated: bool,
+    message: String,
+    hits: Vec<DirectSearchHit>,
+}
+
+fn load_recoverable_session(
+    connection: &Connection,
+    requested_id: Option<&str>,
+) -> Result<Option<StoredScanSession>, String> {
+    let query = "SELECT id, request_json, scope, source_id, source_name, current_source,
+                source_count, files_scanned, total_bytes, source_bytes_scanned,
+                content_bytes_scanned, elapsed_ms, query_count, truncated, message
+         FROM live_scan_sessions
+         WHERE status = 'interrupted' AND (?1 = '' OR id = ?1)
+         ORDER BY updated_at DESC, id DESC LIMIT 1";
+    let values = connection
+        .query_row(query, [requested_id.unwrap_or("")], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, i64>(12)?,
+                row.get::<_, bool>(13)?,
+                row.get::<_, String>(14)?,
+            ))
+        })
+        .optional()
+        .map_err(|_| "live search checkpoint could not be loaded".to_string())?;
+    let Some((
+        id,
+        request_json,
+        scope,
+        source_id,
+        source_name,
+        current_source,
+        source_count,
+        files_scanned,
+        total_bytes,
+        source_bytes_scanned,
+        content_bytes_scanned,
+        elapsed_ms,
+        query_count,
+        truncated,
+        message,
+    )) = values
+    else {
+        return Ok(None);
+    };
+    let request = serde_json::from_str(&request_json)
+        .map_err(|_| "live search checkpoint request is invalid".to_string())?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, source_path, source_file, archive_entry, source_location,
+                    excerpt, match_reason, matched_query
+             FROM live_scan_hits WHERE session_id = ?1
+             ORDER BY created_at, id LIMIT ?2",
+        )
+        .map_err(|_| "live search checkpoint results are unavailable".to_string())?;
+    let hits = statement
+        .query_map(params![id, MAX_RESULTS as i64], |row| {
+            Ok(DirectSearchHit {
+                id: row.get(0)?,
+                source_path: row.get(1)?,
+                source_file: row.get(2)?,
+                archive_entry: row.get(3)?,
+                source_location: row.get(4)?,
+                excerpt: row.get(5)?,
+                match_reason: row.get(6)?,
+                matched_query: row.get(7)?,
+            })
+        })
+        .map_err(|_| "live search checkpoint results are unavailable".to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "live search checkpoint results are unavailable".to_string())?;
+    Ok(Some(StoredScanSession {
+        id,
+        request,
+        scope,
+        source_id,
+        source_name,
+        current_source,
+        source_count: source_count.max(0) as usize,
+        files_scanned: files_scanned.max(0) as usize,
+        total_bytes: total_bytes.max(0) as u64,
+        source_bytes_scanned: source_bytes_scanned.max(0) as u64,
+        content_bytes_scanned: content_bytes_scanned.max(0) as u64,
+        elapsed_ms: elapsed_ms.max(0) as u64,
+        query_count: query_count.max(0) as usize,
+        truncated,
+        message,
+        hits,
+    }))
+}
+
+#[tauri::command]
+pub async fn get_recoverable_direct_search(
+    state: State<'_, AppState>,
+) -> Result<Option<RecoverableDirectSearch>, String> {
+    let database = Arc::clone(&state.database);
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let Some(session) = load_recoverable_session(&connection, None)? else {
+            return Ok(None);
+        };
+        let matches = session.hits.len();
+        let bytes_per_second = session
+            .content_bytes_scanned
+            .saturating_mul(1_000)
+            .checked_div(session.elapsed_ms.max(1))
+            .unwrap_or(0);
+        Ok(Some(RecoverableDirectSearch {
+            progress: DirectSearchProgress {
+                job_id: session.id,
+                sequence: 0,
+                status: "paused".to_string(),
+                current_source: session.current_source,
+                source_count: session.source_count,
+                files_scanned: session.files_scanned,
+                total_bytes: session.total_bytes,
+                source_bytes_scanned: session.source_bytes_scanned,
+                content_bytes_scanned: session.content_bytes_scanned,
+                matches,
+                elapsed_ms: session.elapsed_ms,
+                bytes_per_second,
+                estimated_remaining_ms: estimate_remaining_ms(
+                    session.total_bytes,
+                    session.source_bytes_scanned,
+                    session.elapsed_ms,
+                ),
+                query_count: session.query_count,
+                truncated: session.truncated,
+                message: session.message,
+                hits: session.hits,
+                autosave_enabled: session.request.live_domain_autosave.is_some(),
+                saved_matches: matches,
+            },
+            scope: session.scope,
+            query: session.request.query,
+            source_id: session.source_id,
+            source_name: session.source_name,
+        }))
+    })
+    .await
+    .map_err(|_| "live search recovery task failed".to_string())?
+}
+
+#[tauri::command]
+pub async fn restart_direct_search_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<DirectSearchStart, String> {
+    ensure_live_scan_idle(&state)?;
+    let (mut session, completed, stored_resume_points) = {
+        let connection = state
+            .database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?;
+        let session = load_recoverable_session(&connection, Some(&job_id))?
+            .ok_or_else(|| "this interrupted live search is no longer recoverable".to_string())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT source_path, source_size, source_modified_ns
+                 FROM live_scan_completed_sources WHERE session_id = ?1",
+            )
+            .map_err(|_| "completed source checkpoints are unavailable".to_string())?;
+        let completed = statement
+            .query_map([&job_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|_| "completed source checkpoints are unavailable".to_string())?
+            .collect::<Result<HashSet<_>, _>>()
+            .map_err(|_| "completed source checkpoints are unavailable".to_string())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT source_path, source_size, source_modified_ns,
+                        byte_offset, next_line
+                 FROM live_scan_source_progress WHERE session_id = ?1",
+            )
+            .map_err(|_| "plain source checkpoints are unavailable".to_string())?;
+        let resume_points = statement
+            .query_map([&job_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    PlainResumePoint {
+                        source_size: row.get::<_, i64>(1)?.max(0) as u64,
+                        source_modified_ns: row.get::<_, i64>(2)?.max(0) as u64,
+                        byte_offset: row.get::<_, i64>(3)?.max(0) as u64,
+                        next_line: row.get::<_, i64>(4)?.max(1) as u64,
+                    },
+                ))
+            })
+            .map_err(|_| "plain source checkpoints are unavailable".to_string())?
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|_| "plain source checkpoints are unavailable".to_string())?;
+        (session, completed, resume_points)
+    };
+    session.request.max_results = session.request.max_results.clamp(1, MAX_RESULTS);
+    session.request.worker_limit = session.request.worker_limit.clamp(1, 8);
+    let matcher = if session.request.domain_match {
+        QueryMatcher::for_domain(
+            &session.request.query,
+            session.request.mode,
+            session.request.case_sensitive,
+        )?
+    } else {
+        QueryMatcher::new(
+            &session.request.query,
+            session.request.mode,
+            session.request.case_sensitive,
+        )?
+    };
+    let paths = session.request.paths.clone();
+    let include_archives = session.request.include_archives;
+    let all_candidates =
+        tauri::async_runtime::spawn_blocking(move || collect_candidates(&paths, include_archives))
+            .await
+            .map_err(|_| "live source recovery task failed".to_string())??;
+    if all_candidates.is_empty() {
+        return Err("the saved Live source no longer contains supported files".to_string());
+    }
+    let total_bytes = all_candidates.iter().fold(0_u64, |total, candidate| {
+        total.saturating_add(candidate.size)
+    });
+    let source_count = all_candidates.len();
+    let mut completed_bytes = 0_u64;
+    let mut completed_count = 0_usize;
+    let mut resumed_bytes = 0_u64;
+    let mut resume_points = HashMap::new();
+    let candidates = all_candidates
+        .into_iter()
+        .filter(|candidate| {
+            let key = (
+                candidate.path.to_string_lossy().into_owned(),
+                sqlite_integer(candidate.size),
+                sqlite_integer(candidate.modified_ns),
+            );
+            if completed.contains(&key) {
+                completed_count = completed_count.saturating_add(1);
+                completed_bytes = completed_bytes.saturating_add(candidate.size);
+                false
+            } else {
+                if let Some(point) = stored_resume_points.get(&key.0)
+                    && point.source_size == candidate.size
+                    && point.byte_offset < candidate.size
+                    && point.source_modified_ns == candidate.modified_ns
+                    && !matches!(extension(&candidate.path).as_str(), "zip" | "rar" | "gz")
+                {
+                    resumed_bytes = resumed_bytes.saturating_add(point.byte_offset);
+                    resume_points.insert(key.0, *point);
+                }
+                true
+            }
+        })
+        .collect::<Vec<_>>();
+    let seen_hit_ids = session
+        .hits
+        .iter()
+        .map(|hit| hit.id.clone())
+        .collect::<HashSet<_>>();
+    let baseline = ScanBaseline {
+        elapsed_ms: session.elapsed_ms,
+        files_scanned: completed_count,
+        source_bytes_scanned: completed_bytes.saturating_add(resumed_bytes),
+        content_bytes_scanned: completed_bytes.saturating_add(resumed_bytes),
+        matches: seen_hit_ids.len(),
+        seen_hit_ids,
+        resume_points,
+    };
+    {
+        let connection = state
+            .database
+            .lock()
+            .map_err(|_| "metadata database is unavailable".to_string())?;
+        connection
+            .execute(
+                "UPDATE live_scan_sessions
+                 SET status = 'running', current_source = NULL,
+                     source_count = ?2, files_scanned = ?3, total_bytes = ?4,
+                     source_bytes_scanned = ?5, content_bytes_scanned = ?5,
+                     matches = ?6, message = 'Resuming from a saved checkpoint',
+                     updated_at = CURRENT_TIMESTAMP, finished_at = NULL
+                 WHERE id = ?1",
+                params![
+                    job_id,
+                    source_count as i64,
+                    completed_count as i64,
+                    sqlite_integer(total_bytes),
+                    sqlite_integer(completed_bytes.saturating_add(resumed_bytes)),
+                    baseline.matches as i64,
+                ],
+            )
+            .map_err(|_| "live search checkpoint could not be resumed".to_string())?;
+    }
+    launch_direct_scan(
+        app,
+        Arc::clone(&state.scan_jobs),
+        Arc::clone(&state.database),
+        session.request,
+        matcher,
+        candidates,
+        job_id,
+        source_count,
+        total_bytes,
+        baseline,
+    )
+}
+
+fn ensure_live_scan_idle(state: &State<'_, AppState>) -> Result<(), String> {
+    let active = state
+        .scan_jobs
+        .lock()
+        .map_err(|_| "search controls are unavailable".to_string())?;
+    if active.is_empty() {
+        Ok(())
+    } else {
+        Err(
+            "another Live scan is active; finish or cancel it before starting a new one"
+                .to_string(),
+        )
+    }
+}
+
+#[tauri::command]
+pub fn discard_direct_search_session(
+    job_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = state
+        .database
+        .lock()
+        .map_err(|_| "metadata database is unavailable".to_string())?;
+    connection
+        .execute(
+            "UPDATE live_scan_sessions
+             SET status = 'cancelled', message = 'Interrupted scan dismissed',
+                 updated_at = CURRENT_TIMESTAMP, finished_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND status = 'interrupted'",
+            [&job_id],
+        )
+        .map_err(|_| "live search checkpoint could not be dismissed".to_string())?;
+    Ok(())
+}
+
 fn set_direct_search_paused(
     job_id: &str,
     paused: bool,
@@ -1099,11 +1837,21 @@ fn maybe_add_candidate(
         || extension == "gz"
         || (include_archives && matches!(extension.as_str(), "zip" | "rar"));
     if supported {
-        let size = path
+        let metadata = path
             .metadata()
-            .map_err(|_| "source metadata is unavailable".to_string())?
-            .len();
-        candidates.push(Candidate { path, size });
+            .map_err(|_| "source metadata is unavailable".to_string())?;
+        let size = metadata.len();
+        let modified_ns = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map(|value| value.as_nanos().min(u64::MAX as u128) as u64)
+            .unwrap_or(0);
+        candidates.push(Candidate {
+            path,
+            size,
+            modified_ns,
+        });
     }
     Ok(())
 }
@@ -1130,7 +1878,11 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
                         Err(_) => None,
                     };
                     let Some(candidate) = candidate else { break };
-                    let source_progress = Arc::new(CandidateSourceProgress::new(candidate.size));
+                    let resume_point = shared.resume_point(&candidate);
+                    let source_progress = Arc::new(CandidateSourceProgress::new_at(
+                        candidate.size,
+                        resume_point.map_or(0, |point| point.byte_offset),
+                    ));
                     let source_name = file_name(&candidate.path);
                     shared.emit(
                         "running",
@@ -1141,6 +1893,11 @@ fn run_scan(candidates: Vec<Candidate>, shared: Arc<SharedScan>) -> Result<(), S
                     let result = scan_candidate(&candidate, &shared, &source_progress);
                     if result.is_ok() && !shared.should_stop() {
                         source_progress.complete(&shared);
+                        let _ = persist_completed_candidate(
+                            &shared.database,
+                            &shared.job_id,
+                            &candidate,
+                        );
                     }
                     shared.files_scanned.fetch_add(1, Ordering::Relaxed);
                     shared.emit(
@@ -1185,23 +1942,38 @@ fn scan_plain(
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
 ) -> Result<(), String> {
-    let file = open_source_file(&candidate.path)
+    let mut file = open_source_file(&candidate.path)
         .map_err(|_| "a source could not be opened read-only".to_string())?;
+    let resume_point = shared.resume_point(candidate);
+    if let Some(point) = resume_point {
+        file.seek(SeekFrom::Start(point.byte_offset))
+            .map_err(|_| "a plain source checkpoint could not be resumed".to_string())?;
+    }
     let workers = if candidate.size >= PARALLEL_PLAIN_THRESHOLD {
         shared.request.worker_limit.clamp(1, 8)
     } else {
         1
     };
     if workers == 1 {
-        scan_plain_sequential(file, candidate, shared, source_progress)
+        scan_plain_sequential(file, candidate, shared, source_progress, resume_point)
     } else {
-        scan_plain_parallel(file, candidate, shared, source_progress, workers)
+        scan_plain_parallel(
+            file,
+            candidate,
+            shared,
+            source_progress,
+            resume_point,
+            workers,
+        )
     }
 }
 
 struct PlainBlock {
     bytes: Vec<u8>,
     start_line: u64,
+    sequence: u64,
+    end_offset: u64,
+    next_line: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1212,16 +1984,94 @@ struct PlainMatch {
     query_index: usize,
 }
 
+struct PlainCheckpointTracker {
+    next_sequence: u64,
+    completed: BTreeMap<u64, (u64, u64)>,
+    latest_offset: u64,
+    latest_line: u64,
+    persisted_offset: u64,
+}
+
+impl PlainCheckpointTracker {
+    fn new(offset: u64, line: u64) -> Self {
+        Self {
+            next_sequence: 1,
+            completed: BTreeMap::new(),
+            latest_offset: offset,
+            latest_line: line.max(1),
+            persisted_offset: offset,
+        }
+    }
+}
+
+fn complete_plain_checkpoint(
+    tracker: &Arc<Mutex<PlainCheckpointTracker>>,
+    sequence: u64,
+    end_offset: u64,
+    next_line: u64,
+    force: bool,
+) -> Option<(u64, u64)> {
+    let mut tracker = tracker.lock().ok()?;
+    if !force {
+        tracker.completed.insert(sequence, (end_offset, next_line));
+        loop {
+            let next_sequence = tracker.next_sequence;
+            let Some((offset, line)) = tracker.completed.remove(&next_sequence) else {
+                break;
+            };
+            tracker.latest_offset = offset;
+            tracker.latest_line = line;
+            tracker.next_sequence = tracker.next_sequence.saturating_add(1);
+        }
+    }
+    if tracker.latest_offset > tracker.persisted_offset
+        && (force
+            || tracker
+                .latest_offset
+                .saturating_sub(tracker.persisted_offset)
+                >= PLAIN_CHECKPOINT_BYTES)
+    {
+        tracker.persisted_offset = tracker.latest_offset;
+        Some((tracker.latest_offset, tracker.latest_line))
+    } else {
+        None
+    }
+}
+
 fn scan_plain_sequential(
     file: File,
     candidate: &Candidate,
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
+    resume_point: Option<PlainResumePoint>,
 ) -> Result<(), String> {
-    read_plain_blocks(file, shared, source_progress, |block| {
+    let mut last_checkpoint = resume_point.map_or(0, |point| point.byte_offset);
+    let mut latest = resume_point.map_or((0, 1), |point| (point.byte_offset, point.next_line));
+    let result = read_plain_blocks(file, shared, source_progress, resume_point, |block| {
         scan_plain_block(&block, candidate, shared, source_progress);
+        latest = (block.end_offset, block.next_line);
+        if block.end_offset.saturating_sub(last_checkpoint) >= PLAIN_CHECKPOINT_BYTES {
+            persist_plain_checkpoint(
+                &shared.database,
+                &shared.job_id,
+                candidate,
+                block.end_offset,
+                block.next_line,
+            )?;
+            last_checkpoint = block.end_offset;
+        }
         Ok(())
-    })
+    });
+    if latest.0 > last_checkpoint {
+        let _ = persist_plain_checkpoint(
+            &shared.database,
+            &shared.job_id,
+            candidate,
+            latest.0,
+            latest.1,
+        );
+    }
+    result
 }
 
 fn scan_plain_parallel(
@@ -1229,16 +2079,22 @@ fn scan_plain_parallel(
     candidate: &Candidate,
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
+    resume_point: Option<PlainResumePoint>,
     workers: usize,
 ) -> Result<(), String> {
     let (sender, receiver) = mpsc::sync_channel::<PlainBlock>(workers.saturating_mul(2));
     let receiver = Arc::new(Mutex::new(receiver));
+    let checkpoints = Arc::new(Mutex::new(PlainCheckpointTracker::new(
+        resume_point.map_or(0, |point| point.byte_offset),
+        resume_point.map_or(1, |point| point.next_line),
+    )));
     let mut read_result = Ok(());
     thread::scope(|scope| {
         for _ in 0..workers {
             let receiver = Arc::clone(&receiver);
             let shared = Arc::clone(shared);
             let source_progress = Arc::clone(source_progress);
+            let checkpoints = Arc::clone(&checkpoints);
             scope.spawn(move || {
                 loop {
                     if !shared.wait_until_running() {
@@ -1250,16 +2106,34 @@ fn scan_plain_parallel(
                     };
                     let Some(block) = block else { break };
                     scan_plain_block(&block, candidate, &shared, &source_progress);
+                    if let Some((offset, line)) = complete_plain_checkpoint(
+                        &checkpoints,
+                        block.sequence,
+                        block.end_offset,
+                        block.next_line,
+                        false,
+                    ) {
+                        let _ = persist_plain_checkpoint(
+                            &shared.database,
+                            &shared.job_id,
+                            candidate,
+                            offset,
+                            line,
+                        );
+                    }
                 }
             });
         }
-        read_result = read_plain_blocks(file, shared, source_progress, |block| {
+        read_result = read_plain_blocks(file, shared, source_progress, resume_point, |block| {
             sender
                 .send(block)
                 .map_err(|_| "live search workers stopped".to_string())
         });
         drop(sender);
     });
+    if let Some((offset, line)) = complete_plain_checkpoint(&checkpoints, 0, 0, 1, true) {
+        let _ = persist_plain_checkpoint(&shared.database, &shared.job_id, candidate, offset, line);
+    }
     if shared.should_stop() {
         Ok(())
     } else {
@@ -1271,23 +2145,53 @@ fn read_plain_blocks<F>(
     file: File,
     shared: &Arc<SharedScan>,
     source_progress: &Arc<CandidateSourceProgress>,
+    resume_point: Option<PlainResumePoint>,
     consume: F,
 ) -> Result<(), String>
 where
     F: FnMut(PlainBlock) -> Result<(), String>,
 {
-    read_plain_blocks_from(
+    read_plain_blocks_from_at(
         file,
         PLAIN_CHUNK_BYTES,
+        resume_point.map_or(0, |point| point.byte_offset),
+        resume_point.map_or(1, |point| point.next_line),
         || shared.wait_until_running(),
         |bytes| account_plain_bytes(bytes, shared, source_progress),
         consume,
     )
 }
 
+#[cfg(test)]
 fn read_plain_blocks_from<R, C, A, F>(
+    reader: R,
+    chunk_bytes: usize,
+    should_continue: C,
+    account_discarded: A,
+    consume: F,
+) -> Result<(), String>
+where
+    R: Read,
+    C: FnMut() -> bool,
+    A: FnMut(u64),
+    F: FnMut(PlainBlock) -> Result<(), String>,
+{
+    read_plain_blocks_from_at(
+        reader,
+        chunk_bytes,
+        0,
+        1,
+        should_continue,
+        account_discarded,
+        consume,
+    )
+}
+
+fn read_plain_blocks_from_at<R, C, A, F>(
     mut reader: R,
     chunk_bytes: usize,
+    starting_offset: u64,
+    starting_line: u64,
     mut should_continue: C,
     mut account_discarded: A,
     mut consume: F,
@@ -1301,7 +2205,9 @@ where
     let chunk_bytes = chunk_bytes.max(1);
     let mut read_buffer = vec![0_u8; chunk_bytes];
     let mut pending = Vec::with_capacity(chunk_bytes.saturating_add(MAX_LINE_BYTES));
-    let mut start_line = 1_u64;
+    let mut start_line = starting_line.max(1);
+    let mut consumed_offset = starting_offset;
+    let mut sequence = 0_u64;
     let mut discarding_long_line = false;
 
     loop {
@@ -1318,11 +2224,13 @@ where
         if discarding_long_line {
             if let Some(newline) = memchr::memchr(b'\n', incoming) {
                 account_discarded((newline + 1) as u64);
+                consumed_offset = consumed_offset.saturating_add((newline + 1) as u64);
                 start_line = start_line.saturating_add(1);
                 incoming = &incoming[newline + 1..];
                 discarding_long_line = false;
             } else {
                 account_discarded(incoming.len() as u64);
+                consumed_offset = consumed_offset.saturating_add(incoming.len() as u64);
                 continue;
             }
         }
@@ -1332,22 +2240,33 @@ where
             let tail = pending.split_off(last_newline + 1);
             let complete = std::mem::replace(&mut pending, tail);
             let line_count = memchr::memchr_iter(b'\n', &complete).count() as u64;
+            consumed_offset = consumed_offset.saturating_add(complete.len() as u64);
+            sequence = sequence.saturating_add(1);
             consume(PlainBlock {
                 bytes: complete,
                 start_line,
+                sequence,
+                end_offset: consumed_offset,
+                next_line: start_line.saturating_add(line_count),
             })?;
             start_line = start_line.saturating_add(line_count);
         } else if pending.len() > MAX_LINE_BYTES {
             account_discarded(pending.len() as u64);
+            consumed_offset = consumed_offset.saturating_add(pending.len() as u64);
             pending.clear();
             discarding_long_line = true;
         }
     }
 
     if should_continue() && !discarding_long_line && !pending.is_empty() {
+        consumed_offset = consumed_offset.saturating_add(pending.len() as u64);
+        sequence = sequence.saturating_add(1);
         consume(PlainBlock {
             bytes: pending,
             start_line,
+            sequence,
+            end_offset: consumed_offset,
+            next_line: start_line.saturating_add(1),
         })?;
     }
     Ok(())
@@ -1835,15 +2754,36 @@ fn make_hit(
     query_index: usize,
     shared: &Arc<SharedScan>,
 ) -> Option<DirectSearchHit> {
+    let source_location = format!("line {line_number}");
+    let mut fingerprint = blake3::Hasher::new();
+    for part in [
+        shared.job_id.as_str(),
+        source_path,
+        archive_entry.unwrap_or(""),
+        source_location.as_str(),
+        shared.matcher.query(query_index),
+    ] {
+        fingerprint.update(part.as_bytes());
+        fingerprint.update(&[0x1f]);
+    }
+    let id = fingerprint.finalize().to_hex().to_string();
+    let inserted = shared
+        .seen_hit_ids
+        .lock()
+        .map(|mut seen| seen.insert(id.clone()))
+        .unwrap_or(false);
+    if !inserted {
+        return None;
+    }
     if !shared.reserve_hit() {
         return None;
     }
     Some(DirectSearchHit {
-        id: Uuid::new_v4().to_string(),
+        id,
         source_path: source_path.to_string(),
         source_file: source_file.to_string(),
         archive_entry: archive_entry.map(ToString::to_string),
-        source_location: format!("line {line_number}"),
+        source_location,
         excerpt: display_excerpt(
             line,
             shared.matcher.query(query_index),
@@ -2120,12 +3060,145 @@ mod tests {
     use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     use super::{
-        ArchiveReader, Candidate, CandidateSourceProgress, MAX_LINE_BYTES, MAX_QUERY_COUNT,
-        QueryMatcher, active_elapsed_ms, build_preflight, display_excerpt, estimate_remaining_ms,
+        ArchiveReader, Candidate, CandidateSourceProgress, DirectSearchHit, DirectSearchProgress,
+        DirectSearchRequest, DirectSearchSessionContext, MAX_LINE_BYTES, MAX_QUERY_COUNT,
+        PlainCheckpointTracker, QueryMatcher, active_elapsed_ms, build_preflight,
+        complete_plain_checkpoint, create_scan_session, display_excerpt, estimate_remaining_ms,
         extension, field_tokens, find_plain_matches, is_text_extension, line_matches,
-        parse_queries, read_plain_blocks_from,
+        load_recoverable_session, parse_queries, persist_completed_candidate,
+        persist_plain_checkpoint, persist_session_progress, read_plain_blocks_from,
+        read_plain_blocks_from_at,
     };
-    use crate::models::SearchMode;
+    use crate::{models::SearchMode, storage::open_database};
+
+    #[test]
+    fn live_scan_checkpoint_preserves_partial_hits_and_completed_sources() {
+        let directory = tempdir().expect("temporary directory");
+        let database = Arc::new(Mutex::new(
+            open_database(directory.path()).expect("database"),
+        ));
+        let request = DirectSearchRequest {
+            paths: vec!["C:\\Synthetic\\records".to_string()],
+            query: "synthetic@example.test".to_string(),
+            mode: SearchMode::Contains,
+            domain_match: false,
+            case_sensitive: false,
+            include_archives: true,
+            max_results: 100,
+            worker_limit: 2,
+            session_context: Some(DirectSearchSessionContext {
+                scope: "search".to_string(),
+                source_id: Some("source-synthetic".to_string()),
+                source_name: Some("Synthetic source".to_string()),
+            }),
+            live_domain_autosave: None,
+        };
+        create_scan_session(&database, "scan-synthetic", &request, 2, 200, 1).expect("session");
+        let hit = DirectSearchHit {
+            id: "hit-synthetic".to_string(),
+            source_path: "C:\\Synthetic\\records\\one.txt".to_string(),
+            source_file: "one.txt".to_string(),
+            archive_entry: None,
+            source_location: "line 1".to_string(),
+            excerpt: "synthetic@example.test".to_string(),
+            match_reason: "Line contains query".to_string(),
+            matched_query: "synthetic@example.test".to_string(),
+        };
+        persist_session_progress(
+            &database,
+            &DirectSearchProgress {
+                job_id: "scan-synthetic".to_string(),
+                sequence: 1,
+                status: "running".to_string(),
+                current_source: Some("one.txt".to_string()),
+                source_count: 2,
+                files_scanned: 1,
+                total_bytes: 200,
+                source_bytes_scanned: 100,
+                content_bytes_scanned: 100,
+                matches: 1,
+                elapsed_ms: 50,
+                bytes_per_second: 2_000,
+                estimated_remaining_ms: Some(50),
+                query_count: 1,
+                truncated: false,
+                message: "Scanning local sources".to_string(),
+                hits: vec![hit],
+                autosave_enabled: false,
+                saved_matches: 0,
+            },
+        )
+        .expect("progress");
+        let candidate = Candidate {
+            path: "C:\\Synthetic\\records\\one.txt".into(),
+            size: 100,
+            modified_ns: 1,
+        };
+        persist_plain_checkpoint(&database, "scan-synthetic", &candidate, 80, 12)
+            .expect("plain checkpoint");
+        persist_completed_candidate(&database, "scan-synthetic", &candidate)
+            .expect("completed source");
+        {
+            let connection = database.lock().expect("database lock");
+            connection
+                .execute(
+                    "UPDATE live_scan_sessions SET status = 'interrupted'
+                     WHERE id = 'scan-synthetic'",
+                    [],
+                )
+                .expect("interrupt");
+            let recovered = load_recoverable_session(&connection, Some("scan-synthetic"))
+                .expect("recovery")
+                .expect("session exists");
+            assert_eq!(recovered.files_scanned, 1);
+            assert_eq!(recovered.hits.len(), 1);
+            assert_eq!(recovered.hits[0].id, "hit-synthetic");
+            let partial_count: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM live_scan_source_progress
+                     WHERE session_id = 'scan-synthetic'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("partial checkpoint count");
+            assert_eq!(partial_count, 0);
+        }
+    }
+
+    #[test]
+    fn plain_resume_offsets_and_parallel_checkpoints_advance_in_order() {
+        let mut blocks = Vec::new();
+        read_plain_blocks_from_at(
+            Cursor::new(b"a\nb\nc"),
+            2,
+            5,
+            10,
+            || true,
+            |_| {},
+            |block| {
+                blocks.push((
+                    block.sequence,
+                    block.start_line,
+                    block.end_offset,
+                    block.next_line,
+                ));
+                Ok(())
+            },
+        )
+        .expect("resumed blocks");
+        assert_eq!(
+            blocks,
+            vec![(1, 10, 7, 11), (2, 11, 9, 12), (3, 12, 10, 13)]
+        );
+
+        let tracker = Arc::new(Mutex::new(PlainCheckpointTracker::new(5, 10)));
+        assert_eq!(complete_plain_checkpoint(&tracker, 2, 9, 12, false), None);
+        assert_eq!(complete_plain_checkpoint(&tracker, 1, 7, 11, false), None);
+        assert_eq!(
+            complete_plain_checkpoint(&tracker, 0, 0, 1, true),
+            Some((9, 12))
+        );
+    }
 
     #[test]
     fn compressed_progress_advances_before_candidate_completion() {
@@ -2360,7 +3433,15 @@ mod tests {
         let path = directory.path().join("synthetic.txt");
         std::fs::write(&path, b"synthetic@example.test\n".repeat(4_096)).expect("synthetic source");
         let size = path.metadata().expect("metadata").len();
-        let result = build_preflight(&[Candidate { path, size }], None).expect("preflight");
+        let result = build_preflight(
+            &[Candidate {
+                path,
+                size,
+                modified_ns: 1,
+            }],
+            None,
+        )
+        .expect("preflight");
 
         assert_eq!(result.source_count, 1);
         assert_eq!(result.total_bytes, size);

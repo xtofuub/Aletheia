@@ -29,6 +29,7 @@ const MIGRATION_V8: &str = include_str!("../migrations/0008_live_sources.sql");
 const MIGRATION_V9: &str = include_str!("../migrations/0009_live_domain_evidence.sql");
 const MIGRATION_V10: &str = include_str!("../migrations/0010_domain_query_indexes.sql");
 const MIGRATION_V11: &str = include_str!("../migrations/0011_overview_metrics.sql");
+const MIGRATION_V12: &str = include_str!("../migrations/0012_live_scan_checkpoints.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -103,6 +104,7 @@ impl AppState {
             read_locator(&app_data_dir)?.unwrap_or_else(|| app_data_dir.join("workspace"));
         let database = open_database(&storage_root)?;
         recover_interrupted_imports(&database)?;
+        recover_interrupted_live_scans(&database)?;
 
         Ok(Self {
             database: Arc::new(Mutex::new(database)),
@@ -152,6 +154,7 @@ impl AppState {
         let normalized = normalize_path(root)?;
         let next_database = open_database(&normalized)?;
         recover_interrupted_imports(&next_database)?;
+        recover_interrupted_live_scans(&next_database)?;
 
         write_locator(&self.app_data_dir, &normalized)?;
 
@@ -327,7 +330,28 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 12 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V12)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (12)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
+    Ok(())
+}
+
+fn recover_interrupted_live_scans(connection: &Connection) -> Result<(), StorageError> {
+    connection.execute(
+        "UPDATE live_scan_sessions
+         SET status = 'interrupted',
+             message = 'Scan interrupted; continue from the latest safe checkpoint',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE status IN ('running', 'paused', 'cancelling')",
+        [],
+    )?;
     Ok(())
 }
 
@@ -425,7 +449,8 @@ mod tests {
 
     use super::{
         MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
-        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, open_database, recover_interrupted_imports,
+        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, MIGRATION_V12, open_database,
+        recover_interrupted_imports, recover_interrupted_live_scans,
     };
 
     #[test]
@@ -451,16 +476,21 @@ mod tests {
                      'live_sources',
                      'live_source_paths',
                      'live_domain_evidence',
-                     'overview_metrics'
+                     'overview_metrics',
+                     'live_scan_sessions',
+                     'live_scan_completed_sources',
+                     'live_scan_source_progress',
+                     'live_scan_hits'
                    )",
                 [],
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 14);
+        assert_eq!(table_count, 18);
 
         assert!(!MIGRATION_V8.is_empty());
         assert!(!MIGRATION_V9.is_empty());
+        assert!(!MIGRATION_V12.is_empty());
 
         let theme: String = connection
             .query_row(
@@ -470,6 +500,35 @@ mod tests {
             )
             .expect("theme setting");
         assert_eq!(theme, "\"dark\"");
+    }
+
+    #[test]
+    fn startup_recovery_preserves_live_scan_checkpoint() {
+        let directory = tempdir().expect("temporary directory");
+        let connection = open_database(directory.path()).expect("database opens");
+        connection
+            .execute(
+                "INSERT INTO live_scan_sessions(
+                   id, request_json, scope, status, source_count, files_scanned,
+                   total_bytes, source_bytes_scanned, matches, query_count, message
+                 ) VALUES (
+                   'scan-recovery', '{}', 'search', 'running', 2, 1,
+                   200, 100, 4, 1, 'Scanning local sources'
+                 )",
+                [],
+            )
+            .expect("orphaned live scan");
+
+        recover_interrupted_live_scans(&connection).expect("recovery");
+        let recovered: (String, i64, i64) = connection
+            .query_row(
+                "SELECT status, files_scanned, matches
+                 FROM live_scan_sessions WHERE id = 'scan-recovery'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("live scan");
+        assert_eq!(recovered, ("interrupted".to_string(), 1, 4));
     }
 
     #[test]
@@ -600,7 +659,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("domain query indexes");
-        assert_eq!(version, 11);
+        assert_eq!(version, 12);
         assert_eq!(live_table_count, 3);
         assert_eq!(domain_query_index_count, 2);
     }

@@ -194,7 +194,10 @@ pub fn cleanup_generated(
     }
     if request.search_history || request.all_generated {
         transaction
-            .execute("DELETE FROM search_history", [])
+            .execute_batch(
+                "DELETE FROM search_history;
+                 DELETE FROM live_scan_sessions;",
+            )
             .map_err(sanitized)?;
     }
     if request.all_generated {
