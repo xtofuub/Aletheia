@@ -260,6 +260,11 @@ export interface DirectSearchRequest {
   includeArchives: boolean;
   maxResults: number;
   workerLimit: number;
+  sessionContext?: {
+    scope: "domains" | "identities" | "search";
+    sourceId?: string;
+    sourceName?: string;
+  };
   liveDomainAutosave?: {
     domain: string;
     sourceId: string;
@@ -327,6 +332,14 @@ export interface DirectSearchProgress {
   hits: DirectSearchHit[];
   autosaveEnabled?: boolean;
   savedMatches?: number;
+}
+
+export interface RecoverableDirectSearch {
+  progress: DirectSearchProgress;
+  scope: "domains" | "identities" | "search";
+  query: string;
+  sourceId: string | null;
+  sourceName: string | null;
 }
 
 export interface DomainSummary {
@@ -1384,6 +1397,32 @@ export async function resumeDirectSearch(jobId: string): Promise<void> {
   };
   emitBrowserDirectSearch(job.progress);
   scheduleBrowserDirectSearchCompletion(jobId, 400);
+}
+
+export async function getRecoverableDirectSearch(): Promise<RecoverableDirectSearch | null> {
+  if (isTauriRuntime()) {
+    return invoke<RecoverableDirectSearch | null>(
+      "get_recoverable_direct_search",
+    );
+  }
+  return null;
+}
+
+export async function restartDirectSearchSession(
+  jobId: string,
+): Promise<DirectSearchStart> {
+  if (isTauriRuntime()) {
+    return invoke<DirectSearchStart>("restart_direct_search_session", {
+      jobId,
+    });
+  }
+  throw new Error("No interrupted Live scan is available in browser preview");
+}
+
+export async function discardDirectSearchSession(jobId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke("discard_direct_search_session", { jobId });
+  }
 }
 
 const browserLiveDomainEvidenceKey = "aletheia.browser.live-domain-evidence";

@@ -142,7 +142,9 @@ Status key: `[ ]` pending, `[x]` complete.
 
 - [x] Scan up to 512 lookup values in one physical read pass
 - [x] Add live-scan pause, resume, ETA, decoded throughput, and physical-byte progress
-- [x] Default direct scans to one worker for physical HDD collections
+- [x] Default physical source reading to one sequential reader for HDD collections
+- [x] Separate one sequential source reader from bounded CPU match workers
+- [x] Persist partial Live results and newline-safe plain-file resume checkpoints
 - [x] Split persistent imports into Fast and Relationship index profiles
 - [x] Add generated 1 GiB direct-scan and 50-million-record-capable index soaks
 - [x] Complete a 4.2-million-record Fast index reliability soak

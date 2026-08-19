@@ -300,6 +300,11 @@ export function SearchPage({
         includeArchives: includeArchivesOverride ?? source.includeArchives,
         maxResults,
         workerLimit,
+        sessionContext: {
+          scope: "search",
+          sourceId: source.id,
+          sourceName: source.name,
+        },
       }),
     onSuccess: (start, variables) => {
       setDirectError("");
@@ -353,6 +358,24 @@ export function SearchPage({
     queries.length > 1 ? "Batch" : detectQueryKind(queries[0] ?? "");
   const directProgress =
     directSession?.scope === "search" ? globalDirectProgress : null;
+
+  useEffect(() => {
+    if (
+      directSession?.scope !== "search" ||
+      !directSession.sourceId ||
+      directSourceId === directSession.sourceId
+    ) {
+      return;
+    }
+    const sourceId = directSession.sourceId;
+    const timer = window.setTimeout(() => {
+      setDirectSourceId(sourceId);
+      setSourceKey(liveSourceKey(sourceId));
+      if (directSession.query) setQuery(directSession.query);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [directSession, directSourceId]);
+
   const currentLiveProgress =
     selectedLiveSource?.id === directSourceId ? directProgress : null;
   const directPercent = currentLiveProgress?.totalBytes

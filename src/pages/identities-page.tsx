@@ -283,6 +283,11 @@ export function IdentitiesPage() {
         includeArchives: source.includeArchives,
         maxResults: 2_000,
         workerLimit: settings.data?.workerLimit ?? 2,
+        sessionContext: {
+          scope: "identities",
+          sourceId: source.id,
+          sourceName: source.name,
+        },
       }),
     onSuccess: (start, source) => {
       liveSearchSource.current = source;
@@ -297,6 +302,16 @@ export function IdentitiesPage() {
   });
   const liveProgress =
     directSession?.scope === "identities" ? globalLiveProgress : null;
+  useEffect(() => {
+    if (directSession?.scope !== "identities") return;
+    const timer = window.setTimeout(() => {
+      if (directSession.sourceId) {
+        setSelectedLiveSourceId(directSession.sourceId);
+      }
+      if (directSession.query) setLiveQuery(directSession.query);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [directSession]);
   const clearOwnLiveSearch = () => {
     if (directSession?.scope === "identities") clearLiveSearch();
   };

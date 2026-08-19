@@ -11,8 +11,11 @@ import {
 
 import {
   cancelDirectSearch,
+  discardDirectSearchSession,
+  getRecoverableDirectSearch,
   listenDirectSearchProgress,
   pauseDirectSearch,
+  restartDirectSearchSession,
   resumeDirectSearch,
   type DirectSearchProgress,
   type DirectSearchStart,
@@ -103,6 +106,7 @@ function useDirectSearchProgressState() {
   const [session, setSession] = useState<DirectSearchSession | null>(null);
   const latestProgress = useRef<DirectSearchProgress | null>(null);
   const activeJobId = useRef<string | null>(null);
+  const recoveredJobId = useRef<string | null>(null);
   const pendingProgress = useRef<DirectSearchProgress | null>(null);
   const animationFrame = useRef<number | null>(null);
   const [pendingControl, setPendingControl] = useState<PendingControl | null>(
@@ -134,6 +138,32 @@ function useDirectSearchProgressState() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void getRecoverableDirectSearch()
+      .then((recovery) => {
+        if (cancelled || !recovery || activeJobId.current) return;
+        const recoveredSession: DirectSearchSession = {
+          handled: false,
+          jobId: recovery.progress.jobId,
+          query: recovery.query,
+          scope: recovery.scope,
+          ...(recovery.sourceId ? { sourceId: recovery.sourceId } : {}),
+          ...(recovery.sourceName ? { sourceName: recovery.sourceName } : {}),
+        };
+        activeJobId.current = recovery.progress.jobId;
+        recoveredJobId.current = recovery.progress.jobId;
+        latestProgress.current = recovery.progress;
+        pendingProgress.current = recovery.progress;
+        setProgress(recovery.progress);
+        setSession(recoveredSession);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const begin = useCallback(
     (start: DirectSearchStart, metadata?: DirectSearchSessionMeta) => {
       activeJobId.current = start.jobId;
@@ -159,9 +189,10 @@ function useDirectSearchProgressState() {
       latestProgress.current = merged;
       pendingProgress.current = merged;
       setProgress(merged);
-      setSession(
-        metadata ? { ...metadata, handled: false, jobId: start.jobId } : null,
-      );
+      const nextSession = metadata
+        ? { ...metadata, handled: false, jobId: start.jobId }
+        : null;
+      setSession(nextSession);
       setPendingControl(null);
       setControlError("");
     },
@@ -170,6 +201,7 @@ function useDirectSearchProgressState() {
 
   const clear = useCallback(() => {
     activeJobId.current = null;
+    recoveredJobId.current = null;
     latestProgress.current = null;
     pendingProgress.current = null;
     setProgress(null);
@@ -189,7 +221,38 @@ function useDirectSearchProgressState() {
       setControlError("");
       setPendingControl({ action, jobId });
       try {
-        if (action === "pause") await pauseDirectSearch(jobId);
+        if (recoveredJobId.current === jobId) {
+          if (action === "resume") {
+            const start = await restartDirectSearchSession(jobId);
+            recoveredJobId.current = null;
+            const current = latestProgress.current;
+            const resumed = current
+              ? {
+                  ...current,
+                  status: "running" as const,
+                  message: "Resuming from a saved checkpoint",
+                }
+              : null;
+            latestProgress.current = resumed;
+            pendingProgress.current = resumed;
+            setProgress(resumed);
+            activeJobId.current = start.jobId;
+          } else if (action === "cancel") {
+            await discardDirectSearchSession(jobId);
+            recoveredJobId.current = null;
+            const current = latestProgress.current;
+            const discarded = current
+              ? {
+                  ...current,
+                  status: "cancelled" as const,
+                  message: "Interrupted scan dismissed",
+                }
+              : null;
+            latestProgress.current = discarded;
+            pendingProgress.current = discarded;
+            setProgress(discarded);
+          }
+        } else if (action === "pause") await pauseDirectSearch(jobId);
         else if (action === "resume") await resumeDirectSearch(jobId);
         else await cancelDirectSearch(jobId);
       } catch (error) {

@@ -80,6 +80,11 @@ export function LiveSearchPreflight({
           This range assumes every byte must be read. A result cap can finish
           sooner. ZIP, RAR, and GZIP timing varies with compression ratio.
         </p>
+        <p>
+          Results and safe byte checkpoints stay on this device. After an
+          interruption, Continue skips completed files and already scanned
+          plain-text blocks.
+        </p>
         <div className="flex flex-wrap gap-2">
           <Badge variant="outline">
             {formatBytes(result.totalBytes)} source

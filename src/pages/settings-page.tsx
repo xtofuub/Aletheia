@@ -331,8 +331,9 @@ export function SettingsPage() {
                 <FieldContent>
                   <FieldTitle>Worker limit</FieldTitle>
                   <FieldDescription>
-                    Tantivy writer threads. Start with 1-2 on an HDD; extra
-                    workers help only when storage can keep up.
+                    CPU workers for indexing and Live matching. Live source
+                    reading stays sequential on HDDs, so extra workers help only
+                    when matching is the bottleneck.
                   </FieldDescription>
                 </FieldContent>
                 <Select

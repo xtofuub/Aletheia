@@ -313,6 +313,11 @@ export function DomainsPage() {
         includeArchives: source.includeArchives,
         maxResults: 5_000,
         workerLimit: settings.data?.workerLimit ?? 2,
+        sessionContext: {
+          scope: "domains",
+          sourceId: source.id,
+          sourceName: source.name,
+        },
         liveDomainAutosave: {
           domain,
           sourceId: source.id,
@@ -340,6 +345,15 @@ export function DomainsPage() {
 
   const liveScanContext =
     directSession?.scope === "domains" ? directSession : null;
+  useEffect(() => {
+    if (!liveScanContext) return;
+    const timer = window.setTimeout(() => {
+      setSourceView("live");
+      if (liveScanContext.sourceId) setLiveSourceId(liveScanContext.sourceId);
+      if (liveScanContext.query) setLiveDomainInput(liveScanContext.query);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [liveScanContext]);
   const currentLiveProgress =
     liveScanContext &&
     !liveScanContext.handled &&
