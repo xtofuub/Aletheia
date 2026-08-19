@@ -22,7 +22,7 @@ function dataset(
 }
 
 describe("dataset landscape data", () => {
-  it("ranks sources and calculates total and relative shares", () => {
+  it("ranks sources and calculates their relative sizes", () => {
     const rows = buildDatasetScaleRows([
       dataset("small", 10, "2026-08-01T12:00:00.000Z"),
       dataset("large", 30, "2026-08-07T12:00:00.000Z"),
@@ -30,15 +30,15 @@ describe("dataset landscape data", () => {
 
     expect(rows.map((row) => row.id)).toEqual(["large", "small"]);
     expect(rows[0]).toMatchObject({
-      share: 75,
       relativeScale: 100,
       records: 30,
+      status: "ready",
     });
-    expect(rows[1]).toMatchObject({ share: 25, records: 10 });
+    expect(rows[1]).toMatchObject({ records: 10, status: "ready" });
     expect(rows[1]?.relativeScale).toBeCloseTo(100 / 3);
   });
 
-  it("limits rows without changing shares of the whole workspace", () => {
+  it("limits rows without changing their scale against the largest index", () => {
     const rows = buildDatasetScaleRows(
       [
         dataset("first", 50, "2026-08-01T12:00:00.000Z"),
@@ -49,8 +49,8 @@ describe("dataset landscape data", () => {
     );
 
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.share).toBe(50);
-    expect(rows[1]?.share).toBe(30);
+    expect(rows[0]?.relativeScale).toBe(100);
+    expect(rows[1]?.relativeScale).toBe(60);
   });
 
   it("drops empty sources and handles an empty workspace", () => {

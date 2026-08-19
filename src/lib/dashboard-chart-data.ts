@@ -3,9 +3,9 @@ import type { DatasetSummary } from "@/lib/desktop";
 export interface DatasetScaleRow {
   id: string;
   name: string;
+  status: string;
   records: number;
   files: number;
-  share: number;
   relativeScale: number;
 }
 
@@ -17,10 +17,6 @@ export function buildDatasetScaleRows(
     ...dataset,
     recordCount: Math.max(0, dataset.recordCount),
   }));
-  const total = normalized.reduce(
-    (sum, dataset) => sum + dataset.recordCount,
-    0,
-  );
   const sorted = normalized
     .filter((dataset) => dataset.recordCount > 0)
     .sort(
@@ -34,9 +30,9 @@ export function buildDatasetScaleRows(
   return sorted.map((dataset) => ({
     id: dataset.id,
     name: dataset.name,
+    status: dataset.status,
     records: dataset.recordCount,
     files: Math.max(0, dataset.fileCount),
-    share: total > 0 ? (dataset.recordCount / total) * 100 : 0,
     relativeScale: largest > 0 ? (dataset.recordCount / largest) * 100 : 0,
   }));
 }

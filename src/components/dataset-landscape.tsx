@@ -24,6 +24,26 @@ import { formatCount } from "@/lib/format";
 
 const VISIBLE_DATASETS = 6;
 
+function indexStatusLabel(status: string) {
+  switch (status) {
+    case "ready":
+      return "Complete index";
+    case "queued":
+      return "Queued";
+    case "indexing":
+      return "Indexing";
+    case "cancelling":
+      return "Stopping";
+    case "cancelled":
+    case "interrupted":
+      return "Partial index";
+    case "failed":
+      return "Index failed";
+    default:
+      return "Not indexed";
+  }
+}
+
 export function DatasetLandscape({ datasets }: { datasets: DatasetSummary[] }) {
   const reduceMotion = useReducedMotion();
   const rows = buildDatasetScaleRows(datasets, VISIBLE_DATASETS);
@@ -43,7 +63,7 @@ export function DatasetLandscape({ datasets }: { datasets: DatasetSummary[] }) {
             </CardDescription>
           </div>
           <Badge className="font-mono tabular-nums" variant="outline">
-            {formatCount(totalRecords)} total
+            {formatCount(totalRecords)} searchable
           </Badge>
         </div>
       </CardHeader>
@@ -69,7 +89,7 @@ export function DatasetLandscape({ datasets }: { datasets: DatasetSummary[] }) {
                   </span>
                 </div>
                 <div
-                  aria-label={`${row.name}: ${row.share.toFixed(1)}% of indexed records`}
+                  aria-label={`${row.name}: ${formatCount(row.records)} searchable rows; bar size is relative to the largest persistent index`}
                   className="h-1 overflow-hidden bg-muted"
                   role="img"
                 >
@@ -91,9 +111,12 @@ export function DatasetLandscape({ datasets }: { datasets: DatasetSummary[] }) {
                     {formatCount(row.files)}{" "}
                     {row.files === 1 ? "file" : "files"}
                   </span>
-                  <span className="font-mono tabular-nums">
-                    {row.share.toFixed(row.share < 10 ? 1 : 0)}%
-                  </span>
+                  <Badge
+                    title={`Dataset status: ${row.status}`}
+                    variant="outline"
+                  >
+                    {indexStatusLabel(row.status)}
+                  </Badge>
                 </div>
               </div>
             ))}
@@ -125,7 +148,7 @@ export function DatasetLandscape({ datasets }: { datasets: DatasetSummary[] }) {
       {rows.length ? (
         <div className="flex items-center justify-between border-t px-5 py-2.5 text-xs text-muted-foreground">
           <span>
-            Showing {rows.length} of {datasets.length} indexed{" "}
+            Showing {rows.length} of {datasets.length} persistent{" "}
             {datasets.length === 1 ? "source" : "sources"}
           </span>
           <Button

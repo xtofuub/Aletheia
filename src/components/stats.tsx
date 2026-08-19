@@ -32,10 +32,10 @@ export function DashboardStats({
   const latestLiveMatches = liveSearches[0]?.matches ?? 0;
   const items = [
     {
-      label: "Indexed records",
+      label: "Indexed rows",
       value: formatCount(records),
       detailValue: formatCount(latestLiveMatches),
-      detailLabel: "matches in the latest Live scan",
+      detailLabel: "latest Live matches, counted separately",
     },
     {
       label: "Search sources",

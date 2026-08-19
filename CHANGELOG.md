@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clarified Overview metrics: Dataset landscape now shows searchable rows and explicit index state instead of an ambiguous percentage, while Live scan matches remain clearly separate from indexed-row totals.
+
 ## 1.0.0 - 2026-08-16
 
 - Moved Live domain autosave into the native Rust scanner so every emitted result batch is committed to SQLite before the UI receives it; cancellation and page freezes no longer depend on a React save callback.

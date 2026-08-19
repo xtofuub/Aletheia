@@ -78,9 +78,10 @@ test("overview maps dataset scale and investigation lanes", async ({
   await expect(landscapeCard).toBeVisible();
   await expect(lanesCard).toBeVisible();
   await expect(landscapeCard).toContainText("Synthetic chart index");
+  await expect(landscapeCard).toContainText("Complete index");
   await expect(
     landscapeCard.getByRole("img", {
-      name: "Synthetic chart index: 100.0% of indexed records",
+      name: "Synthetic chart index: 4M searchable rows; bar size is relative to the largest persistent index",
     }),
   ).toBeVisible();
   await expect(
@@ -115,9 +116,12 @@ test("saved Live source searches many values in one pass", async ({ page }) => {
   await expect(page.getByText("synthetic@example.test").first()).toBeVisible();
 
   await page.goto("/#/overview");
-  const liveMatchNote = page.getByText("matches in the latest Live scan", {
-    exact: true,
-  });
+  const liveMatchNote = page.getByText(
+    "latest Live matches, counted separately",
+    {
+      exact: true,
+    },
+  );
   await expect(liveMatchNote).toBeVisible();
   await expect(liveMatchNote.locator("..")).toContainText("2");
   await expect(
