@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
+import { EvidenceLine } from "@/components/evidence-line";
 import { LiveSearchPreflight } from "@/components/live-search-preflight";
 import { TableRowsSkeleton } from "@/components/loading-skeletons";
 import { PageHeader } from "@/components/page-header";
@@ -964,8 +965,8 @@ export function SearchPage({
                           <TableCell className="font-mono text-xs break-all whitespace-normal">
                             {hit.sourceLocation}
                           </TableCell>
-                          <TableCell className="font-mono text-xs break-all whitespace-pre-wrap">
-                            {hit.excerpt}
+                          <TableCell className="whitespace-normal">
+                            <EvidenceLine value={hit.excerpt} />
                           </TableCell>
                           <TableCell className="pe-6 text-xs whitespace-normal text-muted-foreground">
                             <p className="break-all font-mono text-foreground">

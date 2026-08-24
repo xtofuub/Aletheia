@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
+import { EvidenceLine } from "@/components/evidence-line";
 import { LiveSearchPreflight } from "@/components/live-search-preflight";
 import {
   ListRowsSkeleton,
@@ -787,10 +788,19 @@ export function IdentitiesPage() {
                           return (
                             <TableRow key={member.recordId}>
                               <TableCell className="whitespace-normal ps-6">
-                                <p className="font-mono text-xs break-all">
-                                  {values.join(" | ") ||
-                                    "No displayable values"}
-                                </p>
+                                {member.origin === "live" ? (
+                                  <EvidenceLine
+                                    value={
+                                      values.join(" | ") ||
+                                      "No displayable values"
+                                    }
+                                  />
+                                ) : (
+                                  <p className="font-mono text-xs break-all">
+                                    {values.join(" | ") ||
+                                      "No displayable values"}
+                                  </p>
+                                )}
                               </TableCell>
                               <TableCell className="whitespace-normal pe-6">
                                 <p className="truncate text-xs font-medium">
@@ -1424,9 +1434,7 @@ export function IdentitiesPage() {
                                 />
                               </TableCell>
                               <TableCell className="whitespace-normal">
-                                <p className="font-mono text-xs break-all">
-                                  {hit.excerpt}
-                                </p>
+                                <EvidenceLine value={hit.excerpt} />
                               </TableCell>
                               <TableCell className="whitespace-normal pe-6">
                                 <p className="truncate text-xs font-medium">

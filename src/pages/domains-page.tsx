@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
+import { EvidenceLine } from "@/components/evidence-line";
 import { LiveSearchPreflight } from "@/components/live-search-preflight";
 import {
   ListRowsSkeleton,
@@ -1441,9 +1442,7 @@ export function DomainsPage() {
                                 ) : null}
                               </TableCell>
                               <TableCell className="min-w-0 whitespace-normal pe-6 align-top">
-                                <p className="break-words [overflow-wrap:anywhere]">
-                                  {hit.excerpt}
-                                </p>
+                                <EvidenceLine value={hit.excerpt} />
                                 <p className="mt-2 truncate text-xs text-muted-foreground">
                                   {hit.matchReason}
                                 </p>
@@ -1567,9 +1566,7 @@ export function DomainsPage() {
                                   </p>
                                 </TableCell>
                                 <TableCell className="min-w-0 whitespace-normal pe-6 align-top">
-                                  <p className="break-words [overflow-wrap:anywhere]">
-                                    {evidence.excerpt}
-                                  </p>
+                                  <EvidenceLine value={evidence.excerpt} />
                                   <div className="mt-2 flex min-w-0 flex-wrap gap-1">
                                     <Badge
                                       className="max-w-full truncate"

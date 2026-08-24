@@ -1223,7 +1223,7 @@ export async function startDirectSearch(
     id: crypto.randomUUID(),
     archiveEntry: request.includeArchives ? "records/synthetic-2.txt" : null,
     sourceLocation: "line 84",
-    excerpt: "synthetic.second@example.com:account-1002:service.example.com",
+    excerpt: `android://U1lOVEhFVElDLUNFUlQ=@com.example.mobile/:${primaryQuery}:sample-stored-value | //u1lovelhveldlunfulq=@com.example.mobile`,
   };
   const initialProgress: DirectSearchProgress = {
     jobId,
