@@ -781,7 +781,7 @@ export function IdentitiesPage() {
                                 </Badge>
                                 {member.origin === "live" ? (
                                   <Badge variant="secondary">
-                                    Live snapshot
+                                    Full safe row
                                   </Badge>
                                 ) : null}
                               </div>

@@ -1237,7 +1237,7 @@ fn validate_live_identity_evidence(evidence: &LiveIdentityEvidenceInput) -> Resu
             evidence.source_location.trim(),
             256_usize,
         ),
-        ("source excerpt", evidence.excerpt.trim(), 1_024_usize),
+        ("source row", evidence.excerpt.trim(), 4_097_usize),
         ("match reason", evidence.match_reason.trim(), 256_usize),
     ];
     for (label, value, max) in required {

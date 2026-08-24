@@ -46,7 +46,8 @@ const PROGRESS_EMIT_INTERVAL_MS: u64 = 250;
 const PROGRESS_BYTE_INTERVAL: u64 = 1024 * 1024;
 const PLAIN_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 const PARALLEL_PLAIN_THRESHOLD: u64 = 128 * 1024 * 1024;
-const RAW_EXCERPT_BYTES: usize = 1024;
+const SAFE_ROW_BYTES: usize = 16 * 1024;
+const SAFE_ROW_CHARS: usize = 4_096;
 const PREFLIGHT_SAMPLE_BYTES: u64 = 64 * 1024 * 1024;
 const SOURCE_READER_LIMIT: usize = 1;
 const PLAIN_CHECKPOINT_BYTES: u64 = 256 * 1024 * 1024;
@@ -2839,22 +2840,9 @@ fn field_tokens(value: &str) -> impl Iterator<Item = &str> {
         .filter(|token| !token.is_empty())
 }
 
-fn display_excerpt(line: &[u8], query: &str, case_sensitive: bool) -> String {
-    let query_bytes = query.as_bytes();
-    let match_start = if query.is_ascii() {
-        if case_sensitive {
-            memchr::memmem::find(line, query_bytes)
-        } else {
-            line.windows(query_bytes.len().max(1))
-                .position(|window| window.eq_ignore_ascii_case(query_bytes))
-        }
-    } else {
-        None
-    }
-    .unwrap_or(0);
-    let start = match_start.saturating_sub(RAW_EXCERPT_BYTES / 3);
-    let end = start.saturating_add(RAW_EXCERPT_BYTES).min(line.len());
-    let value = String::from_utf8_lossy(&line[start..end]);
+fn display_excerpt(line: &[u8], _query: &str, _case_sensitive: bool) -> String {
+    let end = SAFE_ROW_BYTES.min(line.len());
+    let value = String::from_utf8_lossy(&line[..end]);
     let normalized: String = value
         .chars()
         .map(|character| {
@@ -2865,9 +2853,9 @@ fn display_excerpt(line: &[u8], query: &str, case_sensitive: bool) -> String {
             }
         })
         .collect();
-    let secrets = SECRET_PATTERN.replace_all(&normalized, "");
-    let pairs = EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, "$1");
-    let mut excerpt = String::with_capacity(361);
+    let secrets = SECRET_PATTERN.replace_all(&normalized, "$1=[credential removed]");
+    let pairs = EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, "$1:[credential removed]");
+    let mut excerpt = String::with_capacity(SAFE_ROW_CHARS + 1);
     let mut character_count = 0_usize;
     let mut pending_space = false;
     let mut truncated = end < line.len();
@@ -2876,12 +2864,12 @@ fn display_excerpt(line: &[u8], query: &str, case_sensitive: bool) -> String {
             pending_space = !excerpt.is_empty();
             continue;
         }
-        if pending_space && character_count < 360 {
+        if pending_space && character_count < SAFE_ROW_CHARS {
             excerpt.push(' ');
             character_count += 1;
         }
         pending_space = false;
-        if character_count >= 360 {
+        if character_count >= SAFE_ROW_CHARS {
             truncated = true;
             break;
         }
@@ -3645,7 +3633,7 @@ mod tests {
     }
 
     #[test]
-    fn excerpts_show_identifiers_and_drop_secret_values() {
+    fn live_rows_keep_full_context_and_mark_removed_credentials() {
         let excerpt = display_excerpt(
             b"synthetic@example.com:invented-value password=invented-secret +1 202 555 0142",
             "synthetic@example.com",
@@ -3653,7 +3641,7 @@ mod tests {
         );
         assert!(excerpt.contains("synthetic@example.com"));
         assert!(excerpt.contains("+1 202 555 0142"));
-        assert!(!excerpt.contains("password"));
+        assert_eq!(excerpt.matches("[credential removed]").count(), 2);
         assert!(!excerpt.contains("invented-secret"));
         assert!(!excerpt.contains("invented-value"));
     }
