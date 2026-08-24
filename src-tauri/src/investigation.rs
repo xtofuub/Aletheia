@@ -880,17 +880,7 @@ fn list_identities_inner(
     let total = connection
         .query_row(
             "SELECT COUNT(*) FROM identity_groups ig
-             WHERE (?1 = '' OR INSTR(LOWER(ig.display_label), ?1) > 0)
-               AND (
-                 EXISTS (
-                   SELECT 1 FROM identity_memberships im
-                   WHERE im.identity_group_id = ig.id
-                 )
-                 OR EXISTS (
-                   SELECT 1 FROM identity_live_evidence le
-                   WHERE le.identity_group_id = ig.id
-                 )
-               )",
+             WHERE ?1 = '' OR INSTR(LOWER(ig.display_label), ?1) > 0",
             [&query],
             |row| row.get::<_, i64>(0),
         )
@@ -902,51 +892,43 @@ fn list_identities_inner(
                       CASE WHEN ig.confidence_level = 'user-confirmed'
                            THEN 0 ELSE 1 END AS priority
                FROM identity_groups ig
-               WHERE (?1 = '' OR INSTR(LOWER(ig.display_label), ?1) > 0)
-                 AND (
-                   EXISTS (
-                     SELECT 1 FROM identity_memberships im
-                     WHERE im.identity_group_id = ig.id
-                   )
-                   OR EXISTS (
-                     SELECT 1 FROM identity_live_evidence le
-                     WHERE le.identity_group_id = ig.id
-                   )
-                 )
+               WHERE ?1 = '' OR INSTR(LOWER(ig.display_label), ?1) > 0
                ORDER BY priority, updated_at DESC, id
                LIMIT ?2 OFFSET ?3
              ),
              membership_summary AS (
-               SELECT identity_group_id,
+               SELECT im.identity_group_id,
                       COUNT(*) AS member_count,
-                      MIN(link_type) AS link_type,
-                      MIN(explanation_json) AS explanation_json,
-                      SUM(user_status = 'rejected') AS rejected_count,
-                      SUM(user_status = 'confirmed') AS confirmed_count
-               FROM identity_memberships
-               WHERE identity_group_id IN (SELECT id FROM candidate_groups)
-               GROUP BY identity_group_id
+                      MIN(im.link_type) AS link_type,
+                      MIN(im.explanation_json) AS explanation_json,
+                      SUM(im.user_status = 'rejected') AS rejected_count,
+                      SUM(im.user_status = 'confirmed') AS confirmed_count
+               FROM candidate_groups cg
+               CROSS JOIN identity_memberships im
+                 ON im.identity_group_id = cg.id
+               GROUP BY im.identity_group_id
              ),
              live_summary AS (
-               SELECT identity_group_id,
+               SELECT le.identity_group_id,
                       COUNT(*) AS member_count,
-                      SUM(user_status = 'rejected') AS rejected_count,
-                      SUM(user_status = 'confirmed') AS confirmed_count
-               FROM identity_live_evidence
-               WHERE identity_group_id IN (SELECT id FROM candidate_groups)
-               GROUP BY identity_group_id
+                      SUM(le.user_status = 'rejected') AS rejected_count,
+                      SUM(le.user_status = 'confirmed') AS confirmed_count
+               FROM candidate_groups cg
+               CROSS JOIN identity_live_evidence le
+                 ON le.identity_group_id = cg.id
+               GROUP BY le.identity_group_id
              )
              SELECT ig.id, ig.display_label, ig.confidence_level,
                     COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0),
                     CASE
                       WHEN COALESCE(ms.member_count, 0) = 0 THEN 'live_scan_bundle'
                       WHEN COALESCE(ls.member_count, 0) > 0 THEN 'mixed_evidence_bundle'
-                      ELSE ms.link_type
+                      ELSE COALESCE(ms.link_type, 'unlinked')
                     END,
                     CASE
                       WHEN COALESCE(ms.member_count, 0) = 0 THEN '{\"rule\":\"reviewed_live_scan_evidence\"}'
                       WHEN COALESCE(ls.member_count, 0) > 0 THEN '{\"rule\":\"reviewed_index_and_live_evidence\"}'
-                      ELSE ms.explanation_json
+                      ELSE COALESCE(ms.explanation_json, '{\"rule\":\"unlinked_group\"}')
                     END,
                     CASE
                       WHEN COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0) > 0
@@ -2318,6 +2300,20 @@ mod tests {
         assert_eq!(first_page.groups.len(), 100);
         assert_eq!(first_page.groups[0].id, "manual-old");
         assert_eq!(first_page.groups[0].user_status, "confirmed");
+
+        let second_page =
+            list_identities_inner(database.clone(), "", 100, 100).expect("second identity page");
+        let first_ids = first_page
+            .groups
+            .iter()
+            .map(|group| group.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert!(
+            second_page
+                .groups
+                .iter()
+                .all(|group| !first_ids.contains(group.id.as_str()))
+        );
 
         let last_page =
             list_identities_inner(database.clone(), "", 600, 100).expect("last identity page");
