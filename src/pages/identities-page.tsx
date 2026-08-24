@@ -125,6 +125,7 @@ export function IdentitiesPage() {
   const liveSearchSource = useRef<LiveSourceSummary | null>(null);
   const recordedLiveJobId = useRef<string | null>(null);
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("groups");
   const [identityFilter, setIdentityFilter] = useState("");
   const [memberOffset, setMemberOffset] = useState(0);
   const [manualQuery, setManualQuery] = useState("");
@@ -336,13 +337,39 @@ export function IdentitiesPage() {
             matchReason: hit.matchReason,
           })),
       }),
-    onSuccess: async (id) => {
+    onSuccess: (id) => {
+      const displayLabel = manualName.trim();
+      const memberCount = selectedEvidenceCount;
+      const hasIndexedEvidence = manualSelection.size > 0;
+      const hasLiveEvidence = liveSelection.size > 0;
+      queryClient.setQueryData<IdentitySummary[]>(["identities"], (current) => [
+        {
+          id,
+          displayLabel,
+          confidenceLevel: "user-confirmed",
+          memberCount,
+          linkType: hasLiveEvidence
+            ? hasIndexedEvidence
+              ? "mixed_evidence_bundle"
+              : "live_scan_bundle"
+            : "manual_bundle",
+          explanation: hasLiveEvidence
+            ? hasIndexedEvidence
+              ? "reviewed_index_and_live_evidence"
+              : "reviewed_live_scan_evidence"
+            : "manual_search_bundle",
+          userStatus: "confirmed",
+        },
+        ...(current ?? []).filter((identity) => identity.id !== id),
+      ]);
       setNotice("Manual identity created");
       setManualName("");
       setManualSelection(new Set());
       setLiveSelection(new Set());
       setSelectedIdentity(id);
-      await queryClient.invalidateQueries({ queryKey: ["identities"] });
+      setMemberOffset(0);
+      setActiveTab("groups");
+      void queryClient.invalidateQueries({ queryKey: ["identities"] });
     },
     onError: (error) => setNotice(`Identity creation failed: ${String(error)}`),
   });
@@ -541,7 +568,7 @@ export function IdentitiesPage() {
         </Alert>
       ) : null}
 
-      <Tabs defaultValue="groups">
+      <Tabs onValueChange={setActiveTab} value={activeTab}>
         <TabsList variant="line">
           <TabsTrigger value="groups">Identity groups</TabsTrigger>
           <TabsTrigger value="builder">Build identity</TabsTrigger>

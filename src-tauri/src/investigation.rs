@@ -868,7 +868,26 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
         .map_err(|_| "metadata database is unavailable".to_string())?;
     let mut statement = connection
         .prepare(
-            "WITH membership_summary AS (
+            "WITH candidate_groups AS (
+               SELECT id, display_label, confidence_level, updated_at, 0 AS priority
+               FROM (
+                 SELECT id, display_label, confidence_level, updated_at
+                 FROM identity_groups
+                 WHERE confidence_level = 'user-confirmed'
+                 ORDER BY updated_at DESC, id
+                 LIMIT 500
+               )
+               UNION ALL
+               SELECT id, display_label, confidence_level, updated_at, 1 AS priority
+               FROM (
+                 SELECT id, display_label, confidence_level, updated_at
+                 FROM identity_groups
+                 WHERE confidence_level <> 'user-confirmed'
+                 ORDER BY updated_at DESC, id
+                 LIMIT 1000
+               )
+             ),
+             membership_summary AS (
                SELECT identity_group_id,
                       COUNT(*) AS member_count,
                       MIN(link_type) AS link_type,
@@ -877,6 +896,7 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
                       SUM(user_status = 'rejected') AS rejected_count,
                       SUM(user_status = 'confirmed') AS confirmed_count
                FROM identity_memberships
+               WHERE identity_group_id IN (SELECT id FROM candidate_groups)
                GROUP BY identity_group_id
              ),
              live_summary AS (
@@ -885,6 +905,7 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
                       SUM(user_status = 'rejected') AS rejected_count,
                       SUM(user_status = 'confirmed') AS confirmed_count
                FROM identity_live_evidence
+               WHERE identity_group_id IN (SELECT id FROM candidate_groups)
                GROUP BY identity_group_id
              )
              SELECT ig.id, ig.display_label, ig.confidence_level,
@@ -913,12 +934,12 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
                         THEN 'needs review'
                       ELSE 'automatic'
                     END
-             FROM identity_groups ig
+             FROM candidate_groups ig
              LEFT JOIN membership_summary ms ON ms.identity_group_id = ig.id
              LEFT JOIN live_summary ls ON ls.identity_group_id = ig.id
              WHERE COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0) >= 2
                 OR COALESCE(ms.manual_links, 0) > 0
-             ORDER BY ig.updated_at DESC, ig.id
+             ORDER BY ig.priority, ig.updated_at DESC, ig.id
              LIMIT 500",
         )
         .map_err(sanitized)?;
@@ -2201,6 +2222,61 @@ mod tests {
                 .total,
             2
         );
+    }
+
+    #[test]
+    fn manual_identities_stay_visible_ahead_of_large_automatic_catalogs() {
+        let workspace = tempdir().expect("temporary workspace");
+        let connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(
+                "INSERT INTO identity_groups(
+                   id, display_label, confidence_level, created_at, updated_at
+                 ) VALUES (
+                   'manual-old', 'Reviewed synthetic identity', 'user-confirmed',
+                   '2000-01-01 00:00:00', '2000-01-01 00:00:00'
+                 );
+                 INSERT INTO identity_live_evidence(
+                   id, identity_group_id, source_path, source_file,
+                   source_location, excerpt, match_reason, evidence_fingerprint,
+                   user_status
+                 ) VALUES
+                   ('manual-live-1', 'manual-old', 'C:\\Synthetic', 'one.txt',
+                    'line 1', 'synthetic row one', 'reviewed', 'manual-fp-1', 'confirmed'),
+                   ('manual-live-2', 'manual-old', 'C:\\Synthetic', 'two.txt',
+                    'line 2', 'synthetic row two', 'reviewed', 'manual-fp-2', 'confirmed');
+                 WITH RECURSIVE sequence(value) AS (
+                   SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < 600
+                 )
+                 INSERT INTO identity_groups(
+                   id, display_label, confidence_level, created_at, updated_at
+                 )
+                 SELECT printf('automatic-%04d', value),
+                        printf('synthetic-%04d', value), 'high',
+                        '2030-01-01 00:00:00', '2030-01-01 00:00:00'
+                 FROM sequence;
+                 WITH RECURSIVE sequence(value) AS (
+                   SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < 1200
+                 )
+                 INSERT INTO identity_live_evidence(
+                   id, identity_group_id, source_path, source_file,
+                   source_location, excerpt, match_reason, evidence_fingerprint,
+                   user_status
+                 )
+                 SELECT printf('automatic-live-%04d', value),
+                        printf('automatic-%04d', (value + 1) / 2),
+                        'C:\\Synthetic', 'automatic.txt',
+                        printf('line %d', value), 'synthetic row', 'automatic',
+                        printf('automatic-fp-%04d', value), 'automatic'
+                 FROM sequence;",
+            )
+            .expect("large synthetic identity catalog");
+
+        let identities =
+            list_identities_inner(Arc::new(Mutex::new(connection))).expect("identity list");
+        assert_eq!(identities.len(), 500);
+        assert_eq!(identities[0].id, "manual-old");
+        assert_eq!(identities[0].user_status, "confirmed");
     }
 
     #[test]

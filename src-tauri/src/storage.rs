@@ -30,6 +30,7 @@ const MIGRATION_V9: &str = include_str!("../migrations/0009_live_domain_evidence
 const MIGRATION_V10: &str = include_str!("../migrations/0010_domain_query_indexes.sql");
 const MIGRATION_V11: &str = include_str!("../migrations/0011_overview_metrics.sql");
 const MIGRATION_V12: &str = include_str!("../migrations/0012_live_scan_checkpoints.sql");
+const MIGRATION_V13: &str = include_str!("../migrations/0013_identity_list_indexes.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -339,6 +340,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 13 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V13)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (13)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -449,7 +459,7 @@ mod tests {
 
     use super::{
         MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
-        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, MIGRATION_V12, open_database,
+        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, MIGRATION_V12, MIGRATION_V13, open_database,
         recover_interrupted_imports, recover_interrupted_live_scans,
     };
 
@@ -491,6 +501,7 @@ mod tests {
         assert!(!MIGRATION_V8.is_empty());
         assert!(!MIGRATION_V9.is_empty());
         assert!(!MIGRATION_V12.is_empty());
+        assert!(!MIGRATION_V13.is_empty());
 
         let theme: String = connection
             .query_row(
@@ -659,7 +670,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("domain query indexes");
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
         assert_eq!(live_table_count, 3);
         assert_eq!(domain_query_index_count, 2);
     }

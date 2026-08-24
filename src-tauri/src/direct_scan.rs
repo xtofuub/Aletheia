@@ -1384,14 +1384,26 @@ fn launch_direct_scan(
 
 #[tauri::command]
 pub fn cancel_direct_search(job_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let jobs = state
+    let control = state
         .scan_jobs
         .lock()
-        .map_err(|_| "search controls are unavailable".to_string())?;
-    let control = jobs
+        .map_err(|_| "search controls are unavailable".to_string())?
         .get(&job_id)
+        .cloned()
         .ok_or_else(|| "live search is no longer active".to_string())?;
     control.cancel();
+    // Cancellation must never wait behind a long metadata read. The scan worker
+    // observes the atomic flag immediately; this best-effort update only makes
+    // the checkpoint truthful if the database is free right now.
+    if let Ok(connection) = state.database.try_lock() {
+        let _ = connection.execute(
+            "UPDATE live_scan_sessions
+             SET status = 'cancelling', message = 'Stopping Live scan',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND status IN ('running', 'paused')",
+            [&job_id],
+        );
+    }
     Ok(())
 }
 
