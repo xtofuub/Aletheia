@@ -2854,7 +2854,16 @@ fn display_excerpt(line: &[u8], _query: &str, _case_sensitive: bool) -> String {
         })
         .collect();
     let secrets = SECRET_PATTERN.replace_all(&normalized, "$1=[credential removed]");
-    let pairs = EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, "$1:[credential removed]");
+    let pairs =
+        EMAIL_SECRET_PAIR_PATTERN.replace_all(&secrets, |captures: &regex::Captures<'_>| {
+            let value_length = captures
+                .get(2)
+                .map_or(0, |value| value.as_str().chars().count());
+            format!(
+                "{}:[unclassified value hidden · {value_length} characters]",
+                captures.get(1).map_or("", |email| email.as_str())
+            )
+        });
     let mut excerpt = String::with_capacity(SAFE_ROW_CHARS + 1);
     let mut character_count = 0_usize;
     let mut pending_space = false;
@@ -3641,7 +3650,8 @@ mod tests {
         );
         assert!(excerpt.contains("synthetic@example.com"));
         assert!(excerpt.contains("+1 202 555 0142"));
-        assert_eq!(excerpt.matches("[credential removed]").count(), 2);
+        assert_eq!(excerpt.matches("[credential removed]").count(), 1);
+        assert!(excerpt.contains("[unclassified value hidden · 14 characters]"));
         assert!(!excerpt.contains("invented-secret"));
         assert!(!excerpt.contains("invented-value"));
     }
