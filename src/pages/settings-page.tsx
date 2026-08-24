@@ -256,7 +256,16 @@ export function SettingsPage() {
       <PageHeader
         actions={
           <div className="flex items-center gap-2">
-            {notice ? <Badge variant="outline">{notice}</Badge> : null}
+            {notice ? (
+              <Badge
+                className="status-change"
+                key={notice}
+                role="status"
+                variant="outline"
+              >
+                {notice}
+              </Badge>
+            ) : null}
             <Button
               disabled={save.isPending}
               onClick={() => save.mutate()}

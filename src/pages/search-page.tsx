@@ -739,7 +739,7 @@ export function SearchPage({
                   Live scan options
                   <ChevronDownIcon data-icon="inline-end" />
                 </CollapsibleTrigger>
-                <CollapsibleContent className="pt-3">
+                <CollapsibleContent className="collapsible-motion pt-3">
                   <div className="grid grid-cols-1 gap-3 border p-3 sm:grid-cols-3">
                     <Field>
                       <FieldLabel>Worker limit</FieldLabel>

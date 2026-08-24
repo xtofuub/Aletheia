@@ -130,6 +130,9 @@ export function IdentitiesPage() {
   const liveSearchSource = useRef<LiveSourceSummary | null>(null);
   const recordedLiveJobId = useRef<string | null>(null);
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
+  const [createdIdentityId, setCreatedIdentityId] = useState<string | null>(
+    null,
+  );
   const [activeTab, setActiveTab] = useState("groups");
   const [identityFilter, setIdentityFilter] = useState("");
   const [memberOffset, setMemberOffset] = useState(0);
@@ -372,6 +375,7 @@ export function IdentitiesPage() {
       setManualSelection(new Set());
       setLiveSelection(new Set());
       setSelectedIdentity(id);
+      setCreatedIdentityId(id);
       setMemberOffset(0);
       setActiveTab("groups");
       void queryClient.invalidateQueries({ queryKey: ["identities"] });
@@ -639,8 +643,17 @@ export function IdentitiesPage() {
                     <div className="flex flex-col">
                       {filteredIdentities.map((identity) => (
                         <Button
-                          className="h-auto w-full justify-start rounded-none px-4 py-3"
+                          className={`h-auto w-full justify-start rounded-none px-4 py-3 ${
+                            identity.id === createdIdentityId
+                              ? "identity-created"
+                              : ""
+                          }`}
                           key={identity.id}
+                          onAnimationEnd={() => {
+                            if (identity.id === createdIdentityId) {
+                              setCreatedIdentityId(null);
+                            }
+                          }}
                           onClick={() => {
                             setSelectedIdentity(identity.id);
                             setMemberOffset(0);

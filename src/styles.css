@@ -118,6 +118,37 @@
   }
 }
 
+@keyframes aletheia-status-change {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aletheia-identity-created {
+  from {
+    opacity: 0.65;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aletheia-opacity-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @layer components {
   .page-enter {
     animation: aletheia-page-enter 160ms var(--ease-out-ui) both;
@@ -125,6 +156,26 @@
 
   .state-reveal {
     animation: aletheia-state-reveal 180ms var(--ease-out-ui) both;
+  }
+
+  .status-change {
+    animation: aletheia-status-change 160ms var(--ease-out-ui) both;
+  }
+
+  .identity-created {
+    animation: aletheia-identity-created 220ms var(--ease-out-ui) both;
+  }
+
+  .collapsible-motion {
+    transition:
+      opacity 180ms var(--ease-out-ui),
+      transform 180ms var(--ease-out-ui);
+  }
+
+  .collapsible-motion[data-starting-style],
+  .collapsible-motion[data-ending-style] {
+    opacity: 0;
+    transform: translateY(-2px);
   }
 
   [data-slot="skeleton"] {
@@ -156,6 +207,16 @@
 
   .state-reveal {
     animation: none;
+  }
+
+  .status-change,
+  .identity-created {
+    animation: aletheia-opacity-in 100ms var(--ease-out-ui) both;
+  }
+
+  .collapsible-motion {
+    transform: none;
+    transition: opacity 100ms var(--ease-out-ui);
   }
 
   [data-slot="skeleton"]::after {

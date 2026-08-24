@@ -1,4 +1,12 @@
-import { ArrowRightIcon, PauseIcon, PlayIcon, SquareIcon } from "lucide-react";
+import {
+  ArrowRightIcon,
+  CircleCheckIcon,
+  CircleXIcon,
+  LoaderCircleIcon,
+  PauseIcon,
+  PlayIcon,
+  SquareIcon,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +48,18 @@ export function ActiveDomainScan() {
     ? Math.min(100, (progress.sourceBytesScanned / progress.totalBytes) * 100)
     : 0;
   const controllable = ["running", "paused"].includes(progress.status);
+  const statusLabel =
+    progress.status === "paused"
+      ? "Paused"
+      : progress.status === "cancelling"
+        ? "Stopping"
+        : progress.status === "completed"
+          ? "Completed"
+          : progress.status === "cancelled"
+            ? "Cancelled"
+            : progress.status === "failed"
+              ? "Failed"
+              : `${formatDuration(progress.estimatedRemainingMs)} remaining`;
 
   return (
     <section
@@ -60,12 +80,25 @@ export function ActiveDomainScan() {
           <Badge variant="outline">
             {formatCount(progress.matches)} matches
           </Badge>
-          <Badge variant="outline">
-            {progress.status === "paused"
-              ? "Paused"
-              : progress.status === "cancelling"
-                ? "Stopping"
-                : `${formatDuration(progress.estimatedRemainingMs)} remaining`}
+          <Badge
+            className="status-change"
+            key={progress.status}
+            role="status"
+            variant="outline"
+          >
+            {["running", "cancelling"].includes(progress.status) ? (
+              <LoaderCircleIcon
+                className="animate-spin"
+                data-icon="inline-start"
+              />
+            ) : progress.status === "paused" ? (
+              <PauseIcon data-icon="inline-start" />
+            ) : progress.status === "completed" ? (
+              <CircleCheckIcon data-icon="inline-start" />
+            ) : (
+              <CircleXIcon data-icon="inline-start" />
+            )}
+            {statusLabel}
           </Badge>
           {progress.status === "running" ? (
             <Button
