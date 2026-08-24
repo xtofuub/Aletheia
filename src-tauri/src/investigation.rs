@@ -12,9 +12,9 @@ use crate::{
     models::{
         DomainBreachSummary, DomainDetailsResponse, DomainGroupSummary, DomainRecordSummary,
         DomainSearchResponse, DomainSummary, FieldType, IdentityActionInput, IdentityMember,
-        IdentityMembersResponse, IdentitySummary, LiveIdentityEvidenceInput, ManualIdentityInput,
-        OverviewStats, SavedSearch, SavedSearchInput, SearchField, SearchHit, SearchMode,
-        SearchRequest, SearchResponse,
+        IdentityMembersResponse, IdentitySearchResponse, IdentitySummary,
+        LiveIdentityEvidenceInput, ManualIdentityInput, OverviewStats, SavedSearch,
+        SavedSearchInput, SearchField, SearchHit, SearchMode, SearchRequest, SearchResponse,
     },
     search_index::SearchIndex,
     storage::{AppState, open_worker_database},
@@ -848,44 +848,79 @@ fn search_domain_record_ids(
 }
 
 #[tauri::command]
-pub async fn list_identities(state: State<'_, AppState>) -> Result<Vec<IdentitySummary>, String> {
+pub async fn list_identities(
+    query: String,
+    offset: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<IdentitySearchResponse, String> {
+    if query.chars().count() > 320 || query.chars().any(char::is_control) {
+        return Err("identity search is invalid".to_string());
+    }
     let database = state.database.clone();
-    tauri::async_runtime::spawn_blocking(move || list_identities_inner(database))
-        .await
-        .map_err(|_| "identity list task failed".to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        list_identities_inner(database, &query, offset, limit)
+    })
+    .await
+    .map_err(|_| "identity list task failed".to_string())?
 }
 
-fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<IdentitySummary>, String> {
+fn list_identities_inner(
+    database: Arc<Mutex<Connection>>,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<IdentitySearchResponse, String> {
     let connection = database
         .lock()
         .map_err(|_| "metadata database is unavailable".to_string())?;
+    let query = query.trim().to_lowercase();
+    let bounded_limit = limit.clamp(1, 100) as i64;
+    let bounded_offset = offset.min(i64::MAX as usize) as i64;
+    let total = connection
+        .query_row(
+            "SELECT COUNT(*) FROM identity_groups ig
+             WHERE (?1 = '' OR INSTR(LOWER(ig.display_label), ?1) > 0)
+               AND (
+                 EXISTS (
+                   SELECT 1 FROM identity_memberships im
+                   WHERE im.identity_group_id = ig.id
+                 )
+                 OR EXISTS (
+                   SELECT 1 FROM identity_live_evidence le
+                   WHERE le.identity_group_id = ig.id
+                 )
+               )",
+            [&query],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(sanitized)?;
     let mut statement = connection
         .prepare(
             "WITH candidate_groups AS (
-               SELECT id, display_label, confidence_level, updated_at, 0 AS priority
-               FROM (
-                 SELECT id, display_label, confidence_level, updated_at
-                 FROM identity_groups
-                 WHERE confidence_level = 'user-confirmed'
-                 ORDER BY updated_at DESC, id
-                 LIMIT 500
-               )
-               UNION ALL
-               SELECT id, display_label, confidence_level, updated_at, 1 AS priority
-               FROM (
-                 SELECT id, display_label, confidence_level, updated_at
-                 FROM identity_groups
-                 WHERE confidence_level <> 'user-confirmed'
-                 ORDER BY updated_at DESC, id
-                 LIMIT 1000
-               )
+               SELECT ig.id, ig.display_label, ig.confidence_level, ig.updated_at,
+                      CASE WHEN ig.confidence_level = 'user-confirmed'
+                           THEN 0 ELSE 1 END AS priority
+               FROM identity_groups ig
+               WHERE (?1 = '' OR INSTR(LOWER(ig.display_label), ?1) > 0)
+                 AND (
+                   EXISTS (
+                     SELECT 1 FROM identity_memberships im
+                     WHERE im.identity_group_id = ig.id
+                   )
+                   OR EXISTS (
+                     SELECT 1 FROM identity_live_evidence le
+                     WHERE le.identity_group_id = ig.id
+                   )
+                 )
+               ORDER BY priority, updated_at DESC, id
+               LIMIT ?2 OFFSET ?3
              ),
              membership_summary AS (
                SELECT identity_group_id,
                       COUNT(*) AS member_count,
                       MIN(link_type) AS link_type,
                       MIN(explanation_json) AS explanation_json,
-                      SUM(link_type IN ('manual_bundle', 'user_split', 'user_merge')) AS manual_links,
                       SUM(user_status = 'rejected') AS rejected_count,
                       SUM(user_status = 'confirmed') AS confirmed_count
                FROM identity_memberships
@@ -930,14 +965,11 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
              FROM candidate_groups ig
              LEFT JOIN membership_summary ms ON ms.identity_group_id = ig.id
              LEFT JOIN live_summary ls ON ls.identity_group_id = ig.id
-             WHERE COALESCE(ms.member_count, 0) + COALESCE(ls.member_count, 0) >= 2
-                OR COALESCE(ms.manual_links, 0) > 0
-             ORDER BY ig.priority, ig.updated_at DESC, ig.id
-             LIMIT 500",
+             ORDER BY ig.priority, ig.updated_at DESC, ig.id",
         )
         .map_err(sanitized)?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(params![query, bounded_limit, bounded_offset], |row| {
             let explanation_json: String = row.get(5)?;
             let explanation = serde_json::from_str::<serde_json::Value>(&explanation_json)
                 .ok()
@@ -959,7 +991,12 @@ fn list_identities_inner(database: Arc<Mutex<Connection>>) -> Result<Vec<Identit
             })
         })
         .map_err(sanitized)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)
+    let groups = rows.collect::<Result<Vec<_>, _>>().map_err(sanitized)?;
+    Ok(IdentitySearchResponse {
+        total: total.max(0) as u64,
+        offset,
+        groups,
+    })
 }
 
 #[tauri::command]
@@ -2129,11 +2166,15 @@ mod tests {
         )
         .expect("manual identity");
 
-        let identities = list_identities_inner(database.clone()).expect("identity list");
-        assert_eq!(identities.len(), 1);
-        assert_eq!(identities[0].display_label, "Reviewed synthetic person");
-        assert_eq!(identities[0].member_count, 2);
-        assert_eq!(identities[0].link_type, "manual_bundle");
+        let identities =
+            list_identities_inner(database.clone(), "", 0, 100).expect("identity list");
+        assert_eq!(identities.total, 1);
+        assert_eq!(
+            identities.groups[0].display_label,
+            "Reviewed synthetic person"
+        );
+        assert_eq!(identities.groups[0].member_count, 2);
+        assert_eq!(identities.groups[0].link_type, "manual_bundle");
 
         let connection = database.lock().expect("database lock");
         let members =
@@ -2162,8 +2203,9 @@ mod tests {
             database.clone(),
         )
         .expect("reject identity");
-        let rejected = list_identities_inner(database.clone()).expect("rejected identity list");
-        assert_eq!(rejected[0].user_status, "rejected");
+        let rejected =
+            list_identities_inner(database.clone(), "", 0, 100).expect("rejected identity list");
+        assert_eq!(rejected.groups[0].user_status, "rejected");
 
         apply_identity_action_inner(
             IdentityActionInput {
@@ -2175,8 +2217,9 @@ mod tests {
             database.clone(),
         )
         .expect("confirm identity");
-        let confirmed = list_identities_inner(database.clone()).expect("confirmed identity list");
-        assert_eq!(confirmed[0].user_status, "confirmed");
+        let confirmed =
+            list_identities_inner(database.clone(), "", 0, 100).expect("confirmed identity list");
+        assert_eq!(confirmed.groups[0].user_status, "confirmed");
 
         let event_id = apply_identity_action_inner(
             IdentityActionInput {
@@ -2188,10 +2231,12 @@ mod tests {
             database.clone(),
         )
         .expect("split identity");
-        let split_identities = list_identities_inner(database.clone()).expect("split list");
-        assert_eq!(split_identities.len(), 2);
+        let split_identities =
+            list_identities_inner(database.clone(), "", 0, 100).expect("split list");
+        assert_eq!(split_identities.total, 2);
         assert!(
             split_identities
+                .groups
                 .iter()
                 .any(|identity| identity.link_type == "user_split")
         );
@@ -2206,8 +2251,9 @@ mod tests {
             database.clone(),
         )
         .expect("undo split");
-        let restored = list_identities_inner(database.clone()).expect("restored identity list");
-        assert_eq!(restored.len(), 1);
+        let restored =
+            list_identities_inner(database.clone(), "", 0, 100).expect("restored identity list");
+        assert_eq!(restored.total, 1);
         let connection = database.lock().expect("database lock");
         assert_eq!(
             load_identity_members(&connection, &group_id, 0, 25, false)
@@ -2265,11 +2311,23 @@ mod tests {
             )
             .expect("large synthetic identity catalog");
 
-        let identities =
-            list_identities_inner(Arc::new(Mutex::new(connection))).expect("identity list");
-        assert_eq!(identities.len(), 500);
-        assert_eq!(identities[0].id, "manual-old");
-        assert_eq!(identities[0].user_status, "confirmed");
+        let database = Arc::new(Mutex::new(connection));
+        let first_page =
+            list_identities_inner(database.clone(), "", 0, 100).expect("first identity page");
+        assert_eq!(first_page.total, 601);
+        assert_eq!(first_page.groups.len(), 100);
+        assert_eq!(first_page.groups[0].id, "manual-old");
+        assert_eq!(first_page.groups[0].user_status, "confirmed");
+
+        let last_page =
+            list_identities_inner(database.clone(), "", 600, 100).expect("last identity page");
+        assert_eq!(last_page.total, 601);
+        assert_eq!(last_page.groups.len(), 1);
+
+        let filtered = list_identities_inner(database, "synthetic-0599", 0, 25)
+            .expect("filtered identity page");
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.groups[0].display_label, "synthetic-0599");
     }
 
     #[test]
@@ -2304,10 +2362,11 @@ mod tests {
         )
         .expect("live identity");
 
-        let identities = list_identities_inner(database.clone()).expect("identity list");
-        assert_eq!(identities.len(), 1);
-        assert_eq!(identities[0].member_count, 2);
-        assert_eq!(identities[0].link_type, "live_scan_bundle");
+        let identities =
+            list_identities_inner(database.clone(), "", 0, 100).expect("identity list");
+        assert_eq!(identities.total, 1);
+        assert_eq!(identities.groups[0].member_count, 2);
+        assert_eq!(identities.groups[0].link_type, "live_scan_bundle");
 
         let connection = database.lock().expect("database lock");
         let members = load_identity_members(&connection, &group_id, 0, 25, true)

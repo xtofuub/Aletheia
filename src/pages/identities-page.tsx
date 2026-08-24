@@ -105,7 +105,7 @@ import {
   rebuildIdentities,
   searchIdentityRecords,
   startDirectSearch,
-  type IdentitySummary,
+  type IdentitySearchResponse,
   type LiveSourceSummary,
   type SearchMode,
 } from "@/lib/desktop";
@@ -119,6 +119,8 @@ import {
 } from "@/lib/format";
 
 const memberLimit = 25;
+const identityPageSize = 25;
+const identityCacheTime = 60_000;
 const identitySearchModes: Array<{ label: string; value: SearchMode }> = [
   { label: "Contains", value: "contains" },
   { label: "Exact", value: "exact" },
@@ -136,6 +138,8 @@ export function IdentitiesPage() {
   );
   const [activeTab, setActiveTab] = useState("groups");
   const [identityFilter, setIdentityFilter] = useState("");
+  const [submittedIdentityFilter, setSubmittedIdentityFilter] = useState("");
+  const [identityOffset, setIdentityOffset] = useState(0);
   const [memberOffset, setMemberOffset] = useState(0);
   const [manualQuery, setManualQuery] = useState("");
   const [submittedManualQuery, setSubmittedManualQuery] = useState("");
@@ -174,8 +178,15 @@ export function IdentitiesPage() {
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
   const datasets = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
   const identities = useQuery({
-    queryKey: ["identities"],
-    queryFn: listIdentities,
+    queryKey: ["identities", submittedIdentityFilter, identityOffset],
+    queryFn: () =>
+      listIdentities(submittedIdentityFilter, identityOffset, identityPageSize),
+    staleTime: identityCacheTime,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === submittedIdentityFilter
+        ? previousData
+        : undefined,
   });
   const liveSources = useQuery({
     queryKey: ["live-sources"],
@@ -225,19 +236,45 @@ export function IdentitiesPage() {
       })),
     [liveSourceList],
   );
-  const identityList = useMemo(() => identities.data ?? [], [identities.data]);
-  const filteredIdentities = useMemo(() => {
-    const needle = identityFilter.trim().toLowerCase();
-    if (!needle) return identityList;
-    return identityList.filter((identity) =>
-      [
-        identity.displayLabel,
-        identity.linkType,
-        identity.userStatus,
-        identity.confidenceLevel,
-      ].some((value) => value.toLowerCase().includes(needle)),
-    );
-  }, [identityFilter, identityList]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSubmittedIdentityFilter(identityFilter.trim());
+      setIdentityOffset(0);
+      setSelectedIdentity(null);
+      setMemberOffset(0);
+      setReviewFeedback(null);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [identityFilter]);
+  const identityList = useMemo(
+    () => identities.data?.groups ?? [],
+    [identities.data?.groups],
+  );
+  useEffect(() => {
+    if (
+      identities.isPlaceholderData ||
+      !identities.data ||
+      identityOffset + identityPageSize >= identities.data.total
+    ) {
+      return;
+    }
+    const nextOffset = identityOffset + identityPageSize;
+    const timer = window.setTimeout(() => {
+      void queryClient.prefetchQuery({
+        queryKey: ["identities", submittedIdentityFilter, nextOffset],
+        queryFn: () =>
+          listIdentities(submittedIdentityFilter, nextOffset, identityPageSize),
+        staleTime: identityCacheTime,
+      });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [
+    identities.data,
+    identities.isPlaceholderData,
+    identityOffset,
+    queryClient,
+    submittedIdentityFilter,
+  ]);
   const activeIdentity = selectedIdentity ?? identityList[0]?.id ?? null;
 
   const members = useQuery({
@@ -347,34 +384,13 @@ export function IdentitiesPage() {
           })),
       }),
     onSuccess: (id) => {
-      const displayLabel = manualName.trim();
-      const memberCount = selectedEvidenceCount;
-      const hasIndexedEvidence = manualSelection.size > 0;
-      const hasLiveEvidence = liveSelection.size > 0;
-      queryClient.setQueryData<IdentitySummary[]>(["identities"], (current) => [
-        {
-          id,
-          displayLabel,
-          confidenceLevel: "user-confirmed",
-          memberCount,
-          linkType: hasLiveEvidence
-            ? hasIndexedEvidence
-              ? "mixed_evidence_bundle"
-              : "live_scan_bundle"
-            : "manual_bundle",
-          explanation: hasLiveEvidence
-            ? hasIndexedEvidence
-              ? "reviewed_index_and_live_evidence"
-              : "reviewed_live_scan_evidence"
-            : "manual_search_bundle",
-          userStatus: "confirmed",
-        },
-        ...(current ?? []).filter((identity) => identity.id !== id),
-      ]);
       setNotice("Manual identity created");
       setManualName("");
       setManualSelection(new Set());
       setLiveSelection(new Set());
+      setIdentityFilter("");
+      setSubmittedIdentityFilter("");
+      setIdentityOffset(0);
       setSelectedIdentity(id);
       setCreatedIdentityId(id);
       setMemberOffset(0);
@@ -401,12 +417,19 @@ export function IdentitiesPage() {
     onMutate: () => setReviewFeedback(null),
     onSuccess: async (_, { action, groupId, memberCount }) => {
       const nextStatus = action === "confirm" ? "confirmed" : "rejected";
-      queryClient.setQueryData<IdentitySummary[]>(["identities"], (current) =>
-        current?.map((identity) =>
-          identity.id === groupId
-            ? { ...identity, userStatus: nextStatus }
-            : identity,
-        ),
+      queryClient.setQueriesData<IdentitySearchResponse>(
+        { queryKey: ["identities"] },
+        (current) =>
+          current
+            ? {
+                ...current,
+                groups: current.groups.map((identity) =>
+                  identity.id === groupId
+                    ? { ...identity, userStatus: nextStatus }
+                    : identity,
+                ),
+              }
+            : current,
       );
       setReviewFeedback({
         error: false,
@@ -456,14 +479,20 @@ export function IdentitiesPage() {
   useEffect(() => {
     if (
       !identities.isSuccess ||
-      identityList.length > 0 ||
+      submittedIdentityFilter ||
+      (identities.data?.total ?? 0) > 0 ||
       automaticRebuildStarted.current
     ) {
       return;
     }
     automaticRebuildStarted.current = true;
     rebuildGroups();
-  }, [identities.isSuccess, identityList.length, rebuildGroups]);
+  }, [
+    identities.data?.total,
+    identities.isSuccess,
+    rebuildGroups,
+    submittedIdentityFilter,
+  ]);
 
   const selectedSummary = identityList.find(
     (item) => item.id === activeIdentity,
@@ -496,21 +525,21 @@ export function IdentitiesPage() {
   }> = [
     {
       label: "Identity groups",
-      value: formatCount(identityList.length),
+      value: formatCount(identities.data?.total ?? 0),
       icon: FingerprintIcon,
     },
     {
-      label: "Evidence rows",
+      label: "Page evidence",
       value: formatCount(totalMembers),
       icon: LinkIcon,
     },
     {
-      label: "Confirmed",
+      label: "Confirmed on page",
       value: formatCount(confirmedCount),
       icon: UserRoundCheckIcon,
     },
     {
-      label: "Needs review",
+      label: "Review on page",
       value: formatCount(reviewCount),
       icon: ListChecksIcon,
     },
@@ -620,7 +649,7 @@ export function IdentitiesPage() {
               <CardHeader className="border-b">
                 <CardTitle>Identity groups</CardTitle>
                 <CardDescription>
-                  {formatCount(filteredIdentities.length)} visible groups
+                  {formatCount(identities.data?.total ?? 0)} matching groups
                 </CardDescription>
               </CardHeader>
               <CardContent className="border-b p-3">
@@ -631,18 +660,23 @@ export function IdentitiesPage() {
                   <InputGroupInput
                     aria-label="Filter identities"
                     onChange={(event) => setIdentityFilter(event.target.value)}
-                    placeholder="Filter groups"
+                    placeholder="Search names or identifiers"
                     value={identityFilter}
                   />
+                  {identities.isFetching ? (
+                    <InputGroupAddon align="inline-end">
+                      <Spinner />
+                    </InputGroupAddon>
+                  ) : null}
                 </InputGroup>
               </CardContent>
               <CardContent className="px-0">
                 {identities.isPending ? (
                   <ListRowsSkeleton rows={8} />
-                ) : filteredIdentities.length ? (
+                ) : identityList.length ? (
                   <ScrollArea className="h-[31rem]">
                     <div className="flex flex-col">
-                      {filteredIdentities.map((identity) => (
+                      {identityList.map((identity) => (
                         <Button
                           className={`h-auto w-full justify-start rounded-none px-4 py-3 ${
                             identity.id === createdIdentityId
@@ -694,6 +728,20 @@ export function IdentitiesPage() {
                   </Empty>
                 )}
               </CardContent>
+              {identities.data && identities.data.total > 0 ? (
+                <PaginationControls
+                  label="identity groups"
+                  limit={identityPageSize}
+                  offset={identityOffset}
+                  onOffsetChange={(nextOffset) => {
+                    setIdentityOffset(nextOffset);
+                    setSelectedIdentity(null);
+                    setMemberOffset(0);
+                    setReviewFeedback(null);
+                  }}
+                  total={identities.data.total}
+                />
+              ) : null}
             </DashboardCard>
 
             {identities.isPending ? (

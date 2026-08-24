@@ -320,6 +320,14 @@ pub struct IdentitySummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IdentitySearchResponse {
+    pub total: u64,
+    pub offset: usize,
+    pub groups: Vec<IdentitySummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityMember {
     pub record_id: String,
     pub origin: String,

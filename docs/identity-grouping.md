@@ -15,6 +15,10 @@ This avoids creating singleton groups for every unique value. "Automatic"
 describes the strict rule that created the link; it is not a confidence guess
 and it does not contact an external service.
 
+The identity catalog is searched and paginated by the local SQLite backend.
+All stored groups remain reachable; the interface loads 25 at a time and
+preloads the next page instead of imposing a fixed catalog limit.
+
 The **Rebuild groups** action applies the same rules to already indexed records. It is idempotent, processes local fields in bounded batches, preserves existing review states, and removes empty groups left by prior merge or split actions.
 
 Each membership records a link type, confidence score, machine-readable explanation, and user review status. Member evidence is shown as a compact delimited row instead of separate field badges. Complete non-secret identifiers are available for local review; passwords, tokens, cookies, API keys, and other reusable secrets remain excluded.

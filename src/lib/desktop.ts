@@ -433,6 +433,12 @@ export interface IdentitySummary {
   userStatus: string;
 }
 
+export interface IdentitySearchResponse {
+  total: number;
+  offset: number;
+  groups: IdentitySummary[];
+}
+
 export interface IdentityMember {
   recordId: string;
   origin: "indexed" | "live";
@@ -1036,13 +1042,13 @@ export async function getOverviewStats(): Promise<OverviewStats> {
   const [datasets, domains, identities] = await Promise.all([
     listDatasets(),
     listDomains("", 0, 1),
-    listIdentities(),
+    listIdentities("", 0, 1),
   ]);
   if (!datasets.length) {
     return { identityGroupCount: 0, parentDomainCount: 0, refreshing: false };
   }
   return {
-    identityGroupCount: identities.length,
+    identityGroupCount: identities.total,
     parentDomainCount: domains.total,
     refreshing: false,
   };
@@ -1739,12 +1745,23 @@ function readBrowserIdentityStatuses(): Record<string, string> {
   }
 }
 
-export async function listIdentities(): Promise<IdentitySummary[]> {
-  if (isTauriRuntime()) return invoke<IdentitySummary[]>("list_identities");
+export async function listIdentities(
+  query = "",
+  offset = 0,
+  limit = 25,
+): Promise<IdentitySearchResponse> {
+  if (isTauriRuntime()) {
+    return invoke<IdentitySearchResponse>("list_identities", {
+      query,
+      offset,
+      limit,
+    });
+  }
   const stored = window.localStorage.getItem("aletheia.browser.identities");
   const manual = stored ? (JSON.parse(stored) as IdentitySummary[]) : [];
   const statuses = readBrowserIdentityStatuses();
-  return [
+  const normalizedQuery = query.trim().toLowerCase();
+  const groups = [
     ...manual,
     {
       id: "identity-synthetic",
@@ -1777,11 +1794,21 @@ export async function listIdentities(): Promise<IdentitySummary[]> {
     ...identity,
     userStatus: statuses[identity.id] ?? identity.userStatus,
   }));
+  const filtered = normalizedQuery
+    ? groups.filter((identity) =>
+        identity.displayLabel.toLowerCase().includes(normalizedQuery),
+      )
+    : groups;
+  return {
+    total: filtered.length,
+    offset,
+    groups: filtered.slice(offset, offset + limit),
+  };
 }
 
 export async function rebuildIdentities(): Promise<number> {
   if (isTauriRuntime()) return invoke<number>("rebuild_identities");
-  return (await listIdentities()).length;
+  return (await listIdentities("", 0, 1)).total;
 }
 
 export async function rebuildDomains(): Promise<number> {
@@ -1902,10 +1929,8 @@ export async function createManualIdentity(
     return invoke<string>("create_manual_identity", { input });
   }
   const id = crypto.randomUUID();
-  const current = await listIdentities();
-  const manual = current.filter(
-    (identity) => !identity.id.startsWith("identity-synthetic"),
-  );
+  const stored = window.localStorage.getItem("aletheia.browser.identities");
+  const manual = stored ? (JSON.parse(stored) as IdentitySummary[]) : [];
   manual.unshift({
     id,
     displayLabel: input.name,
