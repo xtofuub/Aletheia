@@ -314,29 +314,22 @@ fn search_domain_groups(
     let (total, groups) = match (dataset_id, query.is_empty()) {
         (None, true) => {
             let total = connection
-                .query_row(
-                    "SELECT COUNT(*) FROM (
-                       SELECT registrable_domain
-                       FROM domain_dataset_counts
-                       GROUP BY registrable_domain
-                     )",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
+                .query_row("SELECT COUNT(*) FROM domain_totals", [], |row| {
+                    row.get::<_, i64>(0)
+                })
                 .map_err(sanitized)?;
             let mut statement = connection
                 .prepare(
-                    "SELECT dc.registrable_domain,
+                    "SELECT dt.registrable_domain,
                             (SELECT MIN(d.public_suffix)
                              FROM domains d
-                             WHERE d.registrable_domain = dc.registrable_domain),
+                             WHERE d.registrable_domain = dt.registrable_domain),
                             (SELECT COUNT(*)
                              FROM domains d
-                             WHERE d.registrable_domain = dc.registrable_domain),
-                            SUM(dc.record_count)
-                     FROM domain_dataset_counts dc
-                     GROUP BY dc.registrable_domain
-                     ORDER BY 4 DESC, dc.registrable_domain
+                             WHERE d.registrable_domain = dt.registrable_domain),
+                            dt.record_count
+                     FROM domain_totals dt
+                     ORDER BY dt.record_count DESC, dt.registrable_domain
                      LIMIT ?1 OFFSET ?2",
                 )
                 .map_err(sanitized)?;

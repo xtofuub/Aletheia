@@ -31,6 +31,7 @@ const MIGRATION_V10: &str = include_str!("../migrations/0010_domain_query_indexe
 const MIGRATION_V11: &str = include_str!("../migrations/0011_overview_metrics.sql");
 const MIGRATION_V12: &str = include_str!("../migrations/0012_live_scan_checkpoints.sql");
 const MIGRATION_V13: &str = include_str!("../migrations/0013_identity_list_indexes.sql");
+const MIGRATION_V14: &str = include_str!("../migrations/0014_domain_pagination.sql");
 const LOCATION_FILE: &str = "storage-location.json";
 const DATABASE_FILE: &str = "metadata.sqlite3";
 
@@ -349,6 +350,15 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), StorageError> {
         )?;
         transaction.commit()?;
     }
+    if current.unwrap_or(0) < 14 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(MIGRATION_V14)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version) VALUES (14)",
+            [],
+        )?;
+        transaction.commit()?;
+    }
 
     Ok(())
 }
@@ -459,8 +469,8 @@ mod tests {
 
     use super::{
         MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5, MIGRATION_V6,
-        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, MIGRATION_V12, MIGRATION_V13, open_database,
-        recover_interrupted_imports, recover_interrupted_live_scans,
+        MIGRATION_V7, MIGRATION_V8, MIGRATION_V9, MIGRATION_V12, MIGRATION_V13, MIGRATION_V14,
+        open_database, recover_interrupted_imports, recover_interrupted_live_scans,
     };
 
     #[test]
@@ -479,6 +489,7 @@ mod tests {
                      'record_domains',
                      'record_domain_parents',
                      'domain_dataset_counts',
+                     'domain_totals',
                      'hostname_dataset_counts',
                      'identity_candidates',
                      'domain_link_repairs',
@@ -496,12 +507,13 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("table count");
-        assert_eq!(table_count, 18);
+        assert_eq!(table_count, 19);
 
         assert!(!MIGRATION_V8.is_empty());
         assert!(!MIGRATION_V9.is_empty());
         assert!(!MIGRATION_V12.is_empty());
         assert!(!MIGRATION_V13.is_empty());
+        assert!(!MIGRATION_V14.is_empty());
 
         let theme: String = connection
             .query_row(
@@ -540,6 +552,64 @@ mod tests {
             )
             .expect("live scan");
         assert_eq!(recovered, ("interrupted".to_string(), 1, 4));
+    }
+
+    #[test]
+    fn domain_totals_follow_dataset_count_changes() {
+        let directory = tempdir().expect("temporary directory");
+        let connection = open_database(directory.path()).expect("database opens");
+        connection
+            .execute_batch(
+                "INSERT INTO datasets(id, name, parser_version)
+                 VALUES ('dataset-a', 'Synthetic A', 'test'),
+                        ('dataset-b', 'Synthetic B', 'test');
+                 INSERT INTO domain_dataset_counts(
+                   registrable_domain, dataset_id, record_count
+                 ) VALUES ('example.test', 'dataset-a', 3),
+                          ('example.test', 'dataset-b', 4);",
+            )
+            .expect("synthetic domain counts");
+
+        let initial: i64 = connection
+            .query_row(
+                "SELECT record_count FROM domain_totals
+                 WHERE registrable_domain = 'example.test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("initial domain total");
+        assert_eq!(initial, 7);
+
+        connection
+            .execute(
+                "UPDATE domain_dataset_counts SET record_count = 8
+                 WHERE registrable_domain = 'example.test'
+                   AND dataset_id = 'dataset-a'",
+                [],
+            )
+            .expect("updated count");
+        let updated: i64 = connection
+            .query_row(
+                "SELECT record_count FROM domain_totals
+                 WHERE registrable_domain = 'example.test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("updated domain total");
+        assert_eq!(updated, 12);
+
+        connection
+            .execute("DELETE FROM datasets WHERE id = 'dataset-b'", [])
+            .expect("dataset delete");
+        let after_delete: i64 = connection
+            .query_row(
+                "SELECT record_count FROM domain_totals
+                 WHERE registrable_domain = 'example.test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("remaining domain total");
+        assert_eq!(after_delete, 8);
     }
 
     #[test]
@@ -670,7 +740,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("domain query indexes");
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
         assert_eq!(live_table_count, 3);
         assert_eq!(domain_query_index_count, 2);
     }

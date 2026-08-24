@@ -120,6 +120,8 @@ import {
 import { cn } from "@/lib/utils";
 
 const pageSize = 25;
+const domainCacheTime = 60_000;
+const domainPrefetchDelay = 500;
 const allLiveSourcesId = "all-saved-live-sources";
 const sourceViewStorageKey = "aletheia.domains.source-view";
 
@@ -234,12 +236,23 @@ export function DomainsPage() {
         datasetId === "all" ? null : datasetId,
       ),
     enabled: sourceView === "indexed",
+    staleTime: domainCacheTime,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === submittedQuery &&
+      previousQuery.queryKey[2] === datasetId
+        ? previousData
+        : undefined,
   });
 
   const storedCollections = useQuery({
     queryKey: ["live-domain-collections", submittedQuery, offset],
     queryFn: () => listLiveDomainCollections(submittedQuery, offset, pageSize),
     enabled: sourceView === "live",
+    staleTime: domainCacheTime,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === submittedQuery ? previousData : undefined,
   });
 
   const activeDomain =
@@ -268,6 +281,15 @@ export function DomainsPage() {
         pageSize,
       ),
     enabled: sourceView === "indexed" && Boolean(activeDomain),
+    staleTime: domainCacheTime,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === activeDomain &&
+      previousQuery.queryKey[2] === hostname &&
+      previousQuery.queryKey[3] === submittedHostnameQuery &&
+      previousQuery.queryKey[4] === datasetId
+        ? previousData
+        : undefined,
   });
 
   const liveEvidence = useQuery({
@@ -275,7 +297,148 @@ export function DomainsPage() {
     queryFn: () =>
       listLiveDomainEvidence(activeDomain ?? "", liveRecordOffset, pageSize),
     enabled: sourceView === "live" && Boolean(activeDomain),
+    staleTime: domainCacheTime,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === activeDomain ? previousData : undefined,
   });
+
+  useEffect(() => {
+    if (
+      sourceView !== "indexed" ||
+      domains.isPlaceholderData ||
+      !domains.data ||
+      offset + pageSize >= domains.data.total
+    ) {
+      return;
+    }
+    const nextOffset = offset + pageSize;
+    const timer = window.setTimeout(() => {
+      void queryClient.prefetchQuery({
+        queryKey: ["domains", submittedQuery, datasetId, nextOffset],
+        queryFn: () =>
+          listDomains(
+            submittedQuery,
+            nextOffset,
+            pageSize,
+            datasetId === "all" ? null : datasetId,
+          ),
+        staleTime: domainCacheTime,
+      });
+    }, domainPrefetchDelay);
+    return () => window.clearTimeout(timer);
+  }, [
+    datasetId,
+    domains.data,
+    domains.isPlaceholderData,
+    offset,
+    queryClient,
+    sourceView,
+    submittedQuery,
+  ]);
+
+  useEffect(() => {
+    if (
+      sourceView !== "live" ||
+      storedCollections.isPlaceholderData ||
+      !storedCollections.data ||
+      offset + pageSize >= storedCollections.data.total
+    ) {
+      return;
+    }
+    const nextOffset = offset + pageSize;
+    const timer = window.setTimeout(() => {
+      void queryClient.prefetchQuery({
+        queryKey: ["live-domain-collections", submittedQuery, nextOffset],
+        queryFn: () =>
+          listLiveDomainCollections(submittedQuery, nextOffset, pageSize),
+        staleTime: domainCacheTime,
+      });
+    }, domainPrefetchDelay);
+    return () => window.clearTimeout(timer);
+  }, [
+    offset,
+    queryClient,
+    sourceView,
+    storedCollections.data,
+    storedCollections.isPlaceholderData,
+    submittedQuery,
+  ]);
+
+  useEffect(() => {
+    if (
+      sourceView !== "indexed" ||
+      !activeDomain ||
+      details.isPlaceholderData ||
+      !details.data ||
+      recordOffset + pageSize >= details.data.totalRecords
+    ) {
+      return;
+    }
+    const nextOffset = recordOffset + pageSize;
+    const timer = window.setTimeout(() => {
+      void queryClient.prefetchQuery({
+        queryKey: [
+          "domain-details",
+          activeDomain,
+          hostname,
+          submittedHostnameQuery,
+          datasetId,
+          nextOffset,
+        ],
+        queryFn: () =>
+          getDomainDetails(
+            activeDomain,
+            hostname,
+            submittedHostnameQuery || null,
+            datasetId === "all" ? null : datasetId,
+            nextOffset,
+            pageSize,
+          ),
+        staleTime: domainCacheTime,
+      });
+    }, domainPrefetchDelay);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeDomain,
+    datasetId,
+    details.data,
+    details.isPlaceholderData,
+    hostname,
+    queryClient,
+    recordOffset,
+    sourceView,
+    submittedHostnameQuery,
+  ]);
+
+  useEffect(() => {
+    if (
+      sourceView !== "live" ||
+      !activeDomain ||
+      liveEvidence.isPlaceholderData ||
+      !liveEvidence.data ||
+      liveRecordOffset + pageSize >= liveEvidence.data.total
+    ) {
+      return;
+    }
+    const nextOffset = liveRecordOffset + pageSize;
+    const timer = window.setTimeout(() => {
+      void queryClient.prefetchQuery({
+        queryKey: ["live-domain-evidence", activeDomain, nextOffset],
+        queryFn: () =>
+          listLiveDomainEvidence(activeDomain, nextOffset, pageSize),
+        staleTime: domainCacheTime,
+      });
+    }, domainPrefetchDelay);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeDomain,
+    liveEvidence.data,
+    liveEvidence.isPlaceholderData,
+    liveRecordOffset,
+    queryClient,
+    sourceView,
+  ]);
 
   const clearLiveCollection = useMutation({
     mutationFn: (domain: string) => clearLiveDomainEvidence(domain),
