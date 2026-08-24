@@ -7,7 +7,6 @@ import {
   DatabaseIcon,
   FileSearchIcon,
   Globe2Icon,
-  LoaderCircleIcon,
   PauseIcon,
   PlayIcon,
   SearchIcon,
@@ -17,6 +16,10 @@ import {
 
 import { DashboardCard } from "@/components/dashboard-card";
 import { LiveSearchPreflight } from "@/components/live-search-preflight";
+import {
+  ListRowsSkeleton,
+  TableRowsSkeleton,
+} from "@/components/loading-skeletons";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
 import { Badge } from "@/components/ui/badge";
@@ -1086,10 +1089,7 @@ export function DomainsPage() {
                     Indexed groups
                   </div>
                   {domains.isPending ? (
-                    <div className="flex items-center gap-2 px-2 py-3 text-xs text-muted-foreground">
-                      <Spinner />
-                      Loading indexed groups
-                    </div>
+                    <ListRowsSkeleton rows={8} />
                   ) : domains.isError ? (
                     <Empty className="min-h-48 rounded-none border-0">
                       <EmptyHeader>
@@ -1284,17 +1284,7 @@ export function DomainsPage() {
                   </CardContent>
                   <CardContent className="px-0">
                     {details.isPending ? (
-                      <Empty className="min-h-64 rounded-none border-0">
-                        <EmptyHeader>
-                          <EmptyMedia variant="icon">
-                            <LoaderCircleIcon className="animate-spin" />
-                          </EmptyMedia>
-                          <EmptyTitle>Loading linked lines</EmptyTitle>
-                          <EmptyDescription>
-                            Reading the selected domain from the local index.
-                          </EmptyDescription>
-                        </EmptyHeader>
-                      </Empty>
+                      <TableRowsSkeleton className="min-h-64" rows={6} />
                     ) : details.isError ? (
                       <Empty className="min-h-64 rounded-none border-0">
                         <EmptyHeader>
@@ -1468,7 +1458,7 @@ export function DomainsPage() {
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
                           {currentLiveProgress.status === "running" ? (
-                            <LoaderCircleIcon className="animate-spin" />
+                            <Spinner />
                           ) : (
                             <FileSearchIcon />
                           )}
@@ -1500,14 +1490,7 @@ export function DomainsPage() {
                   </CardHeader>
                   <CardContent className="min-h-[34rem] basis-0 flex-1 overflow-hidden px-0">
                     {liveEvidence.isPending ? (
-                      <Empty className="min-h-48 rounded-none border-0">
-                        <EmptyHeader>
-                          <EmptyMedia variant="icon">
-                            <LoaderCircleIcon className="animate-spin" />
-                          </EmptyMedia>
-                          <EmptyTitle>Loading stored Live lines</EmptyTitle>
-                        </EmptyHeader>
-                      </Empty>
+                      <TableRowsSkeleton className="min-h-[34rem]" rows={8} />
                     ) : liveEvidence.isError ? (
                       <Empty className="min-h-48 rounded-none border-0">
                         <EmptyHeader>

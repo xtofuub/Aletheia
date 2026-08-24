@@ -24,6 +24,10 @@ import {
 
 import { DashboardCard } from "@/components/dashboard-card";
 import { LiveSearchPreflight } from "@/components/live-search-preflight";
+import {
+  ListRowsSkeleton,
+  TableRowsSkeleton,
+} from "@/components/loading-skeletons";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -72,6 +76,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -591,7 +596,11 @@ export function IdentitiesPage() {
                 <CardHeader>
                   <CardDescription>{label}</CardDescription>
                   <CardTitle className="font-mono text-2xl tabular-nums">
-                    {value}
+                    {identities.isPending ? (
+                      <Skeleton className="h-8 w-16" />
+                    ) : (
+                      value
+                    )}
                   </CardTitle>
                   <CardAction>
                     <Icon />
@@ -623,7 +632,9 @@ export function IdentitiesPage() {
                 </InputGroup>
               </CardContent>
               <CardContent className="px-0">
-                {filteredIdentities.length ? (
+                {identities.isPending ? (
+                  <ListRowsSkeleton rows={8} />
+                ) : filteredIdentities.length ? (
                   <ScrollArea className="h-[31rem]">
                     <div className="flex flex-col">
                       {filteredIdentities.map((identity) => (
@@ -671,7 +682,11 @@ export function IdentitiesPage() {
               </CardContent>
             </DashboardCard>
 
-            {selectedSummary ? (
+            {identities.isPending ? (
+              <DashboardCard className="gap-0">
+                <TableRowsSkeleton className="min-h-[31rem]" rows={7} />
+              </DashboardCard>
+            ) : selectedSummary ? (
               <DashboardCard className="gap-0">
                 <CardHeader className="border-b">
                   <CardTitle>{selectedSummary.displayLabel}</CardTitle>
@@ -734,63 +749,68 @@ export function IdentitiesPage() {
                   ))}
                 </CardContent>
                 <CardContent className="px-0">
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-3/5 ps-6">
-                          Record values
-                        </TableHead>
-                        <TableHead className="pe-6">Context</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(members.data?.members ?? []).map((member) => {
-                        const values = member.fields
-                          .filter(
-                            (field) =>
-                              !["password", "password_hash", "salt"].includes(
-                                field.fieldType,
-                              ),
-                          )
-                          .map((field) => field.displayValue);
-                        return (
-                          <TableRow key={member.recordId}>
-                            <TableCell className="whitespace-normal ps-6">
-                              <p className="font-mono text-xs break-all">
-                                {values.join(" | ") || "No displayable values"}
-                              </p>
-                            </TableCell>
-                            <TableCell className="whitespace-normal pe-6">
-                              <p className="truncate text-xs font-medium">
-                                {member.datasetName}
-                              </p>
-                              <p
-                                className="truncate text-xs text-muted-foreground"
-                                title={formatPathForDisplay(
-                                  member.sourcePath ?? member.sourceFile,
-                                )}
-                              >
-                                {formatFileNameForDisplay(member.sourceFile)}
-                              </p>
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <span className="font-mono text-xs text-muted-foreground">
-                                  {member.sourceLocation}
-                                </span>
-                                <Badge variant="outline">
-                                  {member.userStatus}
-                                </Badge>
-                                {member.origin === "live" ? (
-                                  <Badge variant="secondary">
-                                    Full safe row
+                  {members.isPending ? (
+                    <TableRowsSkeleton className="min-h-72" rows={6} />
+                  ) : (
+                    <Table className="table-fixed">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-3/5 ps-6">
+                            Record values
+                          </TableHead>
+                          <TableHead className="pe-6">Context</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(members.data?.members ?? []).map((member) => {
+                          const values = member.fields
+                            .filter(
+                              (field) =>
+                                !["password", "password_hash", "salt"].includes(
+                                  field.fieldType,
+                                ),
+                            )
+                            .map((field) => field.displayValue);
+                          return (
+                            <TableRow key={member.recordId}>
+                              <TableCell className="whitespace-normal ps-6">
+                                <p className="font-mono text-xs break-all">
+                                  {values.join(" | ") ||
+                                    "No displayable values"}
+                                </p>
+                              </TableCell>
+                              <TableCell className="whitespace-normal pe-6">
+                                <p className="truncate text-xs font-medium">
+                                  {member.datasetName}
+                                </p>
+                                <p
+                                  className="truncate text-xs text-muted-foreground"
+                                  title={formatPathForDisplay(
+                                    member.sourcePath ?? member.sourceFile,
+                                  )}
+                                >
+                                  {formatFileNameForDisplay(member.sourceFile)}
+                                </p>
+                                <div className="mt-1 flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-xs text-muted-foreground">
+                                    {member.sourceLocation}
+                                  </span>
+                                  <Badge variant="outline">
+                                    {member.userStatus}
                                   </Badge>
-                                ) : null}
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                                  {member.origin === "live" ? (
+                                    <Badge variant="secondary">
+                                      Full safe row
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
                 </CardContent>
                 {members.data ? (
                   <PaginationControls
@@ -1026,7 +1046,10 @@ export function IdentitiesPage() {
                     </form>
                   </CardContent>
                   <CardContent className="px-0">
-                    {manualResults.data?.hits.length ? (
+                    {manualResults.isFetching &&
+                    !manualResults.data?.hits.length ? (
+                      <TableRowsSkeleton className="min-h-80" rows={5} />
+                    ) : manualResults.data?.hits.length ? (
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -1084,21 +1107,12 @@ export function IdentitiesPage() {
                       <Empty className="min-h-80 rounded-none border-0">
                         <EmptyHeader>
                           <EmptyMedia variant="icon">
-                            {manualResults.isFetching ? (
-                              <Spinner />
-                            ) : (
-                              <SearchIcon />
-                            )}
+                            <SearchIcon />
                           </EmptyMedia>
-                          <EmptyTitle>
-                            {manualResults.isFetching
-                              ? "Searching identity evidence"
-                              : "Find a person or account"}
-                          </EmptyTitle>
+                          <EmptyTitle>Find a person or account</EmptyTitle>
                           <EmptyDescription>
-                            {manualResults.isFetching
-                              ? "Checking the local index for matching records."
-                              : "Search, review the matching rows, then select the evidence to bundle."}
+                            Search, review the matching rows, then select the
+                            evidence to bundle.
                           </EmptyDescription>
                         </EmptyHeader>
                       </Empty>

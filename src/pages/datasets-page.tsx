@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 import { DashboardCard } from "@/components/dashboard-card";
+import { TableRowsSkeleton } from "@/components/loading-skeletons";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -769,7 +770,9 @@ export function DatasetsPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="px-0">
-            {datasets.data?.length || liveSources.data?.length ? (
+            {datasets.isPending || liveSources.isPending ? (
+              <TableRowsSkeleton rows={7} />
+            ) : datasets.data?.length || liveSources.data?.length ? (
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>

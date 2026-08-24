@@ -3,7 +3,10 @@ import { lazy, Suspense } from "react";
 
 import { AppShell } from "@/components/app-shell";
 import { ApplicationUpdatePrompt } from "@/components/application-update-prompt";
-import { DashboardSkeleton } from "@/components/dashboard-skeleton";
+import {
+  AppStartupSkeleton,
+  RouteSkeleton,
+} from "@/components/loading-skeletons";
 import {
   Empty,
   EmptyDescription,
@@ -71,7 +74,7 @@ export function AppBootstrap() {
       </Empty>
     );
   }
-  if (!settings.data) return null;
+  if (!settings.data) return <AppStartupSkeleton />;
   applyTheme(settings.data.theme);
 
   if (isTauriRuntime() && !settings.data.authorizationConfirmed) {
@@ -128,7 +131,7 @@ export function AppBootstrap() {
   return (
     <>
       <AppShell activeRoute={route}>
-        <Suspense fallback={<DashboardSkeleton />}>{page}</Suspense>
+        <Suspense fallback={<RouteSkeleton route={route} />}>{page}</Suspense>
       </AppShell>
       <ApplicationUpdatePrompt enabled={settings.data.automaticUpdateChecks} />
     </>

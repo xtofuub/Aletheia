@@ -16,6 +16,7 @@ import {
 
 import { DashboardCard } from "@/components/dashboard-card";
 import { LiveSearchPreflight } from "@/components/live-search-preflight";
+import { TableRowsSkeleton } from "@/components/loading-skeletons";
 import { PageHeader } from "@/components/page-header";
 import { PaginationControls } from "@/components/pagination-controls";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -992,6 +993,8 @@ export function SearchPage({
                   </EmptyHeader>
                 </Empty>
               )
+            ) : indexed.isFetching && !hits.length ? (
+              <TableRowsSkeleton className="min-h-72" rows={5} />
             ) : hits.length ? (
               <ScrollArea className="h-[min(52vh,34rem)]">
                 <Table className="table-fixed">
@@ -1076,14 +1079,10 @@ export function SearchPage({
               <Empty className="min-h-72 rounded-none border-0">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
-                    {indexed.isFetching ? <Spinner /> : <SearchIcon />}
+                    <SearchIcon />
                   </EmptyMedia>
                   <EmptyTitle>
-                    {indexed.isFetching
-                      ? "Searching"
-                      : submittedQuery
-                        ? "No matches"
-                        : "Search the index"}
+                    {submittedQuery ? "No matches" : "Search the index"}
                   </EmptyTitle>
                   <EmptyDescription>
                     Enter a value to search the selected index.

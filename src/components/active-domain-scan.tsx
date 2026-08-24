@@ -44,7 +44,7 @@ export function ActiveDomainScan() {
   return (
     <section
       aria-label="Active domain scan"
-      className="border-b bg-muted/30 px-4 py-3 md:px-6"
+      className="state-reveal border-b bg-muted/30 px-4 py-3 md:px-6"
     >
       <div className="mx-auto flex w-full max-w-(--app-wrapper-max-width) flex-col gap-2 lg:flex-row lg:items-center">
         <Progress className="min-w-0 flex-1" value={percent}>

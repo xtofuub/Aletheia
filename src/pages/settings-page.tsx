@@ -17,6 +17,7 @@ import {
 
 import { applyTheme } from "@/theme-provider";
 import { DashboardCard } from "@/components/dashboard-card";
+import { RouteSkeleton } from "@/components/loading-skeletons";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -241,7 +242,7 @@ export function SettingsPage() {
     ]);
   }
 
-  if (!form) return null;
+  if (!form) return <RouteSkeleton route="settings" />;
 
   const updatePercent = installProgress?.totalBytes
     ? Math.min(

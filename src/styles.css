@@ -51,6 +51,8 @@
 }
 
 :root {
+  --ease-out-ui: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-ui: cubic-bezier(0.77, 0, 0.175, 1);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -83,6 +85,86 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+}
+
+@keyframes aletheia-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes aletheia-skeleton-sweep {
+  from {
+    transform: translateX(-105%);
+  }
+  to {
+    transform: translateX(105%);
+  }
+}
+
+@keyframes aletheia-state-reveal {
+  from {
+    opacity: 0;
+    transform: scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@layer components {
+  .page-enter {
+    animation: aletheia-page-enter 160ms var(--ease-out-ui) both;
+  }
+
+  .state-reveal {
+    animation: aletheia-state-reveal 180ms var(--ease-out-ui) both;
+  }
+
+  [data-slot="skeleton"] {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+
+  [data-slot="skeleton"]::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--foreground) 7%, transparent),
+      transparent
+    );
+    transform: translateX(-105%);
+    animation: aletheia-skeleton-sweep 1.35s linear infinite;
+    will-change: transform;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: none;
+  }
+
+  .state-reveal {
+    animation: none;
+  }
+
+  [data-slot="skeleton"]::after {
+    animation: none;
+  }
+
+  [data-slot="progress-indicator"] {
+    transition-duration: 0ms;
+  }
 }
 
 .dark {
