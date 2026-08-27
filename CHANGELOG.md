@@ -2,8 +2,18 @@
 
 ## Unreleased
 
-- Clarified Overview metrics: Dataset landscape now shows searchable rows and explicit index state instead of an ambiguous percentage, while Live scan matches remain clearly separate from indexed-row totals.
-- Made scan timing consistent across Search, Domains, and Identities with a measured preflight range plus live remaining-time updates while work is running.
+## 1.1.0 - 2026-08-27
+
+- Fixed Identity confirm and reject so the action updates every linked indexed and Live evidence row, even when a group exceeds the old 5,000- or 10,000-row processing limits.
+- Removed the 500-group visibility ceiling with full server-side Identity search and pagination, reliable next-page navigation, manual-group priority, and adjacent-page prefetching.
+- Accelerated Domains with precomputed totals, ranked pagination, cached evidence pages, and adjacent-page prefetching for indexed and saved Live results.
+- Added resumable Live scan checkpoints that survive navigation, app restarts, pause, cancellation, and interrupted large-source work.
+- Optimized Live scanning for sequential storage, stabilized cancellation, added archive decode telemetry, and made scan estimates consistent across Search, Domains, and Identities.
+- Clarified Android application URI evidence and preserved complete non-secret Live source rows in reviewed identity bundles.
+- Improved Overview dataset and Live-scan metrics so searchable indexed rows are separate from on-demand matches and incomplete indexes are never shown as 100% complete.
+- Polished loading skeletons, action feedback, and reduced-motion behavior throughout the investigation workflow.
+- Added faster cached Identity and Domain list queries so opening pages and moving between results no longer blocks on the full catalog.
+- Branded the Windows setup and uninstall experience with dedicated Aletheia header and sidebar artwork while preserving the transparent application icon, Start Menu shortcut, desktop shortcut, and signed in-app updater.
 
 ## 1.0.0 - 2026-08-16
 

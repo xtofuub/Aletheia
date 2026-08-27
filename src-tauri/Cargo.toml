@@ -1,6 +1,6 @@
 [package]
 name = "aletheia"
-version = "1.0.0"
+version = "1.1.0"
 description = "Local-only defensive data investigation workspace"
 authors = ["xtofuub <99559348+xtofuub@users.noreply.github.com>"]
 edition = "2024"
