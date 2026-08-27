@@ -69,6 +69,7 @@
         "headerImage": "windows/installer-header.bmp",
         "sidebarImage": "windows/installer-sidebar.bmp",
         "uninstallerHeaderImage": "windows/installer-header.bmp",
+        "template": "windows/installer.nsi",
         "installerHooks": "windows/installer-hooks.nsh",
         "installMode": "currentUser",
         "languages": ["English"],
