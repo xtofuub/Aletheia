@@ -13,7 +13,7 @@
 - Improved Overview dataset and Live-scan metrics so searchable indexed rows are separate from on-demand matches and incomplete indexes are never shown as 100% complete.
 - Polished loading skeletons, action feedback, and reduced-motion behavior throughout the investigation workflow.
 - Added faster cached Identity and Domain list queries so opening pages and moving between results no longer blocks on the full catalog.
-- Branded the Windows setup and uninstall experience with dedicated Aletheia header and sidebar artwork while preserving the transparent application icon, Start Menu shortcut, desktop shortcut, and signed in-app updater.
+- Rebuilt the Windows setup and uninstall experience as a full-black native Aletheia wizard with branded artwork, dark title bars, controls, progress details, and page surfaces while preserving the transparent application icon, shortcuts, and signed in-app updater.
 
 ## 1.0.0 - 2026-08-16
 
