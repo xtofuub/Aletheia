@@ -1295,6 +1295,39 @@ fn apply_identity_action_inner(
             } else {
                 "rejected"
             };
+            if input.record_ids.is_empty() {
+                let indexed_updated = transaction
+                    .execute(
+                        "UPDATE identity_memberships SET user_status = ?2
+                         WHERE identity_group_id = ?1",
+                        params![input.group_id, next_status],
+                    )
+                    .map_err(sanitized)?;
+                let live_updated = transaction
+                    .execute(
+                        "UPDATE identity_live_evidence SET user_status = ?2
+                         WHERE identity_group_id = ?1",
+                        params![input.group_id, next_status],
+                    )
+                    .map_err(sanitized)?;
+                if indexed_updated + live_updated == 0 {
+                    return Err("identity group has no linked evidence".to_string());
+                }
+                insert_audit(
+                    &transaction,
+                    &event_id,
+                    &input.action,
+                    &input.group_id,
+                    serde_json::json!({
+                        "bulk": true,
+                        "records_updated": indexed_updated,
+                        "live_evidence_updated": live_updated
+                    }),
+                    None,
+                )?;
+                transaction.commit().map_err(sanitized)?;
+                return Ok(event_id);
+            }
             let records =
                 selected_or_all_records(&transaction, &input.group_id, &input.record_ids)?;
             let previous = previous_statuses(&transaction, &input.group_id, &records)?;
@@ -2243,6 +2276,71 @@ mod tests {
                 .total,
             2
         );
+    }
+
+    #[test]
+    fn identity_review_updates_every_member_in_large_groups() {
+        let workspace = tempdir().expect("temporary workspace");
+        let connection = open_database(workspace.path()).expect("database");
+        connection
+            .execute_batch(
+                "INSERT INTO identity_groups(id, display_label, confidence_level)
+                 VALUES ('large-review', 'Large review group', 'automatic');
+                 WITH digits(value) AS (
+                   VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                 ),
+                 evidence(number) AS (
+                   SELECT ones.value + tens.value * 10 + hundreds.value * 100
+                          + thousands.value * 1000 + 1
+                   FROM digits ones
+                   CROSS JOIN digits tens
+                   CROSS JOIN digits hundreds
+                   CROSS JOIN digits thousands
+                   WHERE ones.value + tens.value * 10 + hundreds.value * 100
+                         + thousands.value * 1000 < 5001
+                 )
+                 INSERT INTO identity_live_evidence(
+                   id, identity_group_id, source_path, source_file,
+                   source_location, excerpt, match_reason, evidence_fingerprint,
+                   user_status
+                 )
+                 SELECT printf('live-%d', number), 'large-review', 'synthetic.txt',
+                        'synthetic.txt', printf('line %d', number),
+                        'synthetic@example.test', 'synthetic match',
+                        printf('fingerprint-%d', number), 'automatic'
+                 FROM evidence;",
+            )
+            .expect("large identity fixture");
+        let database = Arc::new(Mutex::new(connection));
+
+        apply_identity_action_inner(
+            IdentityActionInput {
+                action: "reject".to_string(),
+                group_id: "large-review".to_string(),
+                record_ids: Vec::new(),
+                target_group_id: None,
+            },
+            database.clone(),
+        )
+        .expect("reject large identity");
+        let rejected =
+            list_identities_inner(database.clone(), "", 0, 25).expect("rejected identity list");
+        assert_eq!(rejected.groups[0].member_count, 5001);
+        assert_eq!(rejected.groups[0].user_status, "rejected");
+
+        apply_identity_action_inner(
+            IdentityActionInput {
+                action: "confirm".to_string(),
+                group_id: "large-review".to_string(),
+                record_ids: Vec::new(),
+                target_group_id: None,
+            },
+            database.clone(),
+        )
+        .expect("confirm large identity");
+        let confirmed =
+            list_identities_inner(database, "", 0, 25).expect("confirmed identity list");
+        assert_eq!(confirmed.groups[0].user_status, "confirmed");
     }
 
     #[test]

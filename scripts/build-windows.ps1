@@ -37,6 +37,11 @@ try {
         throw "Release version validation failed."
     }
 
+    & powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/generate-installer-assets.ps1"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installer asset generation failed."
+    }
+
     if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
         if (-not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PATH)) {
             $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -LiteralPath $env:TAURI_SIGNING_PRIVATE_KEY_PATH -Raw
